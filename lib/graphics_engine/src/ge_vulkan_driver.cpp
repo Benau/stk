@@ -532,15 +532,6 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
     g_paused_rendering.store(false);
     g_device_created.store(true);
 
-#if defined(__APPLE__)
-    MVKConfiguration cfg = {};
-    size_t cfg_size = sizeof(MVKConfiguration);
-    vkGetMoltenVKConfigurationMVK(VK_NULL_HANDLE, &cfg, &cfg_size);
-    // Enable to allow binding all textures at once
-    cfg.useMetalArgumentBuffers = MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS_ALWAYS;
-    vkSetMoltenVKConfigurationMVK(VK_NULL_HANDLE, &cfg, &cfg_size);
-#endif
-
     createInstance(window);
 
 #if !defined(__APPLE__) || defined(DLOPEN_MOLTENVK)
@@ -814,6 +805,22 @@ void GEVulkanDriver::createInstance(SDL_Window* window)
 
     create_info.pNext = &validation_features;
     extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+#endif
+
+#if defined(__APPLE__)
+    const VkBool32 setting_false = VK_FALSE;
+    VkLayerSettingEXT setting = {};
+    setting.pLayerName = "MoltenVK";
+    setting.pSettingName = "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS";
+    setting.type = VK_LAYER_SETTING_TYPE_BOOL32_EXT;
+    setting.pValues = &setting_false;
+    setting.valueCount = 1;
+
+    VkLayerSettingsCreateInfoEXT layer_settings_create_info = {};
+    layer_settings_create_info.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
+    layer_settings_create_info.settingCount = 1;
+    layer_settings_create_info.pSettings = &setting;
+    create_info.pNext = &layer_settings_create_info;
 #endif
 
     VkApplicationInfo app_info = {};
