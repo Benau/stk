@@ -2502,7 +2502,7 @@ void GEVulkanDriver::buildCommandBuffers()
     for (auto& p : static_cast<GEVulkanSceneManager*>(
         m_irrlicht_device->getSceneManager())->getDrawCalls())
     {
-        p.second->uploadDynamicData(this, p.first);
+        p.second->uploadDynamicData(this, p.first->getUBOData());
     }
 
     vkCmdBeginRenderPass(getCurrentCommandBuffer(), &render_pass_info,
@@ -2565,7 +2565,7 @@ void GEVulkanDriver::renderDrawCalls(
             else
                 rebind_base_vertex = true;
             q.first->prepareRendering(this);
-            q.first->prepareViewport(this, q.second, cmd);
+            q.first->prepareViewport(this, q.second->getViewPort(), cmd);
             if (q.first->doDepthOnlyRenderingFirst())
             {
                 q.first->renderPipeline(this, cmd, GVPT_DEPTH,
@@ -2578,7 +2578,7 @@ void GEVulkanDriver::renderDrawCalls(
         for (auto& q : p)
         {
             if (multiple_viewports)
-                q.first->prepareViewport(this, q.second, cmd);
+                q.first->prepareViewport(this, q.second->getViewPort(), cmd);
             q.first->renderDeferredLighting(this, cmd);
             q.first->renderSkyBox(this, cmd);
         }
@@ -2586,7 +2586,7 @@ void GEVulkanDriver::renderDrawCalls(
         for (auto& q : p)
         {
             if (multiple_viewports)
-                q.first->prepareViewport(this, q.second, cmd);
+                q.first->prepareViewport(this, q.second->getViewPort(), cmd);
             q.first->renderDeferredConvertColor(this, cmd);
             if (bind_mesh_textures)
                 q.first->bindAllMaterials(cmd);
@@ -2629,7 +2629,7 @@ void GEVulkanDriver::renderDrawCalls(
                 for (auto& q : p)
                 {
                     if (multiple_viewports)
-                        q.first->prepareViewport(this, q.second, cmd);
+                        q.first->prepareViewport(this, q.second->getViewPort(), cmd);
                     if (bind_mesh_textures)
                         q.first->bindAllMaterials(cmd);
                     else
@@ -2659,7 +2659,7 @@ void GEVulkanDriver::renderDrawCalls(
             for (auto& q : p)
             {
                 if (multiple_viewports)
-                    q.first->prepareViewport(this, q.second, cmd);
+                    q.first->prepareViewport(this, q.second->getViewPort(), cmd);
                 q.first->renderDisplaceColor(this, cmd, has_displace);
                 if (has_displace)
                 {
@@ -2682,7 +2682,7 @@ void GEVulkanDriver::renderDrawCalls(
             else
                 rebind_base_vertex = true;
             q.first->prepareRendering(this);
-            q.first->prepareViewport(this, q.second, cmd);
+            q.first->prepareViewport(this, q.second->getViewPort(), cmd);
             if (q.first->doDepthOnlyRenderingFirst())
             {
                 q.first->renderPipeline(this, cmd, GVPT_DEPTH,
