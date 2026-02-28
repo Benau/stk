@@ -5,6 +5,7 @@
 #include <SColor.h>
 #include <array>
 #include <atomic>
+#include <memory>
 
 namespace irr
 {
@@ -29,7 +30,7 @@ private:
 
     VkDescriptorPool m_descriptor_pool;
 
-    std::array<VkDescriptorSet, 2> m_env_descriptor_set;
+    VkDescriptorSet m_dummy_env_descriptor_set;
 
     std::atomic_bool m_skybox_loading, m_env_cubemap_loading;
 
@@ -42,10 +43,8 @@ public:
     // ------------------------------------------------------------------------
     void addSkyBox(irr::scene::ISceneNode* node);
     // ------------------------------------------------------------------------
-    VkDescriptorSetLayout getEnvDescriptorSetLayout() const
+    const VkDescriptorSetLayout& getEnvDescriptorSetLayout() const
                                             { return m_env_descriptor_layout; }
-    // ------------------------------------------------------------------------
-    const VkDescriptorSet* getEnvDescriptorSet() const;
     // ------------------------------------------------------------------------
     void reset()
     {
@@ -62,6 +61,19 @@ public:
         c.color = m_skytop_color.load();
         return c;
     }
+    // ------------------------------------------------------------------------
+    const VkDescriptorSet* getDummyEnvDescriptorSet() const
+                                        { return &m_dummy_env_descriptor_set; }
+    // ------------------------------------------------------------------------
+    bool isLoading() const
+    {
+        return m_skybox == NULL || m_skybox_loading.load() == true ||
+            m_env_cubemap_loading.load() == true;
+    }
+    // ------------------------------------------------------------------------
+    std::shared_ptr<std::atomic<VkImageView> > getEnvObserver() const;
+    // ------------------------------------------------------------------------
+    void fillDescriptor(VkDescriptorSet ds, bool srgb) const;
 
 };   // GEVulkanSkyBoxRenderer
 
