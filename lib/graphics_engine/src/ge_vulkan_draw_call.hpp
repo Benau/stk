@@ -176,6 +176,10 @@ private:
 
     std::vector<VkDescriptorSet> m_data_descriptor_sets;
 
+    VkDescriptorSet m_env_descriptor_set;
+
+    std::weak_ptr<std::atomic<VkImageView> > m_env_observer;
+
     VkPipelineLayout m_pipeline_layout, m_skybox_layout;
 
     std::vector<VkPipelineLayout> m_deferred_layouts;
@@ -337,6 +341,8 @@ public:
     }
     // ------------------------------------------------------------------------
     GEVulkanHiZDepth* getHiZDepth() const               { return m_hiz_depth; }
+    // ------------------------------------------------------------------------
+    const VkDescriptorSet* getEnvDescriptorSet(GEVulkanDriver* vk);
 };   // GEVulkanDrawCall
 
 }
