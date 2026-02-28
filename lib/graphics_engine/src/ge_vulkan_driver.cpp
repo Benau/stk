@@ -1203,7 +1203,9 @@ void GEVulkanDriver::createSwapChain()
         // Workaround for https://gitlab.freedesktop.org/mesa/mesa/-/issues/5516
         bool ignore_mailbox_mode = false;
 #ifdef __LINUX__
-        ignore_mailbox_mode =  true;
+        const char* video_driver = SDL_GetCurrentVideoDriver();
+        if (video_driver && strcmp(video_driver, "x11") == 0)
+            ignore_mailbox_mode = true;
 #endif
         if (!ignore_mailbox_mode)
         {
