@@ -19,6 +19,7 @@
 #include "ge_vulkan_mesh_cache.hpp"
 #include "ge_vulkan_scene_manager.hpp"
 #include "ge_vulkan_shader_manager.hpp"
+#include "ge_vulkan_shadow_fbo.hpp"
 #include "ge_vulkan_skybox_renderer.hpp"
 #include "ge_vulkan_texture_descriptor.hpp"
 
@@ -1073,6 +1074,10 @@ void GEVulkanDriver::createDevice()
 
     if (m_features.samplerAnisotropy == VK_TRUE)
         device_features.samplerAnisotropy = VK_TRUE;
+    if (m_features.depthClamp == VK_TRUE)
+        device_features.depthClamp = VK_TRUE;
+    if (m_features.depthBiasClamp == VK_TRUE)
+        device_features.depthBiasClamp = VK_TRUE;
 
     VkDeviceCreateInfo create_info = {};
     create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -1568,6 +1573,16 @@ void GEVulkanDriver::createSamplers()
     if (result != VK_SUCCESS)
         throw std::runtime_error("vkCreateSampler failed for GVS_SHADOW");
     m_vk->samplers[GVS_SHADOW] = sampler;
+
+    sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sampler_info.compareOp = VK_COMPARE_OP_LESS;
+    sampler_info.borderColor = VK_BORDER_COLOR_INT_OPAQUE_WHITE;
+    result = vkCreateSampler(m_vk->device, &sampler_info, NULL,
+        &sampler);
+
+    if (result != VK_SUCCESS)
+        throw std::runtime_error("vkCreateSampler failed for GVS_SHADOW_MAP");
+    m_vk->samplers[GVS_SHADOW_MAP] = sampler;
 }   // createSamplers
 
 // ----------------------------------------------------------------------------
@@ -2499,18 +2514,27 @@ void GEVulkanDriver::buildCommandBuffers()
         return;
 
     GEVulkan2dRenderer::uploadTrisBuffers();
-    for (auto& p : static_cast<GEVulkanSceneManager*>(
-        m_irrlicht_device->getSceneManager())->getDrawCalls())
+    auto& dcp = static_cast<GEVulkanSceneManager*>(
+        m_irrlicht_device->getSceneManager())->getDrawCalls();
+    for (auto& p : dcp)
     {
         p.second->uploadDynamicData(this, p.first->getUBOData());
+        GEVulkanShadowFBO* sfbo = p.second->getShadowFBO();
+        if (sfbo)
+            sfbo->uploadDynamicData(getCurrentCommandBuffer());
+    }
+    for (auto& p : dcp)
+    {
+        GEVulkanShadowFBO* sfbo = p.second->getShadowFBO();
+        if (sfbo)
+            sfbo->render(getCurrentCommandBuffer());
     }
 
     vkCmdBeginRenderPass(getCurrentCommandBuffer(), &render_pass_info,
         VK_SUBPASS_CONTENTS_INLINE);
 
     std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCameraSceneNode*> > dcs;
-    for (auto& p : static_cast<GEVulkanSceneManager*>(
-        m_irrlicht_device->getSceneManager())->getDrawCalls())
+    for (auto& p : dcp)
     {
         dcs.emplace_back(p.second.get(), p.first);
     }

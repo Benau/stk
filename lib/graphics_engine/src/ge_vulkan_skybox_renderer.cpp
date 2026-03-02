@@ -5,6 +5,7 @@
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_environment_map.hpp"
 #include "ge_vulkan_features.hpp"
+#include "ge_vulkan_shadow_fbo.hpp"
 
 #include <array>
 #include <cstdint>
@@ -17,7 +18,7 @@ GEVulkanSkyBoxRenderer::GEVulkanSkyBoxRenderer()
                       : m_skybox(NULL), m_texture_cubemap(NULL),
                         m_diffuse_env_cubemap(NULL),
                         m_specular_env_cubemap(NULL),
-                        m_dummy_env_cubemap(NULL),
+                        m_dummy_env_cubemap(NULL), m_dummy_shadow_fbo(NULL),
                         m_env_descriptor_layout(VK_NULL_HANDLE),
                         m_descriptor_pool(VK_NULL_HANDLE),
                         m_skybox_loading(false), m_env_cubemap_loading(false),
@@ -28,8 +29,10 @@ GEVulkanSkyBoxRenderer::GEVulkanSkyBoxRenderer()
         video::SColor(0));
 
     GEVulkanDriver* vk = getVKDriver();
+    m_dummy_shadow_fbo = new GEVulkanShadowFBO(vk, 4);
+
     // m_env_descriptor_layout
-    std::array<VkDescriptorSetLayoutBinding, 3> texture_layout_binding = {};
+    std::array<VkDescriptorSetLayoutBinding, 4> texture_layout_binding = {};
     texture_layout_binding[0].binding = 0;
     texture_layout_binding[0].descriptorCount = 1;
     texture_layout_binding[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -39,6 +42,8 @@ GEVulkanSkyBoxRenderer::GEVulkanSkyBoxRenderer()
     texture_layout_binding[1].binding = 1;
     texture_layout_binding[2] = texture_layout_binding[0];
     texture_layout_binding[2].binding = 2;
+    texture_layout_binding[3] = texture_layout_binding[0];
+    texture_layout_binding[3].binding = 3;
 
     VkDescriptorSetLayoutCreateInfo setinfo = {};
     setinfo.flags = 0;
@@ -90,6 +95,7 @@ GEVulkanSkyBoxRenderer::GEVulkanSkyBoxRenderer()
     info[0].imageView = (VkImageView)m_dummy_env_cubemap->getTextureHandler();
     info[1] = info[0];
     info[2] = info[0];
+    info[3] = info[0];
 
     VkWriteDescriptorSet write_descriptor_set = {};
     write_descriptor_set.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -122,6 +128,8 @@ GEVulkanSkyBoxRenderer::~GEVulkanSkyBoxRenderer()
         m_specular_env_cubemap->drop();
     if (m_dummy_env_cubemap != NULL)
         m_dummy_env_cubemap->drop();
+    if (m_dummy_shadow_fbo != NULL)
+        m_dummy_shadow_fbo->drop();
     if (m_descriptor_pool != VK_NULL_HANDLE)
         vkDestroyDescriptorPool(vk->getDevice(), m_descriptor_pool, NULL);
     if (m_env_descriptor_layout != VK_NULL_HANDLE)
@@ -266,10 +274,11 @@ std::shared_ptr<std::atomic<VkImageView> >
 
 // ----------------------------------------------------------------------------
 void GEVulkanSkyBoxRenderer::fillDescriptor(VkDescriptorSet ds,
-                                            bool srgb) const
+                                            bool srgb,
+                                            GEVulkanShadowFBO* sfbo) const
 {
     GEVulkanDriver* vk = getVKDriver();
-    std::array<VkDescriptorImageInfo, 3> info;
+    std::array<VkDescriptorImageInfo, 4> info;
     info[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     info[0].sampler = vk->getSampler(GVS_SKYBOX);
     info[0].imageView = m_diffuse_env_cubemap ?
@@ -283,6 +292,13 @@ void GEVulkanSkyBoxRenderer::fillDescriptor(VkDescriptorSet ds,
     info[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     info[2].imageView = (VkImageView)m_texture_cubemap
         ->getImageView(srgb)->load();
+    info[3] = info[0];
+    if (sfbo)
+    {
+        info[3].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        info[3].sampler = vk->getSampler(GVS_SHADOW_MAP);
+        info[3].imageView = (VkImageView)sfbo->getTextureHandler();
+    }
 
     VkWriteDescriptorSet write_descriptor_set = {};
     write_descriptor_set.sType =

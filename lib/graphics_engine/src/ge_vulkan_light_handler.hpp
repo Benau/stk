@@ -1,6 +1,7 @@
 #ifndef HEADER_GE_VULKAN_LIGHT_HANDLER_HPP
 #define HEADER_GE_VULKAN_LIGHT_HANDLER_HPP
 
+#include "matrix4.h"
 #include "vector2d.h"
 #include "vector3d.h"
 #include "SColor.h"
@@ -20,6 +21,8 @@ namespace GE
 {
 class GEVulkanDriver;
 class GEVulkanSkyBoxRenderer;
+struct GEVulkanCameraUBO;
+enum GEVulkanShadowCameraCascade : unsigned;
 const irr::u32 MAX_RENDERING_LIGHT = 32;
 struct GELight
 {
@@ -34,6 +37,9 @@ struct GELight
 
 struct GEGlobalLightBuffer
 {
+    //irr::core::matrix4   m_shadow_projection_view_matrix[GVSCC_COUNT];
+    irr::core::matrix4   m_shadow_projection_view_matrix[3];
+    irr::core::matrix4   m_shadow_view_matrix;
     irr::core::vector3df m_ambient_color;
     irr::f32             m_sun_scatter;
     irr::core::vector3df m_sun_color;
@@ -85,6 +91,9 @@ public:
     // ------------------------------------------------------------------------
     unsigned getFullscreenLightCount() const
                                            { return m_fullscreen_light_count; }
+    // ------------------------------------------------------------------------
+    void setShadowMatrices(GEVulkanCameraUBO* ubo,
+                           GEVulkanShadowCameraCascade cc);
 };   // GEVulkanLightHandler
 
 }

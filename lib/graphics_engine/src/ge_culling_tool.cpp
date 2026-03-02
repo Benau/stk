@@ -3,6 +3,7 @@
 #include "ge_main.hpp"
 #include "ge_spm_buffer.hpp"
 #include "ge_vulkan_camera_scene_node.hpp"
+#include "ge_vulkan_shadow_fbo.hpp"
 
 #include "ISceneNode.h"
 
@@ -16,9 +17,19 @@ void GECullingTool::init(GEVulkanCameraSceneNode* cam)
 }   // init
 
 // ----------------------------------------------------------------------------
+void GECullingTool::initShadow(const GEVulkanShadowFBO* sfbo,
+                               GEVulkanShadowCameraCascade cc)
+{
+    if (!m_cull_for_shadow)
+        m_cull_for_shadow = true;
+    mathPlaneFrustumf(&m_frustum[0].X,
+        sfbo->getShadowProjectionViewMatrix(cc));
+}   // initShadow
+
+// ----------------------------------------------------------------------------
 bool GECullingTool::isCulled(const irr::core::vector3df& center, float radius)
 {
-    for (int i = 0; i < 6; i++)
+    for (int i = m_cull_for_shadow ? 1 : 0; i < 6; i++)
     {
         irr::core::quaternion q(center.X, center.Y, center.Z, 1.0f);
         if (m_frustum[i].dotProduct(q) < -radius)
@@ -30,7 +41,7 @@ bool GECullingTool::isCulled(const irr::core::vector3df& center, float radius)
 // ----------------------------------------------------------------------------
 bool GECullingTool::isCulled(irr::core::aabbox3df& bb)
 {
-    if (!m_cam_bbox.intersectsWithBox(bb))
+    if (!m_cull_for_shadow && !m_cam_bbox.intersectsWithBox(bb))
         return true;
 
     using namespace irr;
@@ -47,7 +58,7 @@ bool GECullingTool::isCulled(irr::core::aabbox3df& bb)
         quaternion(bb.MaxEdge.X, bb.MaxEdge.Y, bb.MaxEdge.Z, 1.0f)
     };
 
-    for (int i = 0; i < 6; i++)
+    for (int i = m_cull_for_shadow ? 1 : 0; i < 6; i++)
     {
         bool culled = true;
         for (int j = 0; j < 8; j++)
