@@ -13,7 +13,7 @@ layout(location = 0) out vec4 o_color;
 void main()
 {
     float depth = subpassLoad(u_depth).x;
-    if (depth == 1.0)
+    if (depth == 0.0)
     {
         o_color = vec4(0.0, 0.0, 0.0, 1.0);
         return;

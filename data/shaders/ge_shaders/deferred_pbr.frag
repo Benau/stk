@@ -16,7 +16,7 @@ layout(push_constant) uniform Constants
 void main()
 {
     float depth = subpassLoad(u_depth).x;
-    if (!u_has_skybox && depth == 1.0)
+    if (!u_has_skybox && depth == 0.0)
         discard;
     vec3 diffuse_color = subpassLoad(u_color).xyz;
     vec3 pbr = vec3(subpassLoad(u_normal).zw, subpassLoad(u_color).w);

@@ -51,7 +51,7 @@ PipelineSettings::PipelineSettings()
 {
     m_drawing_priority = (char)0;
     m_custom_pl = VK_NULL_HANDLE;
-    m_depth_op = VK_COMPARE_OP_LESS;
+    m_depth_op = VK_COMPARE_OP_GREATER;
     m_topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     m_pipeline_type = GVPT_SOLID;
     GEMaterial default_material;
@@ -366,6 +366,8 @@ void GEVulkanDrawCall::generate(GEVulkanDriver* vk)
 {
     if (!m_visible_nodes.empty() && m_data_layout == VK_NULL_HANDLE)
         createVulkanData();
+    if (m_visible_nodes.empty())
+        return;
 
     if (m_light_handler)
          m_light_handler->generate(m_view_position, m_skybox_renderer);
@@ -943,7 +945,7 @@ void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
     settings.m_depth_op = VK_COMPARE_OP_EQUAL;
     createPipeline(vk, settings, dp_cache);
     drawing_order = drawing_order + 1;
-    settings.m_depth_op = VK_COMPARE_OP_LESS;
+    settings.m_depth_op = VK_COMPARE_OP_GREATER;
 
     bool has_displace = getGEConfig()->m_pbr && !m_deferred_layouts.empty() &&
         m_deferred_layouts[GVDFP_DISPLACE_COLOR] != VK_NULL_HANDLE;
@@ -1007,7 +1009,7 @@ void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
     def_mat.m_vertex_shader = "deferred_pointlight.vert";
     def_mat.m_fragment_shader = "deferred_pointlight.frag";
     settings.loadMaterial(def_mat);
-    settings.m_depth_op = VK_COMPARE_OP_LESS;
+    settings.m_depth_op = VK_COMPARE_OP_GREATER;
     settings.m_topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
     settings.m_shader_name = "deferred_pointlight";
     createPipeline(vk, settings, dp_cache);
