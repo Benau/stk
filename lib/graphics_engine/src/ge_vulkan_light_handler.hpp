@@ -36,8 +36,8 @@ struct GELight
 
 struct GEGlobalLightBuffer
 {
-    //irr::core::matrix4   m_shadow_projection_view_matrix[MAX_RENDERING_LIGHT * OMNI_FACES_PER_LIGHT];
-    irr::core::matrix4   m_shadow_projection_view_matrix[192];
+    //irr::core::matrix4   m_shadow_projection_view_matrix[GVSCC_COUNT + MAX_RENDERING_LIGHT * OMNI_FACES_PER_LIGHT];
+    irr::core::matrix4   m_shadow_projection_view_matrix[3 + 192];
     irr::core::matrix4   m_shadow_view_matrix;
     irr::core::vector3df m_ambient_color;
     irr::f32             m_sun_scatter;

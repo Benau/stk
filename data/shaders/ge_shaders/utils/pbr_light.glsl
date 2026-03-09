@@ -154,6 +154,8 @@ float sampleOmniShadow(int light_id, vec3 light_pos, vec3 world_pos)
     vec3 L    = world_pos - light_pos;
     int face  = getFaceIndex(L);
     int layer = light_id * 6 + face;
+    if (u_shadow_type == GST_COMBINED)
+        layer += 3;
 
     mat4 pv   = u_global_light.m_shadow_projection_view_matrix[layer];
 

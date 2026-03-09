@@ -122,6 +122,10 @@ GEVulkanOmniShadowFBO::GEVulkanOmniShadowFBO(GEVulkanDriver* vk,
                                              unsigned shadow_size,
                                              irr::scene::ILightSceneNode* sun)
                      : GEVulkanShadowFBO(vk, shadow_size, sun,
+                                         getGEConfig()->m_shadow_type ==
+                                         GST_COMBINED ?
+                                         getGEConfig()->m_max_omni_lights *
+                                         OMNI_FACES_PER_LIGHT + GVSCC_COUNT:
                                          getGEConfig()->m_max_omni_lights *
                                          OMNI_FACES_PER_LIGHT)
 {
@@ -169,7 +173,8 @@ void GEVulkanOmniShadowFBO::generate()
 
         for (unsigned face = 0; face < OMNI_FACES_PER_LIGHT; face++)
         {
-            const unsigned layer = i * OMNI_FACES_PER_LIGHT + face;
+            const unsigned layer = i * OMNI_FACES_PER_LIGHT + face +
+                getLayerOffset();
             irr::core::matrix4 view = buildFaceViewMatrix(face, pos);
             m_shadow_projection_matrices[layer] = projection_matrix * view;
             GEVulkanCameraUBO& ubo = m_shadow_camera_ubo_data[layer];
@@ -182,7 +187,8 @@ void GEVulkanOmniShadowFBO::generate()
     {
         for (unsigned face = 0; face < OMNI_FACES_PER_LIGHT; face++)
         {
-            const unsigned layer = i * OMNI_FACES_PER_LIGHT + face;
+            const unsigned layer = i * OMNI_FACES_PER_LIGHT + face +
+                getLayerOffset();
             if (i >= light_count)
             {
                 m_shadow_draw_calls[layer]->setRenderState(false);

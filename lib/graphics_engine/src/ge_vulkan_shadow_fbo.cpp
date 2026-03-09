@@ -413,14 +413,14 @@ void GEVulkanShadowFBO::prepare(irr::scene::ICameraSceneNode* cam,
 // ----------------------------------------------------------------------------
 void GEVulkanShadowFBO::addNode(irr::scene::ISceneNode* node)
 {
-    for (unsigned i = 0; i < m_shadow_draw_calls.size(); i++)
+    for (unsigned i = 0; i < GVSCC_COUNT; i++)
         m_shadow_draw_calls[i]->addNode(node);
 }   // addNode
 
 // ----------------------------------------------------------------------------
 void GEVulkanShadowFBO::generate()
 {
-    for (unsigned i = 0; i < m_shadow_draw_calls.size(); i++)
+    for (unsigned i = 0; i < GVSCC_COUNT; i++)
         m_shadow_draw_calls[i]->generate(m_vk);
 }   // generate
 
