@@ -12,15 +12,18 @@ class GEVulkanShadowFBO;
 
 class GEVulkanShadowDrawCall : public GEVulkanDrawCall
 {
-private:
+protected:
     const GEVulkanShadowFBO* m_sfbo;
 
+private:
     const GEVulkanShadowCameraCascade m_cascade;
 
     // ------------------------------------------------------------------------
     virtual bool isShadow() const                              { return true; }
     // ------------------------------------------------------------------------
     virtual bool skip(irr::scene::ISceneNode* node) const;
+    // ------------------------------------------------------------------------
+    virtual bool useDepthClamp() const                         { return true; }
     // ------------------------------------------------------------------------
     virtual VkRenderPass getRenderPassForPipelineCreation(GEVulkanDriver* vk,
                                                     GEVulkanPipelineType type);
@@ -38,7 +41,7 @@ public:
     // ------------------------------------------------------------------------
     virtual ~GEVulkanShadowDrawCall() {}
     // ------------------------------------------------------------------------
-    void prepareShadow(unsigned layer);
+    virtual void prepareShadow(unsigned layer);
     // ------------------------------------------------------------------------
     virtual std::string getShader(const irr::video::SMaterial& m);
     // ------------------------------------------------------------------------
@@ -49,6 +52,10 @@ public:
         assert(false);
         return NULL;
     }
+    // ------------------------------------------------------------------------
+    virtual void setRenderState(bool state)                                  {}
+    // ------------------------------------------------------------------------
+    virtual bool getRenderState() const                        { return true; }
 
 };   // GEVulkanShadowDrawCall
 

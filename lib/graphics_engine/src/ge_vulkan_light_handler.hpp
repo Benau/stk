@@ -36,8 +36,8 @@ struct GELight
 
 struct GEGlobalLightBuffer
 {
-    //irr::core::matrix4   m_shadow_projection_view_matrix[GVSCC_COUNT];
-    irr::core::matrix4   m_shadow_projection_view_matrix[3];
+    //irr::core::matrix4   m_shadow_projection_view_matrix[MAX_RENDERING_LIGHT * OMNI_FACES_PER_LIGHT];
+    irr::core::matrix4   m_shadow_projection_view_matrix[192];
     irr::core::matrix4   m_shadow_view_matrix;
     irr::core::vector3df m_ambient_color;
     irr::f32             m_sun_scatter;
@@ -78,7 +78,7 @@ public:
     // ------------------------------------------------------------------------
     void addLightNode(irr::scene::ILightSceneNode* node);
     // ------------------------------------------------------------------------
-    void* getData()                                       { return &m_buffer; }
+    GEGlobalLightBuffer* getData()                        { return &m_buffer; }
     // ------------------------------------------------------------------------
     size_t getSize() const
     {

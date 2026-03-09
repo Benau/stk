@@ -18,9 +18,9 @@
 #include "ge_vulkan_light_handler.hpp"
 #include "ge_vulkan_mesh_cache.hpp"
 #include "ge_vulkan_mesh_scene_node.hpp"
+#include "ge_vulkan_omni_shadow_fbo.hpp"
 #include "ge_vulkan_scene_manager.hpp"
 #include "ge_vulkan_shader_manager.hpp"
-#include "ge_vulkan_shadow_fbo.hpp"
 #include "ge_vulkan_skybox_renderer.hpp"
 #include "ge_vulkan_texture_descriptor.hpp"
 
@@ -895,8 +895,10 @@ void GEVulkanDrawCall::prepare(GEVulkanCameraSceneNode* cam)
         irr::scene::ILightSceneNode* sun = sm->getSunNode(sm);
         if (getGEConfig()->m_shadow_size > 0 && sun)
         {
-            m_shadow_fbo = new GEVulkanShadowFBO(vk,
-                getGEConfig()->m_shadow_size, sun);
+            m_shadow_fbo = getGEConfig()->m_shadow_type == GST_SUN ?
+                new GEVulkanShadowFBO(vk, getGEConfig()->m_shadow_size, sun) :
+                new GEVulkanOmniShadowFBO(vk, getGEConfig()->m_shadow_size,
+                sun);
             m_shadow_fbo->createRTT();
             m_shadow_fbo->createDrawCalls();
         }
@@ -1132,7 +1134,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     if (isShadow())
     {
         rasterizer.depthBiasEnable = VK_TRUE;
-        rasterizer.depthClampEnable = VK_TRUE;
+        rasterizer.depthClampEnable = useDepthClamp() ? VK_TRUE : VK_FALSE;
         rasterizer.depthBiasConstantFactor = 0.5;
         rasterizer.depthBiasSlopeFactor = 1.5;
         rasterizer.depthBiasClamp = 8.0;
@@ -1249,6 +1251,8 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         VkBool32 m_ssr;
         uint32_t m_hiz_iterations;
         uint32_t m_shadow_size;
+        uint32_t m_shadow_type;
+        uint32_t m_max_omni_lights;
     };
     Constants constants = {};
     constants.m_ibl = getGEConfig()->m_pbr && getGEConfig()->m_ibl &&
@@ -1275,9 +1279,15 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
             break;
         }
     }
-    constants.m_shadow_size =
-        m_shadow_fbo ? getGEConfig()->m_shadow_size : 0;
-    std::array<VkSpecializationMapEntry, 7> specialization_entries = {};
+    Constants vertex_shader_constants = constants;
+    vertex_shader_constants.m_shadow_type = getVertexShaderShadowType();
+    if (m_shadow_fbo)
+    {
+        constants.m_shadow_size = getGEConfig()->m_shadow_size;
+        constants.m_shadow_type = getGEConfig()->m_shadow_type;
+        constants.m_max_omni_lights = getGEConfig()->m_max_omni_lights;
+    }
+    std::array<VkSpecializationMapEntry, 9> specialization_entries = {};
     specialization_entries[0].constantID = 0;
     specialization_entries[0].offset = offsetof(Constants, m_ibl);
     specialization_entries[0].size = sizeof(VkBool32);
@@ -1300,15 +1310,23 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     specialization_entries[6].constantID = 6;
     specialization_entries[6].offset = offsetof(Constants, m_shadow_size);
     specialization_entries[6].size = sizeof(uint32_t);
-    VkSpecializationInfo specialization_info = {};
-    specialization_info.mapEntryCount = specialization_entries.size();
-    specialization_info.pMapEntries = specialization_entries.data();
-    specialization_info.dataSize = sizeof(Constants);
-    specialization_info.pData = &constants;
+    specialization_entries[7].constantID = 7;
+    specialization_entries[7].offset = offsetof(Constants, m_shadow_type);
+    specialization_entries[7].size = sizeof(uint32_t);
+    specialization_entries[8].constantID = 8;
+    specialization_entries[8].offset = offsetof(Constants, m_max_omni_lights);
+    specialization_entries[8].size = sizeof(uint32_t);
+    std::array<VkSpecializationInfo, 2> specialization_infos = {};
+    specialization_infos[0].mapEntryCount = specialization_entries.size();
+    specialization_infos[0].pMapEntries = specialization_entries.data();
+    specialization_infos[0].dataSize = sizeof(Constants);
+    specialization_infos[0].pData = &vertex_shader_constants;
+    specialization_infos[1] = specialization_infos[0];
+    specialization_infos[1].pData = &constants;
     if (getGEConfig()->m_pbr)
     {
-        shader_stages[0].pSpecializationInfo = &specialization_info;
-        shader_stages[1].pSpecializationInfo = &specialization_info;
+        shader_stages[0].pSpecializationInfo = &specialization_infos[0];
+        shader_stages[1].pSpecializationInfo = &specialization_infos[1];
     }
 
     shader_stages[0].module = GEVulkanShaderManager::getShader(

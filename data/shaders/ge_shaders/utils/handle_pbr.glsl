@@ -33,7 +33,7 @@ vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
         u_camera.m_inverse_view_matrix);
 
     float shadow = 1.0;
-    if (u_shadow_size != 0)
+    if ((u_shadow_type & GST_SUN) != 0 && u_shadow_size != 0)
     {
         float NdotL = clamp(dot(normal, lightdir), 0.0, 1.0);
         shadow = getShadowFactor(u_shadow_map, world_position.xyz, view_depth, NdotL, world_normal, u_global_light.m_sun_direction);
@@ -61,7 +61,8 @@ vec3 handlePBR(vec3 diffuse_color, vec3 pbr, vec4 world_position,
         eyedir, normal, perceptual_roughness, world_position, xpos.z);
 
     mixed_color += accumulateLights(u_global_light.m_light_count,
-        diffuse_color, normal, xpos, eyedir, perceptual_roughness, pbr.y);
+        diffuse_color, normal, xpos, eyedir, perceptual_roughness, pbr.y,
+        world_position.xyz);
 
     //Disable for deferred shading
     //float factor = (1.0 - exp(length(xpos) * -0.0001));

@@ -18,11 +18,11 @@ namespace GE
 {
 // ----------------------------------------------------------------------------
 GEVulkanShadowFBO::GEVulkanShadowFBO(GEVulkanDriver* vk, unsigned shadow_size,
-                                     irr::scene::ILightSceneNode* sun)
+                                     irr::scene::ILightSceneNode* sun,
+                                     unsigned layer_count)
                     : GEVulkanTexture(), m_sun(sun),
                       m_rtt_render_pass(VK_NULL_HANDLE),
                       m_rtt_frame_buffer(VK_NULL_HANDLE),
-                      m_frame_buffer_image_views({}),
                       m_shadow_camera_ubo_data(NULL)
 {
     m_vk             = vk;
@@ -31,8 +31,8 @@ GEVulkanShadowFBO::GEVulkanShadowFBO(GEVulkanDriver* vk, unsigned shadow_size,
     m_vma_allocation = VK_NULL_HANDLE;
     m_has_mipmaps    = false;
     m_locked_data    = NULL;
-    m_layer_count      = GVSCC_COUNT;
-    m_image_view_type  = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    m_layer_count    = layer_count;
+    m_image_view_type = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
 
     m_size = m_orig_size = irr::core::dimension2du(shadow_size, shadow_size);
     // Prefer D16 for bandwidth / fillrate; fall back to wider formats.
@@ -99,9 +99,10 @@ void GEVulkanShadowFBO::createRTT()
     // ------------------------------------------------------------------ //
     // One VkAttachmentDescription per cascade.                            //
     // ------------------------------------------------------------------ //
-    std::array<VkAttachmentDescription, GVSCC_COUNT> shadow_attachments = {};
-    for (unsigned i = 0; i < GVSCC_COUNT; i++)
+    std::vector<VkAttachmentDescription> shadow_attachments(m_layer_count);
+    for (unsigned i = 0; i < m_layer_count; i++)
     {
+        shadow_attachments[i]                 = {};
         shadow_attachments[i].format          = m_internal_format;
         shadow_attachments[i].samples         = VK_SAMPLE_COUNT_1_BIT;
         shadow_attachments[i].loadOp          = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -117,17 +118,19 @@ void GEVulkanShadowFBO::createRTT()
     // ------------------------------------------------------------------ //
     // One VkAttachmentReference per cascade, one subpass per cascade.    //
     // ------------------------------------------------------------------ //
-    std::array<VkAttachmentReference, GVSCC_COUNT> shadow_attachment_refs = {};
-    for (unsigned i = 0; i < GVSCC_COUNT; i++)
+    std::vector<VkAttachmentReference> shadow_attachment_refs(m_layer_count);
+    for (unsigned i = 0; i < m_layer_count; i++)
     {
+        shadow_attachment_refs[i]            = {};
         shadow_attachment_refs[i].attachment = i;
         shadow_attachment_refs[i].layout     =
             VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     }
 
-    std::array<VkSubpassDescription, GVSCC_COUNT> subpasses = {};
-    for (unsigned i = 0; i < GVSCC_COUNT; i++)
+    std::vector<VkSubpassDescription> subpasses(m_layer_count);
+    for (unsigned i = 0; i < m_layer_count; i++)
     {
+        subpasses[i]                         = {};
         subpasses[i].pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
         subpasses[i].colorAttachmentCount    = 0;
         subpasses[i].pColorAttachments       = NULL;
@@ -137,10 +140,11 @@ void GEVulkanShadowFBO::createRTT()
     // ------------------------------------------------------------------ //
     // Two dependencies per subpass (enter + exit).                       //
     // ------------------------------------------------------------------ //
-    std::array<VkSubpassDependency, GVSCC_COUNT * 2> dependencies = {};
-    for (unsigned i = 0; i < GVSCC_COUNT; i++)
+    std::vector<VkSubpassDependency> dependencies(m_layer_count * 2);
+    for (unsigned i = 0; i < m_layer_count; i++)
     {
         // External -> subpass i  (wait for previous shader read)
+        dependencies[2 * i]                 = {};
         dependencies[2 * i].srcSubpass      = VK_SUBPASS_EXTERNAL;
         dependencies[2 * i].dstSubpass      = i;
         dependencies[2 * i].srcStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
@@ -150,6 +154,7 @@ void GEVulkanShadowFBO::createRTT()
         dependencies[2 * i].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
 
         // subpass i -> External  (make depth visible to shader reads)
+        dependencies[2 * i + 1]                 = {};
         dependencies[2 * i + 1].srcSubpass      = i;
         dependencies[2 * i + 1].dstSubpass      = VK_SUBPASS_EXTERNAL;
         dependencies[2 * i + 1].srcStageMask    = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
@@ -177,7 +182,8 @@ void GEVulkanShadowFBO::createRTT()
     // Per-layer 2-D image views for use as individual framebuffer        //
     // attachments (the main image view covers all layers as an array).   //
     // ------------------------------------------------------------------ //
-    for (unsigned i = 0; i < GVSCC_COUNT; i++)
+    m_frame_buffer_image_views.resize(m_layer_count, VK_NULL_HANDLE);
+    for (unsigned i = 0; i < m_layer_count; i++)
     {
         VkImageViewCreateInfo view_info = {};
         view_info.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -197,7 +203,7 @@ void GEVulkanShadowFBO::createRTT()
     }
 
     // ------------------------------------------------------------------ //
-    // Single framebuffer that references all GVSCC_COUNT layer views.    //
+    // Single framebuffer that references all layer views.                //
     // ------------------------------------------------------------------ //
     VkFramebufferCreateInfo framebuffer_info = {};
     framebuffer_info.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -213,16 +219,17 @@ void GEVulkanShadowFBO::createRTT()
     if (result != VK_SUCCESS)
         throw std::runtime_error("GEVulkanShadowFBO: vkCreateFramebuffer failed");
 
-    m_shadow_camera_ubo_data = new GEVulkanCameraUBO[GVSCC_COUNT];
+    m_shadow_projection_matrices.resize(m_layer_count);
+    m_shadow_camera_ubo_data = new GEVulkanCameraUBO[m_layer_count];
 }   // createRTT
 
 // ----------------------------------------------------------------------------
 void GEVulkanShadowFBO::createDrawCalls()
 {
-    for (unsigned i = 0; i < GVSCC_COUNT; i++)
+    for (unsigned i = 0; i < m_layer_count; i++)
     {
-        m_shadow_draw_calls[i] = std::unique_ptr<GEVulkanShadowDrawCall>(
-            new GEVulkanShadowDrawCall(this, (GEVulkanShadowCameraCascade)i));
+        m_shadow_draw_calls.push_back(std::unique_ptr<GEVulkanShadowDrawCall>(
+            new GEVulkanShadowDrawCall(this, (GEVulkanShadowCameraCascade)i)));
     }
 }   // createDrawCalls
 
@@ -406,22 +413,24 @@ void GEVulkanShadowFBO::prepare(irr::scene::ICameraSceneNode* cam,
 // ----------------------------------------------------------------------------
 void GEVulkanShadowFBO::addNode(irr::scene::ISceneNode* node)
 {
-    for (unsigned i = 0; i < GVSCC_COUNT; i++)
+    for (unsigned i = 0; i < m_shadow_draw_calls.size(); i++)
         m_shadow_draw_calls[i]->addNode(node);
 }   // addNode
 
 // ----------------------------------------------------------------------------
 void GEVulkanShadowFBO::generate()
 {
-    for (unsigned i = 0; i < GVSCC_COUNT; i++)
+    for (unsigned i = 0; i < m_shadow_draw_calls.size(); i++)
         m_shadow_draw_calls[i]->generate(m_vk);
 }   // generate
 
 // ----------------------------------------------------------------------------
 void GEVulkanShadowFBO::uploadDynamicData(VkCommandBuffer cmd)
 {
-    for (unsigned i = 0; i < GVSCC_COUNT; i++)
+    for (unsigned i = 0; i < m_shadow_draw_calls.size(); i++)
     {
+        if (!m_shadow_draw_calls[i]->getRenderState())
+            continue;
         m_shadow_draw_calls[i]->uploadDynamicData(m_vk,
             &m_shadow_camera_ubo_data[i], cmd);
     }
@@ -430,7 +439,7 @@ void GEVulkanShadowFBO::uploadDynamicData(VkCommandBuffer cmd)
 // ----------------------------------------------------------------------------
 void GEVulkanShadowFBO::render(VkCommandBuffer cmd)
 {
-    std::array<VkClearValue, GVSCC_COUNT> shadow_clear = {};
+    std::vector<VkClearValue> shadow_clear(m_shadow_draw_calls.size());
     for (int i = 0; i < shadow_clear.size(); i++)
         shadow_clear[i].depthStencil = {1.0f, 0};
 
@@ -465,16 +474,19 @@ void GEVulkanShadowFBO::render(VkCommandBuffer cmd)
     scissor.extent.height = vp.height;
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    for (unsigned i = 0; i < GVSCC_COUNT; i++)
+    for (unsigned i = 0; i < m_shadow_draw_calls.size(); i++)
     {
-        if (bind_mesh_textures)
-            m_shadow_draw_calls[i]->bindAllMaterials(cmd);
-        else
-            rebind_base_vertex = true;
-        m_shadow_draw_calls[i]->prepareRendering(m_vk);
-        m_shadow_draw_calls[i]->renderPipeline(m_vk, cmd, GVPT_DEPTH,
-            rebind_base_vertex);
-        if (i != GVSCC_COUNT - 1)
+        if (m_shadow_draw_calls[i]->getRenderState())
+        {
+            if (bind_mesh_textures)
+                m_shadow_draw_calls[i]->bindAllMaterials(cmd);
+            else
+                rebind_base_vertex = true;
+            m_shadow_draw_calls[i]->prepareRendering(m_vk);
+            m_shadow_draw_calls[i]->renderPipeline(m_vk, cmd, GVPT_DEPTH,
+                rebind_base_vertex);
+        }
+        if (i != m_shadow_draw_calls.size() - 1)
             vkCmdNextSubpass(cmd, VK_SUBPASS_CONTENTS_INLINE);
     }
     vkCmdEndRenderPass(cmd);
