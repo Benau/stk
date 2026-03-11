@@ -45,7 +45,7 @@ CustomVideoSettingsDialog::CustomVideoSettingsDialog(const float w, const float 
         ModalDialog(w, h)
 {
     loadFromFile("custom_video_settings.stkgui");
-    updateActivation("");
+    updateActivation();
 }
 
 // -----------------------------------------------------------------------------
@@ -113,6 +113,8 @@ void CustomVideoSettingsDialog::beforeAddingWidgets()
     getWidget<CheckBoxWidget>("ssr")->setState(UserConfigParams::m_ssr);
     getWidget<CheckBoxWidget>("bloom")->setState(UserConfigParams::m_bloom);
     getWidget<CheckBoxWidget>("lightscattering")->setState(UserConfigParams::m_light_scatter);
+    getWidget<CheckBoxWidget>("pointlight_shadows")->setState(UserConfigParams::m_pointlight_shadows);
+
     if (CVS->isEXTTextureCompressionS3TCUsable())
     {
         getWidget<CheckBoxWidget>("texture_compression")->setState(UserConfigParams::m_texture_compression);
@@ -170,8 +172,11 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
         // advanced settings are available or not with the chosen renderer
         std::string rd = StringUtils::wideToUtf8(
             getWidget<GUIEngine::SpinnerWidget>("render_driver")->getStringValue().make_lower());
-
-        updateActivation(rd);
+        if (rd != std::string(UserConfigParams::m_render_driver))
+            m_new_render_driver = rd;
+        else
+            m_new_render_driver.clear();
+        updateActivation();
     }
     if (eventSource == "buttons")
     {
@@ -183,6 +188,8 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
             bool advanced_pipeline = getWidget<CheckBoxWidget>("dynamiclight")->getState();
             bool pbr_changed = false;
             bool ibl_changed = false;
+            unsigned prev_shadow_size = GE::getGEConfig()->m_shadow_size;
+            unsigned prev_shadow_type = GE::getGEConfig()->m_shadow_type;
             if (UserConfigParams::m_dynamic_lights != advanced_pipeline)
             {
                 pbr_changed = true;
@@ -204,10 +211,17 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
                     getWidget<SpinnerWidget>("shadows")->getValue() >= 3 ? 2048 : 0;
                 UserConfigParams::m_pcss = 
                     getWidget<SpinnerWidget>("shadows")->getValue() == 4 ? true : false;
+                GE::getGEConfig()->m_shadow_size = UserConfigParams::m_shadows_resolution;
+                UserConfigParams::m_pointlight_shadows =
+                    getWidget<CheckBoxWidget>("pointlight_shadows")->getState();
+                GE::getGEConfig()->m_shadow_type =
+                    UserConfigParams::m_pointlight_shadows ? GE::GST_COMBINED : GE::GST_SUN;
             }
             else
             {
                 UserConfigParams::m_shadows_resolution = 0;
+                UserConfigParams::m_pointlight_shadows = false;
+                GE::getGEConfig()->m_shadow_size = 0;
             }
 
             UserConfigParams::m_mlaa =
@@ -273,7 +287,9 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
             if (GE::getDriver()->getDriverType() == video::EDT_VULKAN)
             {
                 bool need_recreate_swapchain = GE::getGEConfig()->m_screen_space_reflection_type != prev_gssrt;
-                if (need_recreate_swapchain || pbr_changed || ibl_changed)
+                if (need_recreate_swapchain || pbr_changed || ibl_changed ||
+                    prev_shadow_size != GE::getGEConfig()->m_shadow_size ||
+                    prev_shadow_type != GE::getGEConfig()->m_shadow_type)
                     GE::getVKDriver()->updateDriver(need_recreate_swapchain, pbr_changed, ibl_changed);
             }
             // sameRestart will have the same effect
@@ -291,9 +307,9 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
             return GUIEngine::EVENT_BLOCK;
         }
     }
-    else if (eventSource == "dynamiclight")
+    else if (eventSource == "dynamiclight" || eventSource == "shadows")
     {
-        updateActivation("");
+        updateActivation();
     }
 #endif
     return GUIEngine::EVENT_LET;
@@ -301,7 +317,7 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
 
 // -----------------------------------------------------------------------------
 
-void CustomVideoSettingsDialog::updateActivation(const std::string& renderer)
+void CustomVideoSettingsDialog::updateActivation()
 {
 #ifndef SERVER_ONLY
     bool light = getWidget<CheckBoxWidget>("dynamiclight")->getState();
@@ -311,16 +327,16 @@ void CustomVideoSettingsDialog::updateActivation(const std::string& renderer)
 
     // If showing enabled options for a specific renderer has
     // been requested, prioritize that
-    if (renderer == "vulkan")
+    if (m_new_render_driver == "vulkan")
     {
         vk = true;
         modern_gl = false;
     }
-    else if (renderer != "") // OpenGL or DirectX
+    else if (m_new_render_driver != "") // OpenGL or DirectX
     {
         vk = false;
 
-        if (renderer == "opengl" && !UserConfigParams::m_force_legacy_device)
+        if (m_new_render_driver == "opengl" && !UserConfigParams::m_force_legacy_device)
             modern_gl = true;
         else
             modern_gl = false;
@@ -340,7 +356,7 @@ void CustomVideoSettingsDialog::updateActivation(const std::string& renderer)
     }
     getWidget<CheckBoxWidget>("motionblur")->setActive(light);
     getWidget<CheckBoxWidget>("dof")->setActive(light);
-    getWidget<SpinnerWidget>("shadows")->setActive(light);
+    getWidget<SpinnerWidget>("shadows")->setActive(light || (vk && real_light));
     getWidget<CheckBoxWidget>("mlaa")->setActive(light);
     getWidget<CheckBoxWidget>("ssao")->setActive(light);
     getWidget<CheckBoxWidget>("ssr")->setActive(light || (vk && real_light));
@@ -349,5 +365,7 @@ void CustomVideoSettingsDialog::updateActivation(const std::string& renderer)
     getWidget<CheckBoxWidget>("glow")->setActive(light);
     getWidget<CheckBoxWidget>("bloom")->setActive(light);
     getWidget<CheckBoxWidget>("lightscattering")->setActive(light);
+    getWidget<CheckBoxWidget>("pointlight_shadows")->setActive(vk && real_light &&
+        getWidget<SpinnerWidget>("shadows")->getValue() != 0);
 #endif
 }   // updateActivation
