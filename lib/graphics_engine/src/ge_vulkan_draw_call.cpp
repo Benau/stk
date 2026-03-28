@@ -1628,7 +1628,7 @@ void GEVulkanDrawCall::createVulkanData()
 
 // ----------------------------------------------------------------------------
 void GEVulkanDrawCall::uploadDynamicData(GEVulkanDriver* vk,
-                                         GEVulkanCameraSceneNode* cam,
+                                         const GEVulkanCameraUBO* cam_ubo,
                                          VkCommandBuffer custom_cmd)
 {
     if (!m_dynamic_data)
@@ -1643,8 +1643,7 @@ void GEVulkanDrawCall::uploadDynamicData(GEVulkanDriver* vk,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 
     std::vector<std::pair<void*, size_t> > data_uploading;
-    data_uploading.emplace_back((void*)cam->getUBOData(),
-        sizeof(GEVulkanCameraUBO));
+    data_uploading.emplace_back((void*)cam_ubo, sizeof(GEVulkanCameraUBO));
 
     size_t sbo_padding = getLightDataOffset() - sizeof(GEVulkanCameraUBO);
     if (sbo_padding > 0)
@@ -1721,17 +1720,17 @@ void GEVulkanDrawCall::prepareRendering(GEVulkanDriver* vk)
 
 // ----------------------------------------------------------------------------
 void GEVulkanDrawCall::prepareViewport(GEVulkanDriver* vk,
-                                       GEVulkanCameraSceneNode* cam,
+                                       const irr::core::rect<irr::s32>& viewp,
                                        VkCommandBuffer cmd)
 {
     VkViewport vp;
     float scale = getGEConfig()->m_render_scale;
     if (vk->getSeparateRTTTexture())
         scale = 1.0f;
-    vp.x = cam->getViewPort().UpperLeftCorner.X * scale;
-    vp.y = cam->getViewPort().UpperLeftCorner.Y * scale;
-    vp.width = cam->getViewPort().getWidth() * scale;
-    vp.height = cam->getViewPort().getHeight() * scale;
+    vp.x = viewp.UpperLeftCorner.X * scale;
+    vp.y = viewp.UpperLeftCorner.Y * scale;
+    vp.width = viewp.getWidth() * scale;
+    vp.height = viewp.getHeight() * scale;
     vp.minDepth = 0;
     vp.maxDepth = 1.0f;
     vk->getRotatedViewport(&vp, true/*handle_rtt*/);
