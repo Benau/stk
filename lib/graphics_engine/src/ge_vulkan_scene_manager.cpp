@@ -207,7 +207,7 @@ void GEVulkanSceneManager::drawAll(irr::u32 flags)
     cam->setViewPort(
         core::recti(0, 0, rtt->getSize().Width, rtt->getSize().Height));
     cam->render();
-    dc->uploadDynamicData(vk, cam, cmd);
+    dc->uploadDynamicData(vk, cam->getUBOData(), cmd);
 
     VkRenderPassBeginInfo render_pass_info = {};
     render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;

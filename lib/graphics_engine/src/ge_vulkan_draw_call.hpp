@@ -41,6 +41,7 @@ class GEVulkanDynamicSPMBuffer;
 class GEVulkanLightHandler;
 class GEVulkanSkyBoxRenderer;
 class GEVulkanTextureDescriptor;
+struct GEVulkanCameraUBO;
 
 typedef std::pair<std::vector<VkVertexInputBindingDescription>,
     std::vector<VkVertexInputAttributeDescription> > VertexDescription;
@@ -276,7 +277,8 @@ public:
     // ------------------------------------------------------------------------
     void generate(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
-    void uploadDynamicData(GEVulkanDriver* vk, GEVulkanCameraSceneNode* cam,
+    void uploadDynamicData(GEVulkanDriver* vk,
+                           const GEVulkanCameraUBO* cam_ubo,
                            VkCommandBuffer custom_cmd = VK_NULL_HANDLE);
     // ------------------------------------------------------------------------
     bool doDepthOnlyRenderingFirst();
@@ -285,7 +287,8 @@ public:
     // ------------------------------------------------------------------------
     void prepareRendering(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
-    void prepareViewport(GEVulkanDriver* vk, GEVulkanCameraSceneNode* cam,
+    void prepareViewport(GEVulkanDriver* vk,
+                         const irr::core::rect<irr::s32>& viewp,
                          VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
     void renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
