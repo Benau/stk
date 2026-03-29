@@ -243,6 +243,7 @@ GEVulkanDrawCall::GEVulkanDrawCall()
     m_update_data_descriptor_sets = true;
     m_data_layout = VK_NULL_HANDLE;
     m_descriptor_pool = VK_NULL_HANDLE;
+    m_env_descriptor_set = VK_NULL_HANDLE;
     m_pipeline_layout = VK_NULL_HANDLE;
     m_skybox_layout = VK_NULL_HANDLE;
     m_skybox_renderer = NULL;
@@ -1481,6 +1482,9 @@ void GEVulkanDrawCall::createVulkanData()
     std::vector<VkDescriptorPoolSize> sizes =
     {
         {
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3
+        },
+        {
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
             (vk->getMaxFrameInFlight() + 1) * 2
         },
@@ -1495,7 +1499,7 @@ void GEVulkanDrawCall::createVulkanData()
     VkDescriptorPoolCreateInfo pool_info = {};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool_info.flags = 0;
-    pool_info.maxSets = vk->getMaxFrameInFlight() + 1;
+    pool_info.maxSets = vk->getMaxFrameInFlight() + 2;
     pool_info.poolSizeCount = sizes.size();
     pool_info.pPoolSizes = sizes.data();
 
@@ -1520,6 +1524,17 @@ void GEVulkanDrawCall::createVulkanData()
     {
         throw std::runtime_error("vkAllocateDescriptorSets failed for data "
             "layout");
+    }
+
+    // m_env_descriptor_set
+    alloc_info.descriptorSetCount = 1;
+    alloc_info.pSetLayouts = &vk->getSkyBoxRenderer()->getEnvDescriptorSetLayout();
+
+    if (vkAllocateDescriptorSets(vk->getDevice(), &alloc_info,
+        &m_env_descriptor_set) != VK_SUCCESS)
+    {
+        throw std::runtime_error("vkAllocateDescriptorSets failed for "
+            "m_env_descriptor_set");
     }
 
     // m_pipeline_layout
@@ -1756,6 +1771,8 @@ std::vector<uint32_t> GEVulkanDrawCall::getDefaultDynamicOffsets() const
 // ----------------------------------------------------------------------------
 void GEVulkanDrawCall::bindAllMaterials(VkCommandBuffer cmd)
 {
+    if (m_pipeline_layout == VK_NULL_HANDLE)
+        return;
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
         m_pipeline_layout, 0, 1,
         m_texture_descriptor->getDescriptorSet(), 0, NULL);
@@ -1787,8 +1804,7 @@ void GEVulkanDrawCall::renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
         {
         case GVPT_SOLID:
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                m_pipeline_layout, 2, 1,
-                vk->getSkyBoxRenderer()->getEnvDescriptorSet(), 0, NULL);
+                m_pipeline_layout, 2, 1, getEnvDescriptorSet(vk), 0, NULL);
             break;
         case GVPT_DISPLACE_MASK:
         {
@@ -1796,8 +1812,7 @@ void GEVulkanDrawCall::renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
             if (dfbo && dfbo->getAttachment<GVDFT_DISPLACE_COLOR>())
             {
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    m_pipeline_layout, 2, 1,
-                    vk->getSkyBoxRenderer()->getEnvDescriptorSet(), 0, NULL);
+                    m_pipeline_layout, 2, 1, getEnvDescriptorSet(vk), 0, NULL);
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     m_pipeline_layout, 3, 1, m_hiz_depth ?
                     m_hiz_depth->getRenderingDescriptorSet() :
@@ -2137,8 +2152,7 @@ bool GEVulkanDrawCall::renderSkyBox(GEVulkanDriver* vk, VkCommandBuffer cmd)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
         *m_graphics_pipelines["skybox"].m_pipelines[GVPT_SKYBOX].get());
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_skybox_layout, 0, 1, m_skybox_renderer->getEnvDescriptorSet(), 0,
-        NULL);
+        m_skybox_layout, 0, 1, getEnvDescriptorSet(vk), 0, NULL);
     int current_buffer_idx = vk->getCurrentBufferIdx();
     std::vector<uint32_t> dynamic_offsets = getDefaultDynamicOffsets();
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -2168,8 +2182,7 @@ void GEVulkanDrawCall::renderDeferredLighting(GEVulkanDriver* vk,
         1, 1, &m_data_descriptor_sets[current_buffer_idx],
         dynamic_offsets.size(), dynamic_offsets.data());
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_deferred_layouts[GVDFP_HDR], 2, 1,
-        vk->getSkyBoxRenderer()->getEnvDescriptorSet(), 0, NULL);
+        m_deferred_layouts[GVDFP_HDR], 2, 1, getEnvDescriptorSet(vk), 0, NULL);
     unsigned fullscreen_light = m_light_handler ?
         m_light_handler->getFullscreenLightCount() : 0;
     vkCmdPushConstants(cmd, m_deferred_layouts[GVDFP_HDR],
@@ -2453,5 +2466,21 @@ uint32_t GEVulkanDrawCall::getSubpassForPipelineCreation(
     }
     return 0;
 }   // getSubpassForPipelineCreation
+
+// ----------------------------------------------------------------------------
+const VkDescriptorSet* GEVulkanDrawCall::getEnvDescriptorSet(GEVulkanDriver* vk)
+{
+    GEVulkanSkyBoxRenderer* sky = vk->getSkyBoxRenderer();
+    if (!m_skybox_renderer)
+        return sky->getDummyEnvDescriptorSet();
+    if (m_env_observer.expired())
+    {
+        if (sky->isLoading())
+            return sky->getDummyEnvDescriptorSet();
+        m_env_observer = sky->getEnvObserver();
+        sky->fillDescriptor(m_env_descriptor_set, !m_deferred_layouts.empty());
+    }
+    return &m_env_descriptor_set;
+}   // getEnvDescriptorSet
 
 }
