@@ -192,7 +192,7 @@ void GEVulkanSceneManager::drawAll(irr::u32 flags)
     {
         cf.getRed(), cf.getGreen(), cf.getBlue(), cf.getAlpha()
     };
-    clear_values[1].depthStencil = {1.0f, 0};
+    clear_values[1].depthStencil = {0.0f, 0};
     unsigned count = rtt->getZeroClearCountForPass(GVDFP_HDR);
     VkClearValue zero;
     zero.color = {0, 0, 0, 0};
