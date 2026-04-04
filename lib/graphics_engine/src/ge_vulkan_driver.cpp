@@ -645,6 +645,16 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
         GECompressorBPTCBC7::init();
         GEMaterialManager::init();
         GEVulkanFeatures::printStats();
+        VkFormatProperties format_props = {};
+        vkGetPhysicalDeviceFormatProperties(m_physical_device,
+            VK_FORMAT_D32_SFLOAT, &format_props);
+        if ((format_props.optimalTilingFeatures &
+            VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) !=
+            VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
+        {
+            os::Printer::log("Vulkan reverse-z",
+                "broken due to the absence of D32_SFLOAT support");
+        }
     }
     catch (std::exception& e)
     {
@@ -1563,7 +1573,7 @@ void GEVulkanDriver::createSamplers()
     sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sampler_info.compareEnable = VK_TRUE;
-    sampler_info.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    sampler_info.compareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
     result = vkCreateSampler(m_vk->device, &sampler_info, NULL,
         &sampler);
 
@@ -2449,7 +2459,7 @@ void GEVulkanDriver::buildCommandBuffers()
     {
         cf.getRed(), cf.getGreen(), cf.getBlue(), cf.getAlpha()
     };
-    clear_values[1].depthStencil = {1.0f, 0};
+    clear_values[1].depthStencil = {0.0f, 0};
     if (m_rtt_texture)
     {
         unsigned count = m_rtt_texture->getZeroClearCountForPass(GVDFP_HDR);
