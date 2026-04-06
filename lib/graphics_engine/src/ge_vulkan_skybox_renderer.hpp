@@ -16,6 +16,7 @@ namespace GE
 {
 class GEVulkanArrayTexture;
 class GEVulkanEnvironmentMap;
+class GEVulkanShadowFBO;
 
 class GEVulkanSkyBoxRenderer
 {
@@ -25,6 +26,8 @@ private:
 
     GEVulkanArrayTexture *m_texture_cubemap, *m_diffuse_env_cubemap,
         *m_specular_env_cubemap, *m_dummy_env_cubemap;
+
+    GEVulkanShadowFBO* m_dummy_shadow_fbo;
 
     VkDescriptorSetLayout m_env_descriptor_layout;
 
@@ -73,7 +76,8 @@ public:
     // ------------------------------------------------------------------------
     std::shared_ptr<std::atomic<VkImageView> > getEnvObserver() const;
     // ------------------------------------------------------------------------
-    void fillDescriptor(VkDescriptorSet ds, bool srgb) const;
+    void fillDescriptor(VkDescriptorSet ds, bool srgb,
+                        GEVulkanShadowFBO* sfbo) const;
 
 };   // GEVulkanSkyBoxRenderer
 

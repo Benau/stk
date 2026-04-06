@@ -54,6 +54,7 @@ GEScreenSpaceReflectionType m_screen_space_reflection_type;
 bool m_force_deferred;
 std::unordered_set<std::string> m_ondemand_load_texture_paths;
 float m_render_scale;
+unsigned m_shadow_size;
 };
 
 void setVideoDriver(irr::video::IVideoDriver* driver);
