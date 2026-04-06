@@ -45,7 +45,8 @@ vec3 PBRSunAmbientEmitLight(
     vec3 ambient_color,
     float perceptual_roughness,
     float metallic,
-    float emissive)
+    float emissive,
+    float shadow)
 {
     // Copied from PBRLight to use F_ab and F90 again
     float NdotV = max(dot(normal, eyedir), 0.0001);
@@ -73,7 +74,7 @@ vec3 PBRSunAmbientEmitLight(
     vec3 F = fresnel(F0, F90, LdotH);
     vec3 specular = D * V * F * (1.0 + F0 * (1.0 / F_ab.x - 1.0));
 
-    vec3 sunlight = NdotL * (diffuse + specular);
+    vec3 sunlight = NdotL * (diffuse + specular) * shadow;
 
     vec3 diffuse_ambient = envBRDFApprox(diffuse_color, F_AB(1.0, NdotV));
 
@@ -186,4 +187,62 @@ vec3 calculateLight(int i, vec3 diffuse_color, vec3 normal, vec3 xpos,
     vec3 light_color =
         u_global_light.m_lights[i].m_color_inverse_square_range.xyz;
     return light_color * attenuation * diffuse_specular;
+}
+
+float getShadowPCF(sampler2DArrayShadow map, vec2 shadowtexcoord, int layer, float depth)
+{
+    // Castaño, 2013, "Shadow Mapping Summary Part 1"
+    float shadow_size = float(u_shadow_size);
+    vec2 uv = shadowtexcoord * shadow_size + 0.5;
+    vec2 base = (floor(uv) - 0.5) / shadow_size;
+    vec2 st = fract(uv);
+
+    vec2 uw = vec2(3.0 - 2.0 * st.x, 1.0 + 2.0 * st.x);
+    vec2 vw = vec2(3.0 - 2.0 * st.y, 1.0 + 2.0 * st.y);
+
+    vec2 u = vec2((2.0 - st.x) / uw.x - 1.0, st.x / uw.y + 1.0) / shadow_size;
+    vec2 v = vec2((2.0 - st.y) / vw.x - 1.0, st.y / vw.y + 1.0) / shadow_size;
+
+    float sum = 0.0;
+    sum += uw.x * vw.x * texture(map, vec4(base + vec2(u.x, v.x), float(layer), depth));
+    sum += uw.y * vw.x * texture(map, vec4(base + vec2(u.y, v.x), float(layer), depth));
+    sum += uw.x * vw.y * texture(map, vec4(base + vec2(u.x, v.y), float(layer), depth));
+    sum += uw.y * vw.y * texture(map, vec4(base + vec2(u.y, v.y), float(layer), depth));
+    return sum * (1.0 / 16.0);
+}
+
+float getShadowFactor(sampler2DArrayShadow map, vec3 world_position, float view_depth, float NdotL, vec3 normal, vec3 lightdir)
+{
+    float end_factor = smoothstep(130., 150., view_depth);
+    if (view_depth >= 150. || NdotL <= 0.001)
+    {
+        return end_factor;
+    }
+
+    float shadow = 1.0;
+    float factor = smoothstep(9.0, 10.0, view_depth) + smoothstep(40.0, 45.0, view_depth);
+    int level = int(factor);
+
+    vec2 base_normal_bias = (u_global_light.m_shadow_view_matrix * vec4(normal, 0.)).xy;
+    base_normal_bias *= (1.0 - max(0.0, dot(-normal, lightdir))) / float(u_shadow_size);
+
+    vec4 light_view_position = u_global_light.m_shadow_projection_view_matrix[level] * vec4(world_position, 1.0);
+    light_view_position.xyz /= light_view_position.w;
+    light_view_position.xy = light_view_position.xy * 0.5 + 0.5 + base_normal_bias;
+
+    shadow = mix(getShadowPCF(map, light_view_position.xy, level, light_view_position.z), 1.0, end_factor);
+
+    if (factor == float(level))
+    {
+        return shadow;
+    }
+
+    // Blend with next cascade by factor
+    light_view_position = u_global_light.m_shadow_projection_view_matrix[level + 1] * vec4(world_position, 1.0);
+    light_view_position.xyz /= light_view_position.w;
+    light_view_position.xy = light_view_position.xy * 0.5 + 0.5 + base_normal_bias;
+
+    shadow = mix(shadow, getShadowPCF(map, light_view_position.xy, level + 1, light_view_position.z), factor - float(level));
+
+    return shadow;
 }

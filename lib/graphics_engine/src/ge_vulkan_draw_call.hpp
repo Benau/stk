@@ -39,6 +39,7 @@ class GEVulkanDriver;
 class GEVulkanDynamicBuffer;
 class GEVulkanDynamicSPMBuffer;
 class GEVulkanLightHandler;
+class GEVulkanShadowFBO;
 class GEVulkanSkyBoxRenderer;
 class GEVulkanTextureDescriptor;
 struct GEVulkanCameraUBO;
@@ -123,6 +124,14 @@ class GEVulkanHiZDepth;
 class GEVulkanDrawCall
 {
 private:
+    GEVulkanShadowFBO* m_shadow_fbo;
+
+    // ------------------------------------------------------------------------
+    virtual bool isShadow() const                             { return false; }
+    // ------------------------------------------------------------------------
+    virtual bool skip(irr::scene::ISceneNode* node) const     { return false; }
+
+protected:
     typedef std::array<const irr::video::ITexture*,
         _IRR_MATERIAL_MAX_TEXTURES_> TexturesList;
 
@@ -207,7 +216,7 @@ private:
     // ------------------------------------------------------------------------
     void createVulkanData();
     // ------------------------------------------------------------------------
-    std::string getShader(const irr::video::SMaterial& m);
+    virtual std::string getShader(const irr::video::SMaterial& m);
     // ------------------------------------------------------------------------
     std::string getShader(irr::scene::ISceneNode* node, int material_id);
     // ------------------------------------------------------------------------
@@ -260,24 +269,24 @@ private:
     // ------------------------------------------------------------------------
     std::vector<uint32_t> getDefaultDynamicOffsets() const;
     // ------------------------------------------------------------------------
-    VkRenderPass getRenderPassForPipelineCreation(GEVulkanDriver* vk,
+    virtual VkRenderPass getRenderPassForPipelineCreation(GEVulkanDriver* vk,
                                                   GEVulkanPipelineType type);
     // ------------------------------------------------------------------------
-    uint32_t getSubpassForPipelineCreation(GEVulkanDriver* vk,
+    virtual uint32_t getSubpassForPipelineCreation(GEVulkanDriver* vk,
                                            GEVulkanPipelineType type);
 
 public:
     // ------------------------------------------------------------------------
     GEVulkanDrawCall();
     // ------------------------------------------------------------------------
-    ~GEVulkanDrawCall();
+    virtual ~GEVulkanDrawCall();
     // ------------------------------------------------------------------------
     void addNode(irr::scene::ISceneNode* node);
     // ------------------------------------------------------------------------
     void addBillboardNode(irr::scene::ISceneNode* node,
                           irr::scene::ESCENE_NODE_TYPE node_type);
     // ------------------------------------------------------------------------
-    void prepare(GEVulkanCameraSceneNode* cam);
+    virtual void prepare(GEVulkanCameraSceneNode* cam);
     // ------------------------------------------------------------------------
     void generate(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
@@ -285,7 +294,7 @@ public:
                            const GEVulkanCameraUBO* cam_ubo,
                            VkCommandBuffer custom_cmd = VK_NULL_HANDLE);
     // ------------------------------------------------------------------------
-    bool doDepthOnlyRenderingFirst();
+    virtual bool doDepthOnlyRenderingFirst();
     // ------------------------------------------------------------------------
     void bindAllMaterials(VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
@@ -342,7 +351,11 @@ public:
     // ------------------------------------------------------------------------
     GEVulkanHiZDepth* getHiZDepth() const               { return m_hiz_depth; }
     // ------------------------------------------------------------------------
-    const VkDescriptorSet* getEnvDescriptorSet(GEVulkanDriver* vk);
+    virtual const VkDescriptorSet* getEnvDescriptorSet(GEVulkanDriver* vk);
+    // ------------------------------------------------------------------------
+    GEVulkanLightHandler* getLightHandler() const   { return m_light_handler; }
+    // ------------------------------------------------------------------------
+    GEVulkanShadowFBO* getShadowFBO() const            { return m_shadow_fbo; }
 };   // GEVulkanDrawCall
 
 }
