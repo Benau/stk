@@ -3,8 +3,8 @@
 
 #include "ge_vulkan_texture.hpp"
 
-#include <array>
 #include <memory>
+#include <vector>
 
 namespace irr
 {
@@ -34,7 +34,7 @@ enum GEVulkanShadowCameraCascade : unsigned
 
 class GEVulkanShadowFBO : public GEVulkanTexture
 {
-private:
+protected:
     irr::scene::ILightSceneNode* m_sun;
 
     VkRenderPass m_rtt_render_pass;
@@ -42,13 +42,13 @@ private:
     VkFramebuffer m_rtt_frame_buffer;
 
     // One image view per cascade layer, used as framebuffer attachments
-    std::array<VkImageView, GVSCC_COUNT> m_frame_buffer_image_views;
+    std::vector<VkImageView> m_frame_buffer_image_views;
 
-    std::array<std::unique_ptr<GEVulkanShadowDrawCall>, GVSCC_COUNT> m_shadow_draw_calls;
+    std::vector<std::unique_ptr<GEVulkanShadowDrawCall> > m_shadow_draw_calls;
 
     irr::core::matrix4 m_shadow_view_matrix;
 
-    irr::core::matrix4 m_shadow_projection_matrices[GVSCC_COUNT];
+    std::vector<irr::core::matrix4> m_shadow_projection_matrices;
 
     GEVulkanCameraUBO* m_shadow_camera_ubo_data;
 
@@ -67,23 +67,25 @@ private:
 public:
     // ------------------------------------------------------------------------
     GEVulkanShadowFBO(GEVulkanDriver* vk, unsigned shadow_size,
-                      irr::scene::ILightSceneNode* sun = NULL);
+                      irr::scene::ILightSceneNode* sun = NULL,
+                      unsigned layer_count = GVSCC_COUNT);
     // ------------------------------------------------------------------------
     virtual ~GEVulkanShadowFBO();
     // ------------------------------------------------------------------------
     void createRTT();
     // ------------------------------------------------------------------------
-    void createDrawCalls();
+    virtual void createDrawCalls();
     // ------------------------------------------------------------------------
     VkRenderPass getRTTRenderPass() const         { return m_rtt_render_pass; }
     // ------------------------------------------------------------------------
     VkFramebuffer getRTTFramebuffer() const      { return m_rtt_frame_buffer; }
     // ------------------------------------------------------------------------
-    void prepare(irr::scene::ICameraSceneNode* cam, GEVulkanLightHandler* lh);
+    virtual void prepare(irr::scene::ICameraSceneNode* cam,
+                         GEVulkanLightHandler* lh);
     // ------------------------------------------------------------------------
-    void addNode(irr::scene::ISceneNode* node);
+    virtual void addNode(irr::scene::ISceneNode* node);
     // ------------------------------------------------------------------------
-    void generate();
+    virtual void generate();
     // ------------------------------------------------------------------------
     void uploadDynamicData(VkCommandBuffer cmd);
     // ------------------------------------------------------------------------

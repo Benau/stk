@@ -33,6 +33,8 @@ struct GELight
     irr::core::vector2df m_direction;
     irr::f32             m_scale;
     irr::f32             m_offset;
+    //irr::core::matrix4   m_shadow_projection_view_matrix[OMNI_FACES_PER_LIGHT];
+    irr::core::matrix4   m_shadow_projection_view_matrix[6];
 };
 
 struct GEGlobalLightBuffer
@@ -79,7 +81,7 @@ public:
     // ------------------------------------------------------------------------
     void addLightNode(irr::scene::ILightSceneNode* node);
     // ------------------------------------------------------------------------
-    void* getData()                                       { return &m_buffer; }
+    GEGlobalLightBuffer* getData()                        { return &m_buffer; }
     // ------------------------------------------------------------------------
     size_t getSize() const
     {
@@ -94,6 +96,10 @@ public:
     // ------------------------------------------------------------------------
     void setShadowMatrices(GEVulkanCameraUBO* ubo,
                            GEVulkanShadowCameraCascade cc);
+    // ------------------------------------------------------------------------
+    void setLightShadowMatrices(GEVulkanCameraUBO* ubo, unsigned light,
+                                unsigned face);
+
 };   // GEVulkanLightHandler
 
 }

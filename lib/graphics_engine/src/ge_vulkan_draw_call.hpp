@@ -130,6 +130,8 @@ private:
     virtual bool isShadow() const                             { return false; }
     // ------------------------------------------------------------------------
     virtual bool skip(irr::scene::ISceneNode* node) const     { return false; }
+    // ------------------------------------------------------------------------
+    virtual bool useDepthClamp() const                        { return false; }
 
 protected:
     typedef std::array<const irr::video::ITexture*,

@@ -31,6 +31,7 @@ void main()
     vec3 hdr = handlePBRDeferred(diffuse_color, pbr, world_normal, eyedir,
         normal, 1.0 - pbr.x, world_position, xpos.z);
     hdr += accumulateLights(u_push_constants.m_fullscreen_light_count,
-        diffuse_color, normal, xpos, eyedir, 1.0 - pbr.x, pbr.y);
+        diffuse_color, normal, xpos, eyedir, 1.0 - pbr.x, pbr.y,
+        world_position.xyz);
     o_color = vec4(hdr, 1.0);
 }

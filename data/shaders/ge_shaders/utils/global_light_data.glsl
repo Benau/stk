@@ -1,8 +1,10 @@
+const int OMNI_FACES_PER_LIGHT = 6;
 struct LightData
 {
     vec4  m_position_radius;
     vec4  m_color_inverse_square_range;
     vec4  m_direction_scale_offset; // Spotlight only
+    mat4  m_shadow_projection_view_matrix[OMNI_FACES_PER_LIGHT];
 };
 
 const int MAX_LIGHT = 32;
