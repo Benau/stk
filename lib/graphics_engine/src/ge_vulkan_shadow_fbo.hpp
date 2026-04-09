@@ -91,7 +91,8 @@ public:
     // ------------------------------------------------------------------------
     void render(VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
-    irr::core::matrix4 getShadowProjectionViewMatrix(unsigned layer) const
+    virtual irr::core::matrix4 getShadowProjectionViewMatrix(
+                                                          unsigned layer) const
     {
         return m_shadow_projection_matrices[layer] * m_shadow_view_matrix;
     }
