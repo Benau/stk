@@ -8,6 +8,7 @@
 #include "ge_vulkan_animated_mesh_scene_node.hpp"
 #include "ge_vulkan_billboard_buffer.hpp"
 #include "ge_vulkan_camera_scene_node.hpp"
+#include "ge_vulkan_combined_shadow_fbo.hpp"
 #include "ge_vulkan_deferred_fbo.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_dynamic_buffer.hpp"
@@ -18,7 +19,6 @@
 #include "ge_vulkan_light_handler.hpp"
 #include "ge_vulkan_mesh_cache.hpp"
 #include "ge_vulkan_mesh_scene_node.hpp"
-#include "ge_vulkan_omni_shadow_fbo.hpp"
 #include "ge_vulkan_scene_manager.hpp"
 #include "ge_vulkan_shader_manager.hpp"
 #include "ge_vulkan_skybox_renderer.hpp"
@@ -895,12 +895,28 @@ void GEVulkanDrawCall::prepare(GEVulkanCameraSceneNode* cam)
         irr::scene::ILightSceneNode* sun = sm->getSunNode(sm);
         if (getGEConfig()->m_shadow_size > 0 && sun)
         {
-            m_shadow_fbo = getGEConfig()->m_shadow_type == GST_SUN ?
-                new GEVulkanShadowFBO(vk, getGEConfig()->m_shadow_size, sun) :
-                new GEVulkanOmniShadowFBO(vk, getGEConfig()->m_shadow_size,
-                sun);
-            m_shadow_fbo->createRTT();
-            m_shadow_fbo->createDrawCalls();
+            switch (getGEConfig()->m_shadow_type)
+            {
+            case GST_SUN:
+                m_shadow_fbo = new GEVulkanShadowFBO(vk,
+                    getGEConfig()->m_shadow_size, sun);
+                break;
+            case GST_POINTLIGHT:
+                m_shadow_fbo = new GEVulkanOmniShadowFBO(vk,
+                    getGEConfig()->m_shadow_size, sun);
+                break;
+            case GST_COMBINED:
+                m_shadow_fbo = new GEVulkanCombinedShadowFBO(vk,
+                    getGEConfig()->m_shadow_size, sun);
+                break;
+            default:
+                break;
+            }
+            if (m_shadow_fbo)
+            {
+                m_shadow_fbo->createRTT();
+                m_shadow_fbo->createDrawCalls();
+            }
         }
     }
     if (m_light_handler)
