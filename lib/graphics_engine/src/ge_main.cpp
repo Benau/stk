@@ -30,7 +30,9 @@ GEConfig g_config =
     false,
     {},
     1.0f,
-    0
+    0,
+    GST_NONE,
+    8
 };
 std::string g_shader_folder = "";
 std::chrono::steady_clock::time_point g_mono_start =

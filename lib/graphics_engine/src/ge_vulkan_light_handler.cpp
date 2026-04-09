@@ -152,4 +152,13 @@ void GEVulkanLightHandler::setShadowMatrices(GEVulkanCameraUBO* ubo,
         ubo->m_projection_view_matrix;
 }   // setShadowMatrices
 
+// ----------------------------------------------------------------------------
+void GEVulkanLightHandler::setLightShadowMatrices(GEVulkanCameraUBO* ubo,
+                                                  unsigned light,
+                                                  unsigned face)
+{
+    m_buffer.m_rendering_lights[light].m_shadow_projection_view_matrix[face] =
+        ubo->m_projection_view_matrix;
+}   // setLightShadowMatrices
+
 }

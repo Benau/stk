@@ -23,9 +23,12 @@ void main()
     vec3 world_normal = DecodeNormal(subpassLoad(u_normal).xy);
     vec3 xpos = getPosFromUVDepth(vec3(gl_FragCoord.xy, depth),
         u_camera.m_viewport, u_camera.m_inverse_projection_matrix);
+    vec4 world_position = vec4(0.0);
+    if (u_shadow_size != 0)
+        world_position = u_camera.m_inverse_view_matrix * vec4(xpos, 1.0);
     vec3 eyedir = -normalize(xpos);
     vec3 normal = (u_camera.m_view_matrix * vec4(world_normal, 0.0)).xyz;
     vec3 light = calculateLight(light_idx, diffuse_color, normal, xpos,
-        eyedir, 1.0 - pbr.x, pbr.y);
+        eyedir, 1.0 - pbr.x, pbr.y, world_position.xyz);
     o_color = vec4(light, 1.0);
 }
