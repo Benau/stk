@@ -15,6 +15,8 @@ private:
     GEVulkanLightHandler* m_light_handler;
 
     std::vector<irr::scene::ISceneNode*> m_nodes;
+    // ------------------------------------------------------------------------
+    virtual unsigned getLayerOffset() const                       { return 0; }
 public:
     // ------------------------------------------------------------------------
     GEVulkanOmniShadowFBO(GEVulkanDriver* vk, unsigned shadow_size,
