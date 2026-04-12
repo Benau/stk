@@ -64,6 +64,7 @@ float m_render_scale;
 unsigned m_shadow_size;
 GEShadowType m_shadow_type;
 unsigned m_point_shadow_limit;
+unsigned m_max_pointlights;
 };
 
 void setVideoDriver(irr::video::IVideoDriver* driver);

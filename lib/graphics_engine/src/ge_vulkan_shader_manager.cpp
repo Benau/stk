@@ -1,10 +1,11 @@
 #include "ge_vulkan_shader_manager.hpp"
 
-#include "ge_vulkan_command_loader.hpp"
 #include "ge_main.hpp"
 #include "ge_spin_lock.hpp"
+#include "ge_vulkan_command_loader.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_features.hpp"
+#include "ge_vulkan_omni_shadow_fbo.hpp"
 
 #include <algorithm>
 #include <map>
@@ -92,6 +93,8 @@ void GEVulkanShaderManager::loadAllShaders(const std::string& match_filename)
         g_mesh_texture_layer = 2;
     oss << "#define SAMPLER_SIZE " << g_sampler_size << "\n";
     oss << "#define TOTAL_MESH_TEXTURE_LAYER " << g_mesh_texture_layer << "\n";
+    oss << "#define MAX_RENDERING_LIGHT " << getGEConfig()->m_max_pointlights << "\n";
+    oss << "#define OMNI_FACES_PER_LIGHT " << OMNI_FACES_PER_LIGHT << "\n";
     if (GEVulkanFeatures::supportsBindTexturesAtOnce())
         oss << "#define BIND_TEXTURES_AT_ONCE\n";
     if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
