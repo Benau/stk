@@ -143,31 +143,17 @@ void GEVulkanOmniShadowFBO::createDrawCalls()
 }   // createDrawCalls
 
 // ----------------------------------------------------------------------------
-float GEVulkanOmniShadowFBO::getLightRadius(unsigned light_id) const
-{
-    assert(m_light_handler != NULL);
-    return m_light_handler->getData()->m_rendering_lights[light_id].m_radius;
-}   // getLightRadius
-
-// ----------------------------------------------------------------------------
-const irr::core::vector3df&
-               GEVulkanOmniShadowFBO::getLightPosition(unsigned light_id) const
-{
-    assert(m_light_handler != NULL);
-    return m_light_handler->getData()->m_rendering_lights[light_id].m_position;
-}   // getLightPosition
-
-// ----------------------------------------------------------------------------
 void GEVulkanOmniShadowFBO::generate()
 {
+    assert(m_light_handler != NULL);
     const float kNear = 0.2f;
     const unsigned shadow_limit = getGEConfig()->m_point_shadow_limit;
     const unsigned light_count = std::min(m_light_handler->getLightCount(),
         shadow_limit);
     for (unsigned i = 0; i < light_count; i++)
     {
-        const irr::core::vector3df& pos = getLightPosition(i);
-        const float radius = getLightRadius(i);
+        const irr::core::vector3df& pos = m_light_handler->getLightPosition(i);
+        const float radius = m_light_handler->getLightRadius(i);
         irr::core::matrix4 projection_matrix = buildPerspective(
             90.0f, kNear, radius);
 

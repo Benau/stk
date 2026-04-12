@@ -1,4 +1,3 @@
-const int OMNI_FACES_PER_LIGHT = 6;
 struct LightData
 {
     vec4  m_position_radius;
@@ -7,7 +6,6 @@ struct LightData
     mat4  m_shadow_projection_view_matrix[OMNI_FACES_PER_LIGHT];
 };
 
-const int MAX_LIGHT = 32;
 layout(std140, set = 1, binding = 3) uniform GlobalLightBuffer
 {
     mat4  m_shadow_projection_view_matrix[3];
@@ -21,5 +19,5 @@ layout(std140, set = 1, binding = 3) uniform GlobalLightBuffer
     vec4  m_fog_color;
     vec3  m_skytop_color;
     int   m_light_count;
-    LightData m_lights[MAX_LIGHT];
+    LightData m_lights[MAX_RENDERING_LIGHT];
 } u_global_light;

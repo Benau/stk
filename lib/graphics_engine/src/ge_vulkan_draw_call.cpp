@@ -895,6 +895,12 @@ void GEVulkanDrawCall::prepare(GEVulkanCameraSceneNode* cam)
         irr::scene::ILightSceneNode* sun = sm->getSunNode(sm);
         if (getGEConfig()->m_shadow_size > 0 && sun)
         {
+            if (getGEConfig()->m_point_shadow_limit >
+                getGEConfig()->m_max_pointlights)
+            {
+                getGEConfig()->m_point_shadow_limit =
+                    getGEConfig()->m_max_pointlights;
+            }
             switch (getGEConfig()->m_shadow_type)
             {
             case GST_SUN:
@@ -1703,7 +1709,7 @@ void GEVulkanDrawCall::createVulkanData()
     // Use VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
     // or a staging buffer when buffer is small
     m_dynamic_data = new GEVulkanDynamicBuffer(flags,
-        extra_size + getLightDataOffset() + sizeof(GEGlobalLightBuffer),
+        extra_size + getLightDataOffset() + GEVulkanLightHandler::getMaxSize(),
         GEVulkanDriver::getMaxFrameInFlight() + 1,
         GEVulkanDynamicBuffer::supportsHostTransfer() ? 0 :
         GEVulkanDriver::getMaxFrameInFlight() + 1);
@@ -2176,7 +2182,7 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk)
                 m_dynamic_data->getHostBuffer()[i] :
                 m_dynamic_data->getLocalBuffer()[i];
             sbo_info_light.offset = getLightDataOffset();
-            sbo_info_light.range = sizeof(GEGlobalLightBuffer);
+            sbo_info_light.range = GEVulkanLightHandler::getMaxSize();
             data_set.push_back({});
             VkWriteDescriptorSet& ds = data_set.back();
             ds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
