@@ -34,10 +34,6 @@ public:
     virtual void addNode(irr::scene::ISceneNode* n)   { m_nodes.push_back(n); }
     // ------------------------------------------------------------------------
     virtual void generate();
-    // ------------------------------------------------------------------------
-    float getLightRadius(unsigned light_id) const;
-    // ------------------------------------------------------------------------
-    const irr::core::vector3df& getLightPosition(unsigned light_id) const;
 
 };   // GEVulkanOmniShadowFBO
 

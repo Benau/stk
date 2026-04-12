@@ -6,7 +6,8 @@
 #include "vector3d.h"
 #include "SColor.h"
 
-#include <array>
+#include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace irr
@@ -23,56 +24,31 @@ class GEVulkanDriver;
 class GEVulkanSkyBoxRenderer;
 struct GEVulkanCameraUBO;
 enum GEVulkanShadowCameraCascade : unsigned;
-const irr::u32 MAX_RENDERING_LIGHT = 32;
-struct GELight
-{
-    irr::core::vector3df m_position;
-    irr::f32             m_radius;
-    irr::core::vector3df m_color;
-    irr::f32             m_inverse_range_squared;
-    irr::core::vector2df m_direction;
-    irr::f32             m_scale;
-    irr::f32             m_offset;
-    //irr::core::matrix4   m_shadow_projection_view_matrix[OMNI_FACES_PER_LIGHT];
-    irr::core::matrix4   m_shadow_projection_view_matrix[6];
-};
-
-struct GEGlobalLightBuffer
-{
-    //irr::core::matrix4   m_shadow_projection_view_matrix[GVSCC_COUNT];
-    irr::core::matrix4   m_shadow_projection_view_matrix[3];
-    irr::core::matrix4   m_shadow_view_matrix;
-    irr::core::vector3df m_ambient_color;
-    irr::f32             m_sun_scatter;
-    irr::core::vector3df m_sun_color;
-    irr::f32             m_sun_angle_tan_half;
-    irr::core::vector3df m_sun_direction;
-    irr::f32             m_fog_density;
-    irr::video::SColorf  m_fog_color;
-    irr::core::vector3df m_skytop_color;
-    irr::u32             m_light_count;
-    std::array<GELight, MAX_RENDERING_LIGHT> m_rendering_lights;
-};
-
+struct GEGlobalLightBuffer;
+struct GELight;
 class GEVulkanLightHandler
 {
 private:
     GEVulkanDriver* m_vk;
 
-    GEGlobalLightBuffer m_buffer;
+    std::vector<uint8_t> m_buffer;
 
-    std::vector<GELight> m_lights;
+    struct GELightStorage;
+    std::unique_ptr<GELightStorage> m_lights;
 
     unsigned m_fullscreen_light_count;
+
+    // ------------------------------------------------------------------------
+    // Typed pointers into m_buffer (private helpers, defined in .cpp).
+    GEGlobalLightBuffer* getGlobalLightPtr() const;
+    // ------------------------------------------------------------------------
+    GELight* getRenderingLightsPtr() const;
+
 public:
     // ------------------------------------------------------------------------
-    GEVulkanLightHandler(GEVulkanDriver* vk)
-    {
-        m_vk = vk;
-        prepare();
-    }
+    GEVulkanLightHandler(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
-    ~GEVulkanLightHandler()                                                  {}
+    ~GEVulkanLightHandler();
     // ------------------------------------------------------------------------
     void prepare();
     // ------------------------------------------------------------------------
@@ -81,15 +57,17 @@ public:
     // ------------------------------------------------------------------------
     void addLightNode(irr::scene::ILightSceneNode* node);
     // ------------------------------------------------------------------------
-    GEGlobalLightBuffer* getData()                        { return &m_buffer; }
+    // Raw GPU buffer pointer – only the first getSize() bytes are valid data.
+    void* getData()                                 { return m_buffer.data(); }
     // ------------------------------------------------------------------------
-    size_t getSize() const
-    {
-        return sizeof(GEGlobalLightBuffer) -
-            (sizeof(GELight) * (MAX_RENDERING_LIGHT - m_buffer.m_light_count));
-    }
+    // Bytes of active data to upload (header + active lights only).
+    size_t getSize() const;
     // ------------------------------------------------------------------------
-    unsigned getLightCount() const           { return m_buffer.m_light_count; }
+    // Total allocated buffer size – use this for Vulkan descriptor ranges and
+    // dynamic-buffer allocation so the full max-light slot is always reserved.
+    static size_t getMaxSize();
+    // ------------------------------------------------------------------------
+    unsigned getLightCount() const;
     // ------------------------------------------------------------------------
     unsigned getFullscreenLightCount() const
                                            { return m_fullscreen_light_count; }
@@ -99,6 +77,11 @@ public:
     // ------------------------------------------------------------------------
     void setLightShadowMatrices(GEVulkanCameraUBO* ubo, unsigned light,
                                 unsigned face);
+    // ------------------------------------------------------------------------
+    // Typed accessors for individual rendered lights (used by omni-shadow FBO).
+    const irr::core::vector3df& getLightPosition(unsigned light_id) const;
+    // ------------------------------------------------------------------------
+    float getLightRadius(unsigned light_id) const;
 
 };   // GEVulkanLightHandler
 
