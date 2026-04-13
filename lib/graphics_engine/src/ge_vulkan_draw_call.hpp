@@ -132,6 +132,9 @@ private:
     virtual bool skip(irr::scene::ISceneNode* node) const     { return false; }
     // ------------------------------------------------------------------------
     virtual bool useDepthClamp() const                        { return false; }
+    // ------------------------------------------------------------------------
+    virtual bool ignoreMaterial(const irr::video::SMaterial& m) const
+                                                              { return false; }
 
 protected:
     typedef std::array<const irr::video::ITexture*,
@@ -218,9 +221,10 @@ protected:
     // ------------------------------------------------------------------------
     void createVulkanData();
     // ------------------------------------------------------------------------
-    virtual std::string getShader(const irr::video::SMaterial& m);
+    virtual const std::string& getShader(const irr::video::SMaterial& m) const;
     // ------------------------------------------------------------------------
-    std::string getShader(irr::scene::ISceneNode* node, int material_id);
+    const std::string& getShader(irr::scene::ISceneNode* node,
+                                 int material_id) const;
     // ------------------------------------------------------------------------
     bool bindPipeline(VkCommandBuffer cmd, const std::string& name,
                       VkPipeline* prev_pipeline,

@@ -314,11 +314,12 @@ void GEVulkanDrawCall::addNode(irr::scene::ISceneNode* node)
     {
         GESPMBuffer* buffer = static_cast<GESPMBuffer*>(
             mesh->getMeshBuffer(i));
-        const std::string& shader = getShader(node, i);
-        if (shader.empty())
+        const irr::video::SMaterial& m = node->getMaterial(i);
+        if (ignoreMaterial(m))
             continue;
         if (m_culling_tool->isCulled(buffer, node))
             continue;
+        const std::string& shader = getShader(m);
         if (buffer->getHardwareMappingHint_Vertex() == irr::scene::EHM_STREAM ||
             buffer->getHardwareMappingHint_Index() == irr::scene::EHM_STREAM)
         {
@@ -328,10 +329,9 @@ void GEVulkanDrawCall::addNode(irr::scene::ISceneNode* node)
                 .emplace_back(dbuffer, node);
             continue;
         }
-        const irr::video::SMaterial& m = node->getMaterial(i);
         TexturesList t = getTexturesList(m);
         std::pair<GESPMBuffer*, TexturesList> k = std::make_pair(buffer, t);
-        m_visible_nodes[k][getShader(m)].emplace_back(node, i);
+        m_visible_nodes[k][shader].emplace_back(node, i);
         m_mb_map[k] = mesh;
         if (anode && !added_skinning &&
             !anode->getSkinningMatrices().empty() &&
@@ -850,31 +850,35 @@ start:
 }   // generate
 
 // ----------------------------------------------------------------------------
-std::string GEVulkanDrawCall::getShader(irr::scene::ISceneNode* node,
-                                        int material_id)
+const std::string& GEVulkanDrawCall::getShader(irr::scene::ISceneNode* node,
+                                               int material_id) const
 {
     irr::video::SMaterial& m = node->getMaterial(material_id);
     return getShader(m);
 }   // getShader
 
 // ----------------------------------------------------------------------------
-std::string GEVulkanDrawCall::getShader(const irr::video::SMaterial& m)
+const std::string& GEVulkanDrawCall::getShader(
+                                          const irr::video::SMaterial& m) const
 {
-    std::string shader = GEMaterialManager::getShader(m.MaterialType);
-    auto material = GEMaterialManager::getMaterial(shader);
+    const std::string* shader = &GEMaterialManager::getShader(m.MaterialType);
+    auto material = GEMaterialManager::getMaterial(m.MaterialType);
     if ((!getGEConfig()->m_pbr && !material->m_nonpbr_fallback.empty()) ||
         ((m_deferred_layouts.empty() ||
         m_deferred_layouts[GVDFP_DISPLACE_COLOR] == VK_NULL_HANDLE) &&
-        shader == "displace"))
+        *shader == "displace"))
     {
-        shader = material->m_nonpbr_fallback;
-        material = GEMaterialManager::getMaterial(shader);
+        shader = &material->m_nonpbr_fallback;
+        material = GEMaterialManager::getMaterial(material->m_nonpbr_fallback);
     }
     auto& ri = m.getRenderInfo();
     // Use real transparent shader first
     if (!material->isTransparent() && ri && ri->isTransparent())
-        return "ghost";
-    return shader;
+    {
+        static std::string ghost("ghost");
+        return ghost;
+    }
+    return *shader;
 }   // getShader
 
 // ----------------------------------------------------------------------------
