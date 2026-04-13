@@ -63,7 +63,9 @@ irr::video::E_MATERIAL_TYPE getIrrMaterialType(const std::string& shader_name);
 // ----------------------------------------------------------------------------
 const std::string& getShader(irr::video::E_MATERIAL_TYPE mt);
 // ----------------------------------------------------------------------------
-std::shared_ptr<const GEMaterial> getMaterial(const std::string& shader_name);
+const GEMaterial* getMaterial(irr::video::E_MATERIAL_TYPE mt);
+// ----------------------------------------------------------------------------
+const GEMaterial* getMaterial(const std::string& shader_name);
 
 };   // GEMaterialManager
 
