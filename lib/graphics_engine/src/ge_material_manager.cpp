@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -22,11 +23,11 @@ std::vector<
 
 irr::core::vector3df g_wind_direction;
 
-std::unordered_map<std::string, std::shared_ptr<const GEMaterial> > g_mat_map;
+std::vector<std::shared_ptr<const GEMaterial> > g_materials_by_id;
 
-std::unordered_map<std::string, irr::video::E_MATERIAL_TYPE> g_mat_id_map;
+std::vector<std::string> g_names_by_id;
 
-std::unordered_map<uint32_t, std::string> g_id_mat_map;
+std::unordered_map<std::string, uint32_t> g_name_to_id;
 
 std::unordered_map<std::string, std::function<void(uint32_t*, void**)> >
     g_default_push_constants =
@@ -67,7 +68,8 @@ bool readBool(io::IXMLReaderUTF8* xml)
 // ============================================================================
 void GEMaterialManager::init()
 {
-    std::array<std::string, irr::video::EMT_MATERIAL_COUNT> def_mappings = {};
+    constexpr uint32_t max_materials = irr::video::EMT_MATERIAL_COUNT;
+    std::array<std::string, max_materials> def_mappings = {};
     def_mappings[irr::video::EMT_SOLID] = "solid";
     def_mappings[irr::video::EMT_NORMAL_MAP_SOLID] = "normalmap";
     def_mappings[irr::video::EMT_SOLID_2_LAYER] = "decal";
@@ -78,9 +80,11 @@ void GEMaterialManager::init()
     uint32_t mapping_cursor = 0;
 
     g_materials.clear();
-    g_mat_map.clear();
-    g_mat_id_map.clear();
-    g_id_mat_map.clear();
+    g_materials_by_id.clear();
+    g_materials_by_id.resize(max_materials);
+    g_names_by_id.clear();
+    g_names_by_id.resize(max_materials);
+    g_name_to_id.clear();
     io::IXMLReaderUTF8* xml =
         getDriver()->getFileSystem()->createXMLReaderUTF8(
         (GE::getShaderFolder() + "shader_settings.xml").c_str());
@@ -164,44 +168,43 @@ void GEMaterialManager::init()
                 settings.m_push_constants = g_default_push_constants.at(name);
             }
 
-            bool found = false;
-            for (uint32_t i = 0; i < def_mappings.size(); i++)
+            uint32_t id = std::numeric_limits<uint32_t>::max();
+            for (uint32_t i = 0; i < max_materials; i++)
             {
                 if (def_mappings[i] == name)
                 {
-                    g_mat_id_map[name] = (irr::video::E_MATERIAL_TYPE)i;
-                    g_id_mat_map[i] = name;
-                    found = true;
+                    id = i;
                     break;
                 }
             }
-            if (!found)
+
+            if (id == std::numeric_limits<uint32_t>::max())
             {
                 while (mapping_cursor < def_mappings.size() &&
                     !def_mappings[mapping_cursor].empty())
                 {
                     mapping_cursor = mapping_cursor + 1;
                 }
-                if (mapping_cursor < def_mappings.size())
-                {
-                    g_mat_id_map[name] = (irr::video::E_MATERIAL_TYPE)mapping_cursor;
-                    g_id_mat_map[mapping_cursor] = name;
-                    def_mappings[mapping_cursor] = name;
-                    mapping_cursor = mapping_cursor + 1;
-                }
-                else
+
+                if (mapping_cursor >= max_materials)
                 {
                     char msg[50] = {};
                     snprintf(msg, 50, "Too many materials which exceeded %u.",
-                        irr::video::EMT_MATERIAL_COUNT);
+                        max_materials);
                     os::Printer::log("GEMaterialManager", msg);
                     xml->drop();
                     return;
                 }
+
+                id = mapping_cursor;
+                def_mappings[mapping_cursor] = name;
+                mapping_cursor = mapping_cursor + 1;
             }
             auto m = std::make_shared<const GEMaterial>(settings);
+            g_materials_by_id[id] = m;
+            g_names_by_id[id] = name;
+            g_name_to_id[name] = id;
             g_materials.emplace_back(name, m);
-            g_mat_map[name] = m;
         }
     }
 
@@ -219,8 +222,9 @@ void GEMaterialManager::update()
 irr::video::E_MATERIAL_TYPE
           GEMaterialManager::getIrrMaterialType(const std::string& shader_name)
 {
-    if (g_mat_id_map.find(shader_name) != g_mat_id_map.end())
-        return g_mat_id_map.at(shader_name);
+    auto it = g_name_to_id.find(shader_name);
+    if (it != g_name_to_id.end())
+        return (irr::video::E_MATERIAL_TYPE)it->second;
     return (irr::video::E_MATERIAL_TYPE)0;
 }   // getIrrMaterialType
 
@@ -228,18 +232,29 @@ irr::video::E_MATERIAL_TYPE
 const std::string& GEMaterialManager::getShader(irr::video::E_MATERIAL_TYPE mt)
 {
     uint32_t id = mt;
-    if (g_id_mat_map.find(id) != g_id_mat_map.end())
-        return g_id_mat_map.at(id);
-    return g_id_mat_map.at(0);
+    if (id < g_names_by_id.size() && !g_names_by_id[id].empty())
+        return g_names_by_id[id];
+    return g_names_by_id[0];
 }   // getShader
 
 // ----------------------------------------------------------------------------
-std::shared_ptr<const GEMaterial>
+const GEMaterial*
+                GEMaterialManager::getMaterial(irr::video::E_MATERIAL_TYPE mt)
+{
+    uint32_t id = mt;
+    if (id < g_materials_by_id.size())
+        return g_materials_by_id[id].get();
+    return g_materials_by_id[0].get();
+}   // getMaterial
+
+// ----------------------------------------------------------------------------
+const GEMaterial*
                  GEMaterialManager::getMaterial(const std::string& shader_name)
 {
-    if (g_mat_map.find(shader_name) != g_mat_map.end())
-        return g_mat_map.at(shader_name);
-    return nullptr;
+    auto it = g_name_to_id.find(shader_name);
+    if (it != g_name_to_id.end())
+        return g_materials_by_id[it->second].get();
+    return NULL;
 }   // getMaterial
 
 }

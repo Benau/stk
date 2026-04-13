@@ -37,18 +37,13 @@ bool GEVulkanShadowDrawCall::skip(irr::scene::ISceneNode* node) const
 }   // skip
 
 // ----------------------------------------------------------------------------
-std::string GEVulkanShadowDrawCall::getShader(const irr::video::SMaterial& m)
+const std::string& GEVulkanShadowDrawCall::getShader(
+                                          const irr::video::SMaterial& m) const
 {
-    auto& ri = m.getRenderInfo();
-    if (ri && ri->isTransparent())
-        return "";
-    std::string shader = GEMaterialManager::getShader(m.MaterialType);
-    auto material = GEMaterialManager::getMaterial(shader);
-    if (material->isTransparent())
-        return "";
+    auto material = GEMaterialManager::getMaterial(m.MaterialType);
     if (!material->m_nonpbr_fallback.empty())
         return material->m_nonpbr_fallback;
-    return shader;
+    return GEMaterialManager::getShader(m.MaterialType);
 }   // getShader
 
 // ----------------------------------------------------------------------------
@@ -58,5 +53,16 @@ VkRenderPass GEVulkanShadowDrawCall::getRenderPassForPipelineCreation(
 {
     return m_sfbo->getRTTRenderPass();
 }   // getRenderPassForPipelineCreation
+
+// ----------------------------------------------------------------------------
+bool GEVulkanShadowDrawCall::ignoreMaterial(
+                                          const irr::video::SMaterial& m) const
+{
+    auto& ri = m.getRenderInfo();
+    if (ri && ri->isTransparent())
+        return true;
+    auto material = GEMaterialManager::getMaterial(m.MaterialType);
+    return material->isTransparent();
+}   // ignoreMaterial
 
 }

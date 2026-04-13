@@ -33,6 +33,8 @@ private:
                                                 { return (uint32_t)m_cascade; }
     // ------------------------------------------------------------------------
     virtual void prepare(GEVulkanCameraSceneNode* cam)       { assert(false); }
+    // ------------------------------------------------------------------------
+    virtual bool ignoreMaterial(const irr::video::SMaterial& m) const;
 
 public:
     // ------------------------------------------------------------------------
@@ -43,7 +45,7 @@ public:
     // ------------------------------------------------------------------------
     virtual void prepareShadow(unsigned layer);
     // ------------------------------------------------------------------------
-    virtual std::string getShader(const irr::video::SMaterial& m);
+    virtual const std::string& getShader(const irr::video::SMaterial& m) const;
     // ------------------------------------------------------------------------
     virtual bool doDepthOnlyRenderingFirst()                   { return true; }
     // ------------------------------------------------------------------------

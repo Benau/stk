@@ -205,7 +205,7 @@ int GEVulkanTextureDescriptor::getTextureID(const irr::video::ITexture** list,
         m_transparent_image,
         m_transparent_image
     }};
-    const auto& material = GEMaterialManager::getMaterial(shader);
+    const GEMaterial* material = GEMaterialManager::getMaterial(shader);
     for (unsigned i = 0; i < m_max_layer; i++)
     {
         if (list[i])
