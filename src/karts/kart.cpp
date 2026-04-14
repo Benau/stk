@@ -93,6 +93,7 @@
 #include <ICameraSceneNode.h>
 #include <IDummyTransformationSceneNode.h>
 #include <ISceneManager.h>
+#include <IVideoDriver.h>
 
 #include <algorithm> // for min and max
 #include <iostream>
@@ -3033,14 +3034,6 @@ void Kart::loadData(RaceManager::KartType type, bool is_animated_model)
     {
         m_skidmarks.reset(new SkidMarks(*this));
     }
-
-    if (!GUIEngine::isNoGraphics() &&
-        (!CVS->isGLSL() || !CVS->isShadowEnabled()) && m_kart_properties
-        ->getShadowMaterial()->getSamplerPath(0) != "unicolor_white")
-    {
-        m_shadow.reset(new Shadow(m_kart_properties->getShadowMaterial(),
-            *this));
-    }
 #endif
     World::getWorld()->kartAdded(this, m_node);
     m_kart_gfx.reset(
@@ -3393,6 +3386,21 @@ void Kart::updateGraphics(float dt)
         m_current_lean);
 
 #ifndef SERVER_ONLY
+    bool supports_shadow = CVS->isGLSL() ||
+        irr_driver->getVideoDriver()->getDriverType() == video::EDT_VULKAN;
+    if (!GUIEngine::isNoGraphics() && m_kart_properties
+        ->getShadowMaterial()->getSamplerPath(0) != "unicolor_white")
+    {
+        bool shadow_enabled = CVS->isShadowEnabled() &&
+            Track::getCurrentTrack()->hasShadows();
+        if (supports_shadow && shadow_enabled && m_shadow)
+            m_shadow.reset();
+        else if ((!supports_shadow ||!shadow_enabled) && !m_shadow)
+        {
+            m_shadow.reset(new Shadow(m_kart_properties->getShadowMaterial(),
+                *this));
+        }
+    }
     // Determine the shadow position from the terrain Y position. This
     // leaves the shadow on the ground even if the kart is jumping because
     // of skidding (shadows are disabled when wheel are not on the track).

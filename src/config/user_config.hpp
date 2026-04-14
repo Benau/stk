@@ -678,21 +678,6 @@ namespace UserConfigParams
         PARAM_DEFAULT(IntUserConfigParam(1, "enable_high_definition_textures",
         &m_video_group, "Enable high definition textures. Bit flag: "
                         "bit 0 = enabled/disabled; bit 1 = set by user/set as default"));
-    PARAM_PREFIX BoolUserConfigParam        m_glow
-        PARAM_DEFAULT(BoolUserConfigParam(false, "enable_glow",
-        &m_video_group, "Enable Glow"));
-    PARAM_PREFIX BoolUserConfigParam        m_bloom
-        PARAM_DEFAULT(BoolUserConfigParam(false, "enable_bloom",
-        &m_video_group, "Enable Bloom"));
-    PARAM_PREFIX BoolUserConfigParam        m_light_shaft
-        PARAM_DEFAULT(BoolUserConfigParam(false, "enable_light_shaft",
-        &m_video_group, "Enable Light Shafts"));
-    PARAM_PREFIX BoolUserConfigParam        m_dynamic_lights
-        PARAM_DEFAULT(BoolUserConfigParam(true, "enable_dynamic_lights",
-        &m_video_group, "Enable Dynamic Lights"));
-    PARAM_PREFIX BoolUserConfigParam        m_dof
-        PARAM_DEFAULT(BoolUserConfigParam(false, "enable_dof",
-        &m_video_group, "Enable Depth of Field"));
     PARAM_PREFIX BoolUserConfigParam        m_old_driver_popup
         PARAM_DEFAULT(BoolUserConfigParam(true, "old_driver_popup",
         &m_video_group, "Determines if popup message about too old drivers should be displayed."));
@@ -704,9 +689,6 @@ namespace UserConfigParams
         PARAM_DEFAULT(IntUserConfigParam(512, "max_texture_size",
         &m_video_group, "Max texture size when high definition textures are "
                         "disabled"));
-    PARAM_PREFIX BoolUserConfigParam        m_ssr
-        PARAM_DEFAULT(BoolUserConfigParam(false, "ssr",
-        &m_video_group, "Enable screen space reflection"));
     PARAM_PREFIX BoolUserConfigParam        m_hq_mipmap
         PARAM_DEFAULT(BoolUserConfigParam(false, "hq_mipmap",
         &m_video_group, "Generate mipmap for textures using "
@@ -738,6 +720,15 @@ namespace UserConfigParams
     PARAM_PREFIX BoolUserConfigParam        m_non_ge_fullscreen_desktop
         PARAM_DEFAULT(BoolUserConfigParam(false, "non_ge_fullscreen_desktop",
         &m_video_group, "Use SDL_WINDOW_FULLSCREEN_DESKTOP for non-ge device"));
+
+    PARAM_PREFIX IntUserConfigParam          m_point_shadow_limit
+            PARAM_DEFAULT( IntUserConfigParam(8,
+                           "point_shadow_limit", &m_video_group,
+                           "Limits on point light shadows") );
+    PARAM_PREFIX IntUserConfigParam          m_max_pointlights
+            PARAM_DEFAULT( IntUserConfigParam(32,
+                           "max_pointlights", &m_video_group,
+                           "Maximum number of point lights allowed per frame") );
 
     // ---- Recording
     PARAM_PREFIX GroupUserConfigParam        m_recording_group
@@ -1013,10 +1004,32 @@ namespace UserConfigParams
             PARAM_DEFAULT( BoolUserConfigParam(false,
                            "pcss", &m_graphics_quality,
                            "Enable Percentage Closer Soft Shadows") );
+    PARAM_PREFIX BoolUserConfigParam          m_pointlight_shadows
+            PARAM_DEFAULT( BoolUserConfigParam(false,
+                           "pointlight_shadows", &m_graphics_quality,
+                           "Enable point light shadows") );
     PARAM_PREFIX BoolUserConfigParam          m_degraded_IBL
-        PARAM_DEFAULT(BoolUserConfigParam(true,
-        "Degraded_IBL", &m_graphics_quality,
-        "Disable specular IBL"));
+            PARAM_DEFAULT(BoolUserConfigParam(true,
+            "Degraded_IBL", &m_graphics_quality,
+            "Disable specular IBL"));
+    PARAM_PREFIX BoolUserConfigParam        m_glow
+            PARAM_DEFAULT(BoolUserConfigParam(false, "enable_glow",
+            &m_graphics_quality, "Enable Glow"));
+    PARAM_PREFIX BoolUserConfigParam        m_bloom
+            PARAM_DEFAULT(BoolUserConfigParam(false, "enable_bloom",
+            &m_graphics_quality, "Enable Bloom"));
+    PARAM_PREFIX BoolUserConfigParam        m_light_shaft
+            PARAM_DEFAULT(BoolUserConfigParam(false, "enable_light_shaft",
+            &m_graphics_quality, "Enable Light Shafts"));
+    PARAM_PREFIX BoolUserConfigParam        m_dynamic_lights
+            PARAM_DEFAULT(BoolUserConfigParam(true, "enable_dynamic_lights",
+            &m_graphics_quality, "Enable Dynamic Lights"));
+    PARAM_PREFIX BoolUserConfigParam        m_dof
+            PARAM_DEFAULT(BoolUserConfigParam(false, "enable_dof",
+            &m_graphics_quality, "Enable Depth of Field"));
+    PARAM_PREFIX BoolUserConfigParam        m_ssr
+            PARAM_DEFAULT(BoolUserConfigParam(false, "ssr",
+            &m_graphics_quality, "Enable screen space reflection"));
 
     // ---- Misc
     PARAM_PREFIX BoolUserConfigParam        m_cache_overworld
