@@ -335,6 +335,8 @@ void Track::cleanup()
     Graph::destroy();
     m_item_manager = nullptr;
 #ifndef SERVER_ONLY
+    GE::getGEConfig()->m_shadow_type =
+        UserConfigParams::m_pointlight_shadows ? GE::GST_COMBINED : GE::GST_SUN;
     if (!GUIEngine::isNoGraphics())
         GE::resetOcclusionCulling();
     if (CVS->isGLSL())
@@ -1947,6 +1949,12 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
     main_loop->renderGUI(3100);
 
 #ifndef SERVER_ONLY
+    if (!m_shadows)
+    {
+        GE::getGEConfig()->m_shadow_type =
+            GE::GEShadowType(GE::getGEConfig()->m_shadow_type & ~(GE::GST_SUN));
+    }
+
     if (!GUIEngine::isNoGraphics())
         GE::resetOcclusionCulling();
     if (CVS->isGLSL())

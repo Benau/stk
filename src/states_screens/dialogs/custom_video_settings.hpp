@@ -27,6 +27,8 @@
  */
 class CustomVideoSettingsDialog : public GUIEngine::ModalDialog
 {
+private:
+    std::string m_new_render_driver;
 public:
     /**
      * Creates a modal dialog with given percentage of screen width and height
@@ -37,7 +39,7 @@ public:
     virtual void beforeAddingWidgets();
 
     /** Updates the activation state of the advanced pipeline checkboxes. */
-    void updateActivation(const std::string& renderer);
+    void updateActivation();
 
     GUIEngine::EventPropagation processEvent(const std::string& eventSource);
     
