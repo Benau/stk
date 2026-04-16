@@ -139,12 +139,25 @@ int getFaceIndex(vec3 d)
 // ---------------------------------------------------------------------------
 // sampleOmniShadow
 //
-// Samples the cubic shadow map for a point light.
+// Point lights  :  selects one of 6 cubemap faces via getFaceIndex and
+//                  samples the 90° projection stored there.
+//
+// Spot lights   :  always uses face slot 0, which the CPU has populated with
+//                  a single perspective aligned to the cone direction using
+//                  FOV = 2 * OuterCone.  getFaceIndex is skipped entirely.
+//
+// Spotlight detection: m_direction_scale_offset.z (sscale) is non-zero for
+// spotlights and zero for pure point lights – the same encoding used in the
+// existing attenuation code.
 // ---------------------------------------------------------------------------
 float sampleOmniShadow(int light_id, vec3 light_pos, vec3 world_pos)
 {
-    vec3 L    = world_pos - light_pos;
-    int face  = getFaceIndex(L);
+    vec3 L = world_pos - light_pos;
+
+    // Spotlights always have their shadow stored in face slot 0.
+    float sscale = u_global_light.m_lights[light_id].m_direction_scale_offset.z;
+    int face = (sscale != 0.0) ? 0 : getFaceIndex(L);
+
     int layer = light_id * OMNI_FACES_PER_LIGHT + face;
     if (u_shadow_type == GST_COMBINED)
         layer += 3;
