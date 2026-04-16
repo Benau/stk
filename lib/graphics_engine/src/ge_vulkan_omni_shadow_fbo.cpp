@@ -20,10 +20,10 @@ namespace GE
 {
 
 // ----------------------------------------------------------------------------
-// Standard cubemap shadow mapping
+// Shadow mapping strategy per light type
 //
-// Each light renders 6 faces:
-//
+// Point light  :  6 cubemap faces at 90° FOV each.
+//                 Face selected at sample time by getFaceIndex(fragPos - lightPos).
 //   0 : +X
 //   1 : -X
 //   2 : +Y
@@ -31,15 +31,25 @@ namespace GE
 //   4 : +Z
 //   5 : -Z
 //
-// layer = light_id * 6 + face
-//
 // All faces use a 90° symmetric perspective projection.
+//
+// Spot light   :  1 face (slot 0) using a perspective whose full-angle FOV
+//                 equals 2 * OuterCone.  The view is aligned with the cone
+//                 direction.  Faces 1-5 are disabled.
+//                 The shader detects spotlights via sscale != 0 and always
+//                 samples face 0, skipping getFaceIndex entirely.
+//
+// layer = light_id * OMNI_FACES_PER_LIGHT + face + getLayerOffset()
 // ----------------------------------------------------------------------------
 
 static inline float deg2rad(float d)
 {
     return d * (float)(M_PI / 180.0);
 }   // deg2rad
+
+// A small padding added to the spotlight FOV so cone-edge fragments are
+// never clipped by projection precision.
+static const float kSpotFovPaddingDeg = 1.0f;
 
 // ----------------------------------------------------------------------------
 // Standard perspective matrix (90° cube face)
@@ -118,6 +128,22 @@ static irr::core::matrix4 buildFaceViewMatrix(unsigned face,
 }   // buildFaceViewMatrix
 
 // ----------------------------------------------------------------------------
+// buildSpotViewMatrix – a camera at pos looking along dir.
+// ----------------------------------------------------------------------------
+static irr::core::matrix4 buildSpotViewMatrix(const irr::core::vector3df& pos,
+                                              const irr::core::vector3df& dir)
+{
+    // Choose an up vector that is never parallel to dir.
+    irr::core::vector3df up(0.0f, 1.0f, 0.0f);
+    if (fabsf(dir.Y) > 0.99f)
+        up = irr::core::vector3df(1.0f, 0.0f, 0.0f);
+
+    irr::core::matrix4 view;
+    view.buildCameraLookAtMatrixLH(pos, pos + dir, up);
+    return view;
+}   // buildSpotViewMatrix
+
+// ----------------------------------------------------------------------------
 GEVulkanOmniShadowFBO::GEVulkanOmniShadowFBO(GEVulkanDriver* vk,
                                              unsigned shadow_size,
                                              irr::scene::ILightSceneNode* sun)
@@ -143,40 +169,92 @@ void GEVulkanOmniShadowFBO::createDrawCalls()
 }   // createDrawCalls
 
 // ----------------------------------------------------------------------------
+void GEVulkanOmniShadowFBO::buildSingleFaceMatrices(unsigned light_id)
+{
+    const irr::core::vector3df& pos = m_light_handler->getLightPosition(light_id);
+    const float  radius             = m_light_handler->getLightRadius(light_id);
+    const float  outer_cone         = m_light_handler->getLightOuterCone(light_id);
+    const irr::core::vector3df dir  = m_light_handler->getLightDirection(light_id);
+
+    // Full-angle FOV = 2 * outer_cone (radians → degrees) + padding.
+    const float fov_deg =
+        2.0f * outer_cone * (float)(180.0 / M_PI) + kSpotFovPaddingDeg;
+
+    const irr::core::matrix4 proj = buildPerspective(fov_deg, 0.2f, radius);
+    const irr::core::matrix4 view = buildSpotViewMatrix(pos, dir);
+
+    // Only face slot 0 is used for spotlights.
+    const unsigned layer = light_id * OMNI_FACES_PER_LIGHT + 0 + getLayerOffset();
+    m_shadow_projection_matrices[layer] = proj * view;
+    GEVulkanCameraUBO& ubo = m_shadow_camera_ubo_data[layer];
+    ubo.m_projection_view_matrix = m_shadow_projection_matrices[layer];
+    m_light_handler->setLightShadowMatrices(&ubo, light_id, 0);
+    // Slots 1-5 stay uninitialised; those draw calls are disabled below so
+    // the GPU never samples those layers for this light.
+}   // buildSingleFaceMatrices
+
+// ----------------------------------------------------------------------------
+void GEVulkanOmniShadowFBO::buildSixFaceMatrices(unsigned light_id)
+{
+    const irr::core::vector3df& pos = m_light_handler->getLightPosition(light_id);
+    const float radius              = m_light_handler->getLightRadius(light_id);
+    const irr::core::matrix4 proj   = buildPerspective(90.0f, 0.2f, radius);
+
+    for (unsigned face = 0; face < OMNI_FACES_PER_LIGHT; face++)
+    {
+        const unsigned layer =
+            light_id * OMNI_FACES_PER_LIGHT + face + getLayerOffset();
+        const irr::core::matrix4 view = buildFaceViewMatrix(face, pos);
+        m_shadow_projection_matrices[layer] = proj * view;
+        GEVulkanCameraUBO& ubo = m_shadow_camera_ubo_data[layer];
+        ubo.m_projection_view_matrix = m_shadow_projection_matrices[layer];
+        m_light_handler->setLightShadowMatrices(&ubo, light_id, face);
+    }
+}   // buildSixFaceMatrices
+
+// ----------------------------------------------------------------------------
 void GEVulkanOmniShadowFBO::generate()
 {
     assert(m_light_handler != NULL);
-    const float kNear = 0.2f;
+
     const unsigned shadow_limit = getGEConfig()->m_point_shadow_limit;
     const unsigned light_count = std::min(m_light_handler->getLightCount(),
         shadow_limit);
+
+    // -------------------------------------------------------------------------
+    // Phase 1 – build projection-view matrices for active lights.
+    // -------------------------------------------------------------------------
     for (unsigned i = 0; i < light_count; i++)
     {
-        const irr::core::vector3df& pos = m_light_handler->getLightPosition(i);
-        const float radius = m_light_handler->getLightRadius(i);
-        irr::core::matrix4 projection_matrix = buildPerspective(
-            90.0f, kNear, radius);
-
-        for (unsigned face = 0; face < OMNI_FACES_PER_LIGHT; face++)
-        {
-            const unsigned layer = i * OMNI_FACES_PER_LIGHT + face +
-                getLayerOffset();
-            irr::core::matrix4 view = buildFaceViewMatrix(face, pos);
-            m_shadow_projection_matrices[layer] = projection_matrix * view;
-            GEVulkanCameraUBO& ubo = m_shadow_camera_ubo_data[layer];
-            ubo.m_projection_view_matrix = m_shadow_projection_matrices[layer];
-            m_light_handler->setLightShadowMatrices(&ubo, i, face);
-        }
+        if (m_light_handler->getLightIsSpot(i))
+            buildSingleFaceMatrices(i);
+        else
+            buildSixFaceMatrices(i);
     }
 
+    // -------------------------------------------------------------------------
+    // Phase 2 – schedule draw calls.
+    //
+    // Important ordering note: GEVulkanOmniShadowDrawCall::prepareShadow()
+    // resets m_render_state to true internally.  For any face we want to
+    // disable we must NOT call prepareShadow() first; we call setRenderState()
+    // directly instead.  The two paths below never overlap, so the ordering is
+    // safe.
+    // -------------------------------------------------------------------------
     for (unsigned i = 0; i < shadow_limit; i++)
     {
+        const bool single_face = (i < light_count) &&
+            m_light_handler->getLightIsSpot(i);
+
         for (unsigned face = 0; face < OMNI_FACES_PER_LIGHT; face++)
         {
-            const unsigned layer = i * OMNI_FACES_PER_LIGHT + face +
-                getLayerOffset();
-            if (i >= light_count)
+            const unsigned layer =
+                i * OMNI_FACES_PER_LIGHT + face + getLayerOffset();
+
+            if (i >= light_count || (single_face && face != 0))
             {
+                // Disabled: clear the depth layer to 1.0 (fully lit) via
+                // VkRenderPass load-op, but submit no geometry.
                 m_shadow_draw_calls[layer]->setRenderState(false);
                 continue;
             }
