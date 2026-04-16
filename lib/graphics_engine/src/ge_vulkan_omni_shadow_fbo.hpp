@@ -17,6 +17,13 @@ private:
     std::vector<irr::scene::ISceneNode*> m_nodes;
     // ------------------------------------------------------------------------
     virtual unsigned getLayerOffset() const                       { return 0; }
+    // ------------------------------------------------------------------------
+    // Builds the single perspective matrix for a spotlight into face slot 0.
+    void buildSingleFaceMatrices(unsigned light_id);
+    // ------------------------------------------------------------------------
+    // Builds all six cubemap face matrices for a point light (or wide-cone
+    // spotlight fallback).
+    void buildSixFaceMatrices(unsigned light_id);
 public:
     // ------------------------------------------------------------------------
     GEVulkanOmniShadowFBO(GEVulkanDriver* vk, unsigned shadow_size,

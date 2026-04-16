@@ -265,4 +265,45 @@ void GEVulkanLightHandler::setLightShadowMatrices(GEVulkanCameraUBO* ubo,
         ubo->m_projection_view_matrix;
 }   // setLightShadowMatrices
 
+// ----------------------------------------------------------------------------
+bool GEVulkanLightHandler::getLightIsSpot(unsigned light_id) const
+{
+    // m_scale is set to a non-zero value only for spotlights in addLightNode.
+    GELight* lights = getRenderingLightsPtr();
+    return lights[light_id].m_scale != 0.0f;
+}   // getLightIsSpot
+
+// ----------------------------------------------------------------------------
+irr::core::vector3df GEVulkanLightHandler::getLightDirection(
+                                                       unsigned light_id) const
+{
+    // addLightNode stores only (X, Y); Z is reconstructed as
+    //   Z = sqrt(1 - X² - Y²) * sign(m_scale)
+    // because m_scale was multiplied by sign(Direction.Z) on the way in.
+    GELight* lights  = getRenderingLightsPtr();
+    const float x    = lights[light_id].m_direction.X;
+    const float y    = lights[light_id].m_direction.Y;
+    const float z_sq = 1.0f - x * x - y * y;
+    float z = sqrtf(z_sq > 0.0f ? z_sq : 0.0f);
+    if (lights[light_id].m_scale < 0.0f)
+        z = -z;
+    return irr::core::vector3df(x, y, z);
+}   // getLightDirection
+
+// ----------------------------------------------------------------------------
+float GEVulkanLightHandler::getLightOuterCone(unsigned light_id) const
+{
+    // From addLightNode:
+    //   m_scale  = ±1 / (cos_inner - cos_outer)      [sign from Direction.Z]
+    //   m_offset = -cos_outer * |m_scale|
+    //   => cos_outer = -m_offset / |m_scale|
+    GELight* lights       = getRenderingLightsPtr();
+    const float abs_scale = fabsf(lights[light_id].m_scale);
+    if (abs_scale < 1e-6f)
+        return 0.0f;
+    const float cos_outer = std::max(-1.0f,
+        std::min(1.0f, -lights[light_id].m_offset / abs_scale));
+    return acosf(cos_outer);   // half-angle in radians
+}   // getLightOuterCone
+
 }

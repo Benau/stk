@@ -82,6 +82,18 @@ public:
     const irr::core::vector3df& getLightPosition(unsigned light_id) const;
     // ------------------------------------------------------------------------
     float getLightRadius(unsigned light_id) const;
+    // ------------------------------------------------------------------------
+    // Returns true if light_id is a spotlight (m_scale != 0).
+    bool getLightIsSpot(unsigned light_id) const;
+    // ------------------------------------------------------------------------
+    // Returns the normalised spotlight direction, reconstructed from the
+    // packed (X, Y) components and the sign encoded in m_scale.
+    // Result is undefined for point lights.
+    irr::core::vector3df getLightDirection(unsigned light_id) const;
+    // ------------------------------------------------------------------------
+    // Returns the outer-cone half-angle in radians (same convention as
+    // Irrlicht's SLight::OuterCone).  Returns 0 for point lights.
+    float getLightOuterCone(unsigned light_id) const;
 
 };   // GEVulkanLightHandler
 
