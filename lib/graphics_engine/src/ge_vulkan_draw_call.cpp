@@ -243,6 +243,7 @@ GEVulkanDrawCall::GEVulkanDrawCall()
     m_skinning_data_padded_size = 0;
     m_materials_padded_size = 0;
     m_dynamic_spm_padded_size = 0;
+    m_camera_ubo_offset = 0;
     m_update_data_descriptor_sets = true;
     m_data_layout = VK_NULL_HANDLE;
     m_descriptor_pool = VK_NULL_HANDLE;
@@ -1713,7 +1714,7 @@ void GEVulkanDrawCall::createVulkanData()
     // Use VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
     // or a staging buffer when buffer is small
     m_dynamic_data = new GEVulkanDynamicBuffer(flags,
-        extra_size + getLightDataOffset() + GEVulkanLightHandler::getMaxSize(),
+        extra_size + GEVulkanLightHandler::getMaxSize(),
         GEVulkanDriver::getMaxFrameInFlight() + 1,
         GEVulkanDynamicBuffer::supportsHostTransfer() ? 0 :
         GEVulkanDriver::getMaxFrameInFlight() + 1);
@@ -1728,7 +1729,6 @@ void GEVulkanDrawCall::createVulkanData()
 
 // ----------------------------------------------------------------------------
 void GEVulkanDrawCall::uploadDynamicData(GEVulkanDriver* vk,
-                                         const GEVulkanCameraUBO* cam_ubo,
                                          VkCommandBuffer custom_cmd)
 {
     if (!m_dynamic_data)
@@ -1737,17 +1737,7 @@ void GEVulkanDrawCall::uploadDynamicData(GEVulkanDriver* vk,
     VkCommandBuffer cmd =
         custom_cmd ? custom_cmd : vk->getCurrentCommandBuffer();
 
-    // https://github.com/google/filament/pull/3814
-    // Need both vertex and fragment bit
-    VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-
     std::vector<std::pair<void*, size_t> > data_uploading;
-    data_uploading.emplace_back((void*)cam_ubo, sizeof(GEVulkanCameraUBO));
-
-    size_t sbo_padding = getLightDataOffset() - sizeof(GEVulkanCameraUBO);
-    if (sbo_padding > 0)
-        data_uploading.emplace_back((void*)NULL, sbo_padding);
     if (m_light_handler)
     {
         data_uploading.emplace_back(m_light_handler->getData(),
@@ -1763,7 +1753,6 @@ void GEVulkanDrawCall::uploadDynamicData(GEVulkanDriver* vk,
             data_uploading.emplace_back(
                 (void*)&cmd.m_cmd, sizeof(VkDrawIndexedIndirectCommand));
         }
-        dst_stage |= VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
     }
     int current_buffer_idx = vk->getCurrentBufferIdx();
     m_update_data_descriptor_sets =
@@ -1775,19 +1764,6 @@ void GEVulkanDrawCall::uploadDynamicData(GEVulkanDriver* vk,
     vmaFlushAllocation(vk->getVmaAllocator(),
         m_sbo_data->getHostMemory()[current_buffer_idx], 0,
         whole_size);
-
-    if (!GEVulkanDynamicBuffer::supportsHostTransfer())
-    {
-        VkMemoryBarrier barrier = {};
-        barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        if (use_multidraw)
-            barrier.dstAccessMask |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, dst_stage, 0,
-            1, &barrier, 0, NULL, 0, NULL);
-    }
 }   // uploadDynamicData
 
 // ----------------------------------------------------------------------------
@@ -1812,9 +1788,10 @@ void GEVulkanDrawCall::bindBaseVertex(GEVulkanDriver* vk, VkCommandBuffer cmd)
 }   // bindBaseVertex
 
 // ----------------------------------------------------------------------------
-void GEVulkanDrawCall::prepareRendering(GEVulkanDriver* vk)
+void GEVulkanDrawCall::prepareRendering(GEVulkanDriver* vk,
+                                        GEVulkanCameraSceneNode* cam)
 {
-    updateDataDescriptorSets(vk);
+    updateDataDescriptorSets(vk, cam);
     m_texture_descriptor->updateDescriptor();
 }   // prepareRendering
 
@@ -1847,10 +1824,13 @@ void GEVulkanDrawCall::prepareViewport(GEVulkanDriver* vk,
 // ----------------------------------------------------------------------------
 std::vector<uint32_t> GEVulkanDrawCall::getDefaultDynamicOffsets() const
 {
+    std::vector<uint32_t> offsets;
     if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
-        return std::vector<uint32_t>(5, 0);
+        offsets = std::vector<uint32_t>(5, 0);
     else
-        return std::vector<uint32_t>(4, 0);
+        offsets = std::vector<uint32_t>(4, 0);
+    offsets[0] = m_camera_ubo_offset;
+    return offsets;
 }   // getDefaultDynamicOffsets
 
 // ----------------------------------------------------------------------------
@@ -1923,7 +1903,7 @@ void GEVulkanDrawCall::renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
     if (bind_mesh_textures)
     {
         cur_pipeline = m_cmds[0].m_shader;
-        size_t indirect_offset = getLightDataOffset();
+        size_t indirect_offset = 0;
         if (m_light_handler)
             indirect_offset += m_light_handler->getSize();
         const size_t indirect_size = sizeof(VkDrawIndexedIndirectCommand);
@@ -2119,25 +2099,28 @@ size_t GEVulkanDrawCall::getInitialSBOSize() const
 }   // getInitialSBOSize
 
 // ----------------------------------------------------------------------------
-void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk)
+void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
+                                                GEVulkanCameraSceneNode* cam)
 {
+    if (m_camera_ubo_observer.expired())
+        m_update_data_descriptor_sets = true;
+
     if (!m_update_data_descriptor_sets || m_skinning_data_padded_size == 0 ||
         m_object_data_padded_size == 0)
         return;
 
     m_update_data_descriptor_sets = false;
+    m_camera_ubo_observer = cam->getCameraUBO()->getBufferObserver();
     vk->waitIdle();
 
-    const bool use_base_vertex =
-        GEVulkanFeatures::supportsBaseVertexRendering();
     const bool bind_mesh_textures =
         GEVulkanFeatures::supportsBindMeshTexturesAtOnce();
     for (unsigned i = 0; i < m_data_descriptor_sets.size(); i++)
     {
         VkDescriptorBufferInfo ubo_info;
         ubo_info.buffer = GEVulkanDynamicBuffer::supportsHostTransfer() ?
-            m_dynamic_data->getHostBuffer()[i] :
-            m_dynamic_data->getLocalBuffer()[i];
+            cam->getCameraUBO()->getHostBuffer()[i] :
+            cam->getCameraUBO()->getLocalBuffer()[i];
         ubo_info.offset = 0;
         ubo_info.range = sizeof(GEVulkanCameraUBO);
 
@@ -2185,7 +2168,7 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk)
                 GEVulkanDynamicBuffer::supportsHostTransfer() ?
                 m_dynamic_data->getHostBuffer()[i] :
                 m_dynamic_data->getLocalBuffer()[i];
-            sbo_info_light.offset = getLightDataOffset();
+            sbo_info_light.offset = 0;
             sbo_info_light.range = GEVulkanLightHandler::getMaxSize();
             data_set.push_back({});
             VkWriteDescriptorSet& ds = data_set.back();
@@ -2472,14 +2455,6 @@ void GEVulkanDrawCall::addLightNode(irr::scene::ILightSceneNode* node)
         m_light_handler->addLightNode(node);
     }
 }   // addLightNode
-
-// ----------------------------------------------------------------------------
-size_t GEVulkanDrawCall::getLightDataOffset() const
-{
-    size_t ubo_size = sizeof(GEVulkanCameraUBO);
-    return ubo_size +
-        getPadding(ubo_size, m_limits.minUniformBufferOffsetAlignment);
-}   // getLightDataOffset
 
 // ----------------------------------------------------------------------------
 bool GEVulkanDrawCall::bindPipeline(VkCommandBuffer cmd,

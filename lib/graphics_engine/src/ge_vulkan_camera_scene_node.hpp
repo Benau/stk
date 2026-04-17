@@ -2,9 +2,11 @@
 #define HEADER_GE_VULKAN_CAMERA_SCENE_NODE_HPP
 
 #include "../source/Irrlicht/CCameraSceneNode.h"
+#include "vulkan_wrapper.h"
 
 #include <array>
 #include <cstdio>
+#include <memory>
 
 namespace GE
 {
@@ -20,6 +22,10 @@ irr::core::rectf   m_viewport;
 irr::core::rectf   m_screensize;
 };
 
+class GEVulkanDrawCall;
+class GEVulkanDriver;
+class GEVulkanDynamicBuffer;
+
 class GEVulkanCameraSceneNode : public irr::scene::CCameraSceneNode
 {
 private:
@@ -28,6 +34,12 @@ private:
     irr::core::matrix4 m_reverse_z_projection_matrix;
 
     irr::core::rect<irr::s32> m_viewport;
+
+    GEVulkanDynamicBuffer* m_camera_ubo;
+
+    unsigned m_camera_ubo_count;
+
+    const unsigned m_ubo_padding;
 public:
     // ------------------------------------------------------------------------
     GEVulkanCameraSceneNode(irr::scene::ISceneNode* parent,
@@ -69,6 +81,13 @@ public:
         CCameraSceneNode::setProjectionMatrix(projection, isOrthogonal);
         printf("Calling setProjectionMatrix directly will ignore reverse Z\n");
     }
+    // ------------------------------------------------------------------------
+    void collectUBO(GEVulkanDriver* vk, GEVulkanDrawCall* dc,
+                    VkCommandBuffer cmd = VK_NULL_HANDLE);
+    // ------------------------------------------------------------------------
+    unsigned getCameraUBOCount() const           { return m_camera_ubo_count; }
+    // ------------------------------------------------------------------------
+    GEVulkanDynamicBuffer* getCameraUBO() const        { return m_camera_ubo; }
 
 };   // GEVulkanCameraSceneNode
 

@@ -16,7 +16,8 @@ GEVulkanDynamicBuffer::GEVulkanDynamicBuffer(VkBufferUsageFlags usage,
                                              unsigned host_buffer_size,
                                              unsigned local_buffer_size,
                                              bool enable_host_transfer)
-                     : m_usage(usage),
+                     : m_buffer_observer(std::make_shared<bool>(true)),
+                       m_usage(usage),
                        m_enable_host_transfer(enable_host_transfer)
 {
     m_size = m_real_size = initial_size;
@@ -134,6 +135,7 @@ void GEVulkanDynamicBuffer::destroy()
         m_local_buffer[i] = VK_NULL_HANDLE;
         m_local_memory[i] = VK_NULL_HANDLE;
     }
+    m_buffer_observer = std::make_shared<bool>(true);
 }   // destroy
 
 // ----------------------------------------------------------------------------

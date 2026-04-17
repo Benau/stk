@@ -13,6 +13,7 @@
 #include "ge_vulkan_command_loader.hpp"
 #include "ge_vulkan_deferred_fbo.hpp"
 #include "ge_vulkan_draw_call.hpp"
+#include "ge_vulkan_dynamic_buffer.hpp"
 #include "ge_vulkan_dynamic_spm_buffer.hpp"
 #include "ge_vulkan_features.hpp"
 #include "ge_vulkan_hiz_depth.hpp"
@@ -2536,16 +2537,18 @@ void GEVulkanDriver::buildCommandBuffers()
         m_irrlicht_device->getSceneManager())->getDrawCalls();
     for (auto& p : dcp)
     {
-        p.second->uploadDynamicData(this, p.first->getUBOData());
+        p.first->collectUBO(this, p.second.get());
+        p.second->uploadDynamicData(this);
         GEVulkanShadowFBO* sfbo = p.second->getShadowFBO();
         if (sfbo)
             sfbo->uploadDynamicData(getCurrentCommandBuffer());
     }
+    insertBufferBarrier(getCurrentCommandBuffer());
     for (auto& p : dcp)
     {
         GEVulkanShadowFBO* sfbo = p.second->getShadowFBO();
         if (sfbo)
-            sfbo->render(getCurrentCommandBuffer());
+            sfbo->render(getCurrentCommandBuffer(), p.first);
     }
 
     vkCmdBeginRenderPass(getCurrentCommandBuffer(), &render_pass_info,
@@ -2606,7 +2609,7 @@ void GEVulkanDriver::renderDrawCalls(
                 q.first->bindAllMaterials(cmd);
             else
                 rebind_base_vertex = true;
-            q.first->prepareRendering(this);
+            q.first->prepareRendering(this, q.second);
             q.first->prepareViewport(this, q.second->getViewPort(), cmd);
             if (q.first->doDepthOnlyRenderingFirst())
             {
@@ -2723,7 +2726,7 @@ void GEVulkanDriver::renderDrawCalls(
                 q.first->bindAllMaterials(cmd);
             else
                 rebind_base_vertex = true;
-            q.first->prepareRendering(this);
+            q.first->prepareRendering(this, q.second);
             q.first->prepareViewport(this, q.second->getViewPort(), cmd);
             if (q.first->doDepthOnlyRenderingFirst())
             {
@@ -2952,6 +2955,30 @@ void GEVulkanDriver::createBillboardQuad()
     getVulkanMeshCache()->addMesh(oss.str().c_str(), m_billboard_quad);
     m_billboard_quad->drop();
 }   // createBillboardQuad
+
+// ----------------------------------------------------------------------------
+void GEVulkanDriver::insertBufferBarrier(VkCommandBuffer cmd)
+{
+    // https://github.com/google/filament/pull/3814
+    // Need both vertex and fragment bit
+    VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    if (!GEVulkanDynamicBuffer::supportsHostTransfer())
+    {
+        VkMemoryBarrier barrier = {};
+        barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
+        {
+            barrier.dstAccessMask |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+            dst_stage |= VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
+        }
+
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, dst_stage, 0,
+            1, &barrier, 0, NULL, 0, NULL);
+    }
+}   // insertBufferBarrier
 
 }
 
