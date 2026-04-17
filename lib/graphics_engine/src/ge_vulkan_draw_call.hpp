@@ -42,7 +42,6 @@ class GEVulkanLightHandler;
 class GEVulkanShadowFBO;
 class GEVulkanSkyBoxRenderer;
 class GEVulkanTextureDescriptor;
-struct GEVulkanCameraUBO;
 
 typedef std::pair<std::vector<VkVertexInputBindingDescription>,
     std::vector<VkVertexInputAttributeDescription> > VertexDescription;
@@ -182,6 +181,10 @@ protected:
 
     size_t m_dynamic_spm_padded_size;
 
+    unsigned m_camera_ubo_offset;
+
+    std::weak_ptr<bool> m_camera_ubo_observer;
+
     bool m_update_data_descriptor_sets;
 
     VkDescriptorSetLayout m_data_layout;
@@ -240,7 +243,8 @@ protected:
     // ------------------------------------------------------------------------
     size_t getInitialSBOSize() const;
     // ------------------------------------------------------------------------
-    void updateDataDescriptorSets(GEVulkanDriver* vk);
+    void updateDataDescriptorSets(GEVulkanDriver* vk,
+                                  GEVulkanCameraSceneNode* cam);
     // ------------------------------------------------------------------------
     void bindBaseVertex(GEVulkanDriver* vk, VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
@@ -271,8 +275,6 @@ protected:
     // ------------------------------------------------------------------------
     VertexDescription getDefaultVertexDescription() const;
     // ------------------------------------------------------------------------
-    size_t getLightDataOffset() const;
-    // ------------------------------------------------------------------------
     std::vector<uint32_t> getDefaultDynamicOffsets() const;
     // ------------------------------------------------------------------------
     virtual VkRenderPass getRenderPassForPipelineCreation(GEVulkanDriver* vk,
@@ -297,14 +299,13 @@ public:
     void generate(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
     void uploadDynamicData(GEVulkanDriver* vk,
-                           const GEVulkanCameraUBO* cam_ubo,
                            VkCommandBuffer custom_cmd = VK_NULL_HANDLE);
     // ------------------------------------------------------------------------
     virtual bool doDepthOnlyRenderingFirst();
     // ------------------------------------------------------------------------
     void bindAllMaterials(VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
-    void prepareRendering(GEVulkanDriver* vk);
+    void prepareRendering(GEVulkanDriver* vk, GEVulkanCameraSceneNode* cam);
     // ------------------------------------------------------------------------
     void prepareViewport(GEVulkanDriver* vk,
                          const irr::core::rect<irr::s32>& viewp,
@@ -362,6 +363,9 @@ public:
     GEVulkanLightHandler* getLightHandler() const   { return m_light_handler; }
     // ------------------------------------------------------------------------
     GEVulkanShadowFBO* getShadowFBO() const            { return m_shadow_fbo; }
+    // ------------------------------------------------------------------------
+    void setCameraUBOOffset(unsigned offset)  { m_camera_ubo_offset = offset; }
+
 };   // GEVulkanDrawCall
 
 }

@@ -213,13 +213,14 @@ void GEVulkanSceneManager::drawAll(irr::u32 flags)
     cam->setViewPort(
         core::recti(0, 0, rtt->getSize().Width, rtt->getSize().Height));
     cam->render();
-    dc->uploadDynamicData(vk, cam->getUBOData(), cmd);
+    cam->collectUBO(vk, dc.get(), cmd);
+    dc->uploadDynamicData(vk, cmd);
     GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
     if (sfbo)
-    {
         sfbo->uploadDynamicData(cmd);
-        sfbo->render(cmd);
-    }
+    vk->insertBufferBarrier(cmd);
+    if (sfbo)
+        sfbo->render(cmd, cam);
 
     VkRenderPassBeginInfo render_pass_info = {};
     render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;

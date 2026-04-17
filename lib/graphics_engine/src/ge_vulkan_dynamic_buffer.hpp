@@ -5,6 +5,7 @@
 #include "ge_vma.hpp"
 
 #include <vector>
+#include <memory>
 #include <utility>
 
 namespace GE
@@ -20,6 +21,8 @@ private:
     std::vector<void*> m_mapped_addr;
 
     size_t m_size, m_real_size;
+
+    std::shared_ptr<bool> m_buffer_observer;
 
     const VkBufferUsageFlags m_usage;
 
@@ -67,6 +70,9 @@ public:
     std::vector<VmaAllocation>& getLocalMemory()     { return m_local_memory; }
     // ------------------------------------------------------------------------
     std::vector<void*>& getMappedAddr()               { return m_mapped_addr; }
+    // ------------------------------------------------------------------------
+    std::shared_ptr<bool> getBufferObserver() const
+                                                  { return m_buffer_observer; }
     // ------------------------------------------------------------------------
     /** This can only be called after creating an instance with
      *  local_buffer_size == 0 first, which is always done in
