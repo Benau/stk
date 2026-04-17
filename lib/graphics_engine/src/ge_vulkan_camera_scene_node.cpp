@@ -1,9 +1,12 @@
 #include "ge_vulkan_camera_scene_node.hpp"
 
 #include "ge_main.hpp"
+#include "ge_vulkan_draw_call.hpp"
 #include "ge_vulkan_driver.hpp"
+#include "ge_vulkan_dynamic_buffer.hpp"
 #include "ge_vulkan_fbo_texture.hpp"
 #include "ge_vulkan_scene_manager.hpp"
+#include "ge_vulkan_shadow_fbo.hpp"
 
 namespace GE
 {
@@ -13,15 +16,26 @@ GEVulkanCameraSceneNode::GEVulkanCameraSceneNode(irr::scene::ISceneNode* parent,
                                                  irr::s32 id,
                                            const irr::core::vector3df& position,
                                              const irr::core::vector3df& lookat)
-                       : CCameraSceneNode(parent, mgr, id, position, lookat)
+                       : CCameraSceneNode(parent, mgr, id, position, lookat),
+                         m_ubo_padding(getPadding(sizeof(GEVulkanCameraUBO),
+                         getVKDriver()->getPhysicalDeviceProperties().limits.
+                         minUniformBufferOffsetAlignment))
 {
     static_cast<GEVulkanSceneManager*>(SceneManager)->addDrawCall(this);
+    m_camera_ubo = new GEVulkanDynamicBuffer(
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        0/*will be grown later so forceUpdateDataDescriptorSets works*/,
+        GEVulkanDriver::getMaxFrameInFlight() + 1,
+        GEVulkanDynamicBuffer::supportsHostTransfer() ? 0 :
+        GEVulkanDriver::getMaxFrameInFlight() + 1);
+    m_camera_ubo_count = 0;
 }   // GEVulkanCameraSceneNode
 
 // ----------------------------------------------------------------------------
 GEVulkanCameraSceneNode::~GEVulkanCameraSceneNode()
 {
     static_cast<GEVulkanSceneManager*>(SceneManager)->removeDrawCall(this);
+    delete m_camera_ubo;
 }   // ~GEVulkanCameraSceneNode
 
 // ----------------------------------------------------------------------------
@@ -103,5 +117,42 @@ irr::core::matrix4 GEVulkanCameraSceneNode::getPVM() const
     return ViewArea.getTransform(irr::video::ETS_PROJECTION) *
         ViewArea.getTransform(irr::video::ETS_VIEW);
 }   // getPVM
+
+// ----------------------------------------------------------------------------
+void GEVulkanCameraSceneNode::collectUBO(GEVulkanDriver* vk,
+                                         GEVulkanDrawCall* dc,
+                                         VkCommandBuffer cmd)
+{
+    m_camera_ubo_count = 0;
+    unsigned offset = 0;
+    std::vector<std::pair<void*, size_t> > data_uploading;
+
+    dc->setCameraUBOOffset(0);
+    data_uploading.emplace_back(&m_ubo_data, sizeof(GEVulkanCameraUBO));
+    if (m_ubo_padding > 0)
+        data_uploading.emplace_back((void*)NULL, m_ubo_padding);
+    offset += sizeof(GEVulkanCameraUBO) + m_ubo_padding;
+    m_camera_ubo_count++;
+
+    GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
+    if (sfbo)
+    {
+        for (unsigned i = 0; i < sfbo->getDrawCallCount(); i++)
+        {
+            GEVulkanDrawCall* sdc = sfbo->getDrawCall(i);
+            sdc->setCameraUBOOffset(offset);
+            data_uploading.emplace_back(sfbo->getCameraUBO(i),
+                sizeof(GEVulkanCameraUBO));
+            if (m_ubo_padding > 0)
+                data_uploading.emplace_back((void*)NULL, m_ubo_padding);
+            offset += sizeof(GEVulkanCameraUBO) + m_ubo_padding;
+            m_camera_ubo_count++;
+        }
+    }
+    if (cmd == VK_NULL_HANDLE)
+        cmd = vk->getCurrentCommandBuffer();
+    m_camera_ubo->setCurrentData(data_uploading, cmd,
+        vk->getCurrentBufferIdx());
+}   // collectUBO
 
 }

@@ -433,13 +433,13 @@ void GEVulkanShadowFBO::uploadDynamicData(VkCommandBuffer cmd)
     {
         if (!m_shadow_draw_calls[i]->getRenderState())
             continue;
-        m_shadow_draw_calls[i]->uploadDynamicData(m_vk,
-            &m_shadow_camera_ubo_data[i], cmd);
+        m_shadow_draw_calls[i]->uploadDynamicData(m_vk, cmd);
     }
 }   // uploadDynamicData
 
 // ----------------------------------------------------------------------------
-void GEVulkanShadowFBO::render(VkCommandBuffer cmd)
+void GEVulkanShadowFBO::render(VkCommandBuffer cmd,
+                               GEVulkanCameraSceneNode* cam)
 {
     std::vector<VkClearValue> shadow_clear(m_shadow_draw_calls.size());
     for (int i = 0; i < shadow_clear.size(); i++)
@@ -484,7 +484,7 @@ void GEVulkanShadowFBO::render(VkCommandBuffer cmd)
                 m_shadow_draw_calls[i]->bindAllMaterials(cmd);
             else
                 rebind_base_vertex = true;
-            m_shadow_draw_calls[i]->prepareRendering(m_vk);
+            m_shadow_draw_calls[i]->prepareRendering(m_vk, cam);
             m_shadow_draw_calls[i]->renderPipeline(m_vk, cmd, GVPT_DEPTH,
                 rebind_base_vertex);
         }
@@ -493,5 +493,17 @@ void GEVulkanShadowFBO::render(VkCommandBuffer cmd)
     }
     vkCmdEndRenderPass(cmd);
 }   // render
+
+// ----------------------------------------------------------------------------
+GEVulkanCameraUBO* GEVulkanShadowFBO::getCameraUBO(unsigned i) const
+{
+    return &m_shadow_camera_ubo_data[i];
+}   // getCameraUBO
+
+// ----------------------------------------------------------------------------
+GEVulkanDrawCall* GEVulkanShadowFBO::getDrawCall(unsigned i) const
+{
+    return m_shadow_draw_calls.at(i).get();
+}   // getDrawCall
 
 }   // namespace GE

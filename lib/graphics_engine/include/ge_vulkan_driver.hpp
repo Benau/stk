@@ -383,6 +383,7 @@ namespace GE
                                         { m_dynamic_spm_buffers.erase(buffer); }
         void renderDrawCalls(const std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCameraSceneNode*> >& p,
                              VkCommandBuffer cmd);
+        void insertBufferBarrier(VkCommandBuffer cmd);
     private:
         struct SwapChainSupportDetails
         {
