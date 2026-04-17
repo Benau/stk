@@ -187,16 +187,38 @@ VkShaderModule GEVulkanShaderManager::loadShader(shaderc_shader_kind kind,
     r->drop();
     shader_data = g_predefines + shader_data;
 
-    shaderc_compiler_t compiler = shaderc_compiler_initialize();
-    shaderc_compile_options_t options = shaderc_compile_options_initialize();
+    struct ShadercResources
+    {
+        shaderc_compiler_t compiler;
+        shaderc_compile_options_t options;
+        shaderc_compilation_result_t result;
 
+        ShadercResources()
+        {
+            compiler = shaderc_compiler_initialize();
+            options = shaderc_compile_options_initialize();
+            result = NULL;
+        }
+
+        ~ShadercResources()
+        {
+            if (result)
+                shaderc_result_release(result);
+            if (options)
+                shaderc_compile_options_release(options);
+            if (compiler)
+                shaderc_compiler_release(compiler);
+        }
+    };
+
+    ShadercResources res;
     struct FileIncluder
     {
         std::vector<std::string> m_shader_fullpath;
         std::vector<std::string> m_shader_data;
     };
     FileIncluder includer;
-    shaderc_compile_options_set_include_callbacks(options,
+    shaderc_compile_options_set_include_callbacks(res.options,
         [](void* user_data, const char* requested_source, int type,
            const char* requesting_source, size_t include_depth)
            ->shaderc_include_result*
@@ -250,20 +272,19 @@ VkShaderModule GEVulkanShaderManager::loadShader(shaderc_shader_kind kind,
             delete include_result;
         }, &includer);
 
-    shaderc_compilation_result_t result = shaderc_compile_into_spv(compiler,
+    res.result = shaderc_compile_into_spv(res.compiler,
         shader_data.c_str(), shader_data.size(), kind, shader_fullpath.c_str(),
-        "main", options);
-    shaderc_compile_options_release(options);
+        "main", res.options);
     shaderc_compilation_status status =
-        shaderc_result_get_compilation_status(result);
+        shaderc_result_get_compilation_status(res.result);
     if (status != shaderc_compilation_status_success)
-        throw std::runtime_error(shaderc_result_get_error_message(result));
+        throw std::runtime_error(shaderc_result_get_error_message(res.result));
 
     VkShaderModuleCreateInfo create_info = {};
     create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     create_info.pNext = NULL;
-    uint32_t* byte_code = (uint32_t*)shaderc_result_get_bytes(result);
-    size_t byte_code_size = shaderc_result_get_length(result);
+    uint32_t* byte_code = (uint32_t*)shaderc_result_get_bytes(res.result);
+    size_t byte_code_size = shaderc_result_get_length(res.result);
     create_info.codeSize = byte_code_size;
     create_info.pCode = byte_code;
 
@@ -274,8 +295,6 @@ VkShaderModule GEVulkanShaderManager::loadShader(shaderc_shader_kind kind,
         throw std::runtime_error(
             std::string("vkCreateShaderModule failed for ") + name);
     }
-    shaderc_result_release(result);
-    shaderc_compiler_release(compiler);
     return shader_module;
 #endif
 }   // loadShader
