@@ -29,6 +29,8 @@ private:
 
     size_t m_skinning_vbo_offset;
 
+    size_t m_aabb_offset;
+
     VkBuffer m_buffer;
 
     VmaAllocation m_memory;
@@ -41,6 +43,7 @@ public:
         m_vbo_offset = 0;
         m_ibo_offset = 0;
         m_skinning_vbo_offset = 0;
+        m_aabb_offset = 0;
         m_buffer = VK_NULL_HANDLE;
         m_memory = VK_NULL_HANDLE;
         m_has_skinning = false;
@@ -173,6 +176,10 @@ public:
     void setIBOOffset(size_t offset)                 { m_ibo_offset = offset; }
     // ------------------------------------------------------------------------
     virtual size_t getIBOOffset() const                { return m_ibo_offset; }
+    // ------------------------------------------------------------------------
+    void setAABBOffset(size_t offset)               { m_aabb_offset = offset; }
+    // ------------------------------------------------------------------------
+    virtual size_t getAABBOffset() const              { return m_aabb_offset; }
     // ------------------------------------------------------------------------
     bool hasSkinning() const                         { return m_has_skinning; }
     // ------------------------------------------------------------------------
