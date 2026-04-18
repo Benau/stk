@@ -25,7 +25,7 @@ GEVulkanMeshCache::GEVulkanMeshCache()
     m_ge_cache_time = 0;
     m_buffer = VK_NULL_HANDLE;
     m_memory = VK_NULL_HANDLE;
-    m_ibo_offset = m_skinning_vbo_offset = 0;
+    m_ibo_offset = m_skinning_vbo_offset = m_aabb_offset = m_aabb_size = 0;
 }   // init
 
 // ----------------------------------------------------------------------------
@@ -75,6 +75,16 @@ void GEVulkanMeshCache::updateCache()
         {
             return !mb->hasSkinning();
         });
+    size_t aabb_size = 0;
+    size_t aabb_ssbo_padding = 0;
+    if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
+    {
+        aabb_size = buffers.size() * sizeof(core::aabbox3df);
+        aabb_ssbo_padding = getPadding(vbo_size + ibo_size,
+            m_vk->getPhysicalDeviceProperties().limits.
+            minStorageBufferOffsetAlignment);
+        aabb_size += aabb_ssbo_padding;
+    }
 
     VkBuffer staging_buffer = VK_NULL_HANDLE;
     VmaAllocation staging_memory = VK_NULL_HANDLE;
@@ -85,10 +95,10 @@ void GEVulkanMeshCache::updateCache()
         VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
     staging_buffer_create_info.preferredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 
-    if (!m_vk->createBuffer(vbo_size + ibo_size,
+    if (!m_vk->createBuffer(vbo_size + ibo_size + aabb_size,
         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT, staging_buffer_create_info,
-        staging_buffer, staging_memory))
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        staging_buffer_create_info, staging_buffer, staging_memory))
         throw std::runtime_error("updateCache create staging buffer failed");
 
     uint8_t* mapped;
@@ -141,19 +151,35 @@ void GEVulkanMeshCache::updateCache()
     assert(static_vertex_offset < m_skinning_vbo_offset);
     m_skinning_vbo_offset -= static_vertex_offset;
 
+    if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
+    {
+        m_aabb_offset = vbo_size + ibo_size + aabb_ssbo_padding;
+        offset = m_aabb_offset;
+        for (unsigned i = 0; i < buffers.size(); i++)
+        {
+            buffers[i]->setAABBOffset(i);
+            memcpy(mapped + offset, &buffers[i]->getBoundingBox(),
+                sizeof(core::aabbox3df));
+            offset += sizeof(core::aabbox3df);
+        }
+        m_aabb_size = offset - m_aabb_offset;
+        assert(m_aabb_size == buffers.size() * sizeof(core::aabbox3df));
+    }
+
     vmaUnmapMemory(m_vk->getVmaAllocator(), staging_memory);
     vmaFlushAllocation(m_vk->getVmaAllocator(), staging_memory, 0, offset);
 
     VmaAllocationCreateInfo local_create_info = {};
     local_create_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     local_create_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-    if (!m_vk->createBuffer(vbo_size + ibo_size,
+    if (!m_vk->createBuffer(vbo_size + ibo_size + aabb_size,
         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT, local_create_info, m_buffer,
-        m_memory))
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        local_create_info, m_buffer, m_memory))
         throw std::runtime_error("updateCache create buffer failed");
 
-    m_vk->copyBuffer(staging_buffer, m_buffer, vbo_size + ibo_size);
+    m_vk->copyBuffer(staging_buffer, m_buffer,
+        vbo_size + ibo_size + aabb_size);
     vmaDestroyBuffer(m_vk->getVmaAllocator(), staging_buffer, staging_memory);
 }   // updateCache
 
@@ -185,7 +211,7 @@ void GEVulkanMeshCache::destroy()
     }
     m_vk->setDisableWaitIdle(false);
 
-    m_ibo_offset = m_skinning_vbo_offset = 0;
+    m_ibo_offset = m_skinning_vbo_offset = m_aabb_offset = m_aabb_size = 0;
 }   // destroy
 
 }

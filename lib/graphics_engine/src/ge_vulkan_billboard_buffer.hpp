@@ -22,6 +22,9 @@ public:
     virtual size_t getIBOOffset() const
                                  { return m_billboard_buffer->getIBOOffset(); }
     // ------------------------------------------------------------------------
+    virtual size_t getAABBOffset() const
+                                { return m_billboard_buffer->getAABBOffset(); }
+    // ------------------------------------------------------------------------
     virtual VkBuffer getVkBuffer() const
                                   { return m_billboard_buffer->getVkBuffer(); }
 };
