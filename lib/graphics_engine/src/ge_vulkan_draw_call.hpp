@@ -113,7 +113,6 @@ struct DrawCallData
 {
     VkDrawIndexedIndirectCommand m_cmd;
     std::string m_shader;
-    std::string m_sorting_key;
     GESPMBuffer* m_mb;
     int m_material_id;
     uint32_t m_dynamic_offset;
@@ -153,7 +152,7 @@ protected:
         std::vector<std::pair<irr::scene::ISceneNode*, int> > > >
         m_visible_nodes;
 
-    std::map<std::pair<GESPMBuffer*, TexturesList>, irr::scene::IMesh*> m_mb_map;
+    std::map<GESPMBuffer*, irr::scene::IMesh*> m_mb_map;
 
     std::map<std::string, std::vector<
         std::pair<GEVulkanDynamicSPMBuffer*, irr::scene::ISceneNode*> > >
