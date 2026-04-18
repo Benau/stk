@@ -40,7 +40,14 @@ private:
     unsigned m_camera_ubo_count;
 
     const unsigned m_ubo_padding;
+    // ------------------------------------------------------------------------
+    static const unsigned getFrustumSize()    { return sizeof(float) * 4 * 6; }
 public:
+    // ------------------------------------------------------------------------
+    static const unsigned getCameraUBOSize()
+    {
+        return sizeof(GEVulkanCameraUBO) + getFrustumSize();
+    }
     // ------------------------------------------------------------------------
     GEVulkanCameraSceneNode(irr::scene::ISceneNode* parent,
                             irr::scene::ISceneManager* mgr, irr::s32 id,

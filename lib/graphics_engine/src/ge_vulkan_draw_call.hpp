@@ -365,6 +365,8 @@ public:
     GEVulkanShadowFBO* getShadowFBO() const            { return m_shadow_fbo; }
     // ------------------------------------------------------------------------
     void setCameraUBOOffset(unsigned offset)  { m_camera_ubo_offset = offset; }
+    // ------------------------------------------------------------------------
+    GECullingTool* getCullingTool() const            { return m_culling_tool; }
 
 };   // GEVulkanDrawCall
 

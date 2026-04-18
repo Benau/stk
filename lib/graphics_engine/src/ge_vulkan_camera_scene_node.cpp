@@ -1,6 +1,7 @@
 #include "ge_vulkan_camera_scene_node.hpp"
 
 #include "ge_main.hpp"
+#include "ge_culling_tool.hpp"
 #include "ge_vulkan_draw_call.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_dynamic_buffer.hpp"
@@ -17,7 +18,7 @@ GEVulkanCameraSceneNode::GEVulkanCameraSceneNode(irr::scene::ISceneNode* parent,
                                            const irr::core::vector3df& position,
                                              const irr::core::vector3df& lookat)
                        : CCameraSceneNode(parent, mgr, id, position, lookat),
-                         m_ubo_padding(getPadding(sizeof(GEVulkanCameraUBO),
+                         m_ubo_padding(getPadding(getCameraUBOSize(),
                          getVKDriver()->getPhysicalDeviceProperties().limits.
                          minUniformBufferOffsetAlignment))
 {
@@ -129,9 +130,11 @@ void GEVulkanCameraSceneNode::collectUBO(GEVulkanDriver* vk,
 
     dc->setCameraUBOOffset(0);
     data_uploading.emplace_back(&m_ubo_data, sizeof(GEVulkanCameraUBO));
+    data_uploading.emplace_back(dc->getCullingTool()->getFrustumData(),
+        getFrustumSize());
     if (m_ubo_padding > 0)
         data_uploading.emplace_back((void*)NULL, m_ubo_padding);
-    offset += sizeof(GEVulkanCameraUBO) + m_ubo_padding;
+    offset += getCameraUBOSize() + m_ubo_padding;
     m_camera_ubo_count++;
 
     GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
@@ -143,9 +146,11 @@ void GEVulkanCameraSceneNode::collectUBO(GEVulkanDriver* vk,
             sdc->setCameraUBOOffset(offset);
             data_uploading.emplace_back(sfbo->getCameraUBO(i),
                 sizeof(GEVulkanCameraUBO));
+            data_uploading.emplace_back(
+                sdc->getCullingTool()->getFrustumData(), getFrustumSize());
             if (m_ubo_padding > 0)
                 data_uploading.emplace_back((void*)NULL, m_ubo_padding);
-            offset += sizeof(GEVulkanCameraUBO) + m_ubo_padding;
+            offset += getCameraUBOSize() + m_ubo_padding;
             m_camera_ubo_count++;
         }
     }
