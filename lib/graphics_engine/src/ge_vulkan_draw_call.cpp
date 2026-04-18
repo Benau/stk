@@ -2122,7 +2122,7 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
             cam->getCameraUBO()->getHostBuffer()[i] :
             cam->getCameraUBO()->getLocalBuffer()[i];
         ubo_info.offset = 0;
-        ubo_info.range = sizeof(GEVulkanCameraUBO);
+        ubo_info.range = GEVulkanCameraSceneNode::getCameraUBOSize();
 
         std::vector<VkWriteDescriptorSet> data_set;
         data_set.resize(3, {});

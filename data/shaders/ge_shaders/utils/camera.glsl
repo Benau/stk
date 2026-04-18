@@ -7,6 +7,6 @@ layout(std140, set = 1, binding = 0) uniform CameraBuffer
     mat4 m_projection_view_matrix;
     mat4 m_inverse_projection_view_matrix;
     vec4 m_viewport;
-    vec2 m_screensize;
-    vec2 m_padding;
+    vec4 m_screensize;
+    vec4 m_frustum[6];
 } u_camera;

@@ -242,8 +242,8 @@ void main()
         }
 
         vec4 result;
-        vec2 viewport_scale = u_camera.m_viewport.zw / u_camera.m_screensize;
-        vec2 viewport_offset = u_camera.m_viewport.xy / u_camera.m_screensize;
+        vec2 viewport_scale = u_camera.m_viewport.zw / u_camera.m_screensize.xy;
+        vec2 viewport_offset = u_camera.m_viewport.xy / u_camera.m_screensize.xy;
         bool hit = true;
         vec2 coords;
         if (u_hiz_iterations == 0)
