@@ -333,7 +333,7 @@ void GEVulkanDrawCall::addNode(irr::scene::ISceneNode* node)
         TexturesList t = getTexturesList(m);
         std::pair<GESPMBuffer*, TexturesList> k = std::make_pair(buffer, t);
         m_visible_nodes[k][shader].emplace_back(node, i);
-        m_mb_map[k] = mesh;
+        m_mb_map[buffer] = mesh;
         if (anode && !added_skinning &&
             !anode->getSkinningMatrices().empty() &&
             m_skinning_nodes.find(anode) == m_skinning_nodes.end())
@@ -377,38 +377,91 @@ void GEVulkanDrawCall::generate(GEVulkanDriver* vk)
     if (m_light_handler)
          m_light_handler->generate(m_view_position, m_skybox_renderer);
 
-    using Nodes = std::pair<std::pair<GESPMBuffer*, TexturesList>, std::unordered_map<
-        std::string, std::vector<std::pair<irr::scene::ISceneNode*, int
-        > > > >;
-    std::vector<Nodes> visible_nodes;
+    using ShaderNodes = std::pair<
+        std::string, std::vector<std::pair<irr::scene::ISceneNode*, int> > >;
+    using MeshBufferMaterial = std::pair<GESPMBuffer*, int>;
+    using ShaderNodesMeshBufferMaterial =
+        std::pair<ShaderNodes, MeshBufferMaterial>;
 
-    for (auto& p : m_visible_nodes)
-        visible_nodes.emplace_back(p.first, std::move(p.second));
+    std::vector<ShaderNodesMeshBufferMaterial> visible_nodes;
     std::unordered_map<GESPMBuffer*, float> nodes_area;
-    for (auto& p : visible_nodes)
+    for (auto& p : m_visible_nodes)
     {
+        GESPMBuffer* mb = p.first.first;
+        if (nodes_area.find(mb) == nodes_area.end())
+            nodes_area[mb] = 0.0f;
         if (p.second.empty())
-        {
-            nodes_area[p.first.first] = std::numeric_limits<float>::max();
             continue;
-        }
         for (auto& q : p.second)
         {
-            if (q.second.empty())
+            if (!q.second.empty())
             {
-                nodes_area[p.first.first] = std::numeric_limits<float>::max();
-                continue;
+                irr::core::aabbox3df bb = mb->getBoundingBox();
+                q.second[0].first->getAbsoluteTransformation()
+                    .transformBoxEx(bb);
+                nodes_area[mb] += bb.getArea() * (float)q.second.size();
             }
-            irr::core::aabbox3df bb = p.first.first->getBoundingBox();
-            q.second[0].first->getAbsoluteTransformation().transformBoxEx(bb);
-            nodes_area[p.first.first] = bb.getArea() * (float)q.second.size();
-            break;
+            else
+                continue;
+
+            std::string shader = q.first;
+            TexturesList textures = p.first.second;
+            const irr::video::ITexture** list = &textures[0];
+            int material_id = m_texture_descriptor->getTextureID(list, shader);
+            bool skinning = p.first.first->hasSkinning();
+            if (skinning)
+            {
+                bool anode = false;
+                for (auto& r : q.second)
+                {
+                    anode = anode ||
+                        r.first->getType() == irr::scene::ESNT_ANIMATED_MESH;
+                    if (anode)
+                        break;
+                }
+                if (!anode)
+                    skinning = false;
+            }
+            if (skinning)
+                shader += SKINNING_PIPELINE;
+            if (m_graphics_pipelines.find(shader) ==
+                m_graphics_pipelines.end())
+                continue;
+            const PipelineSettings& settings =
+                m_graphics_pipelines[shader].m_settings;
+            std::string sorting_key =
+                std::string(1, settings.m_drawing_priority) + shader;
+            visible_nodes.emplace_back(
+                std::make_pair(sorting_key, std::move(q.second)),
+                std::make_pair(mb, material_id));
         }
     }
+
     std::stable_sort(visible_nodes.begin(), visible_nodes.end(),
-        [&nodes_area](const Nodes& a, const Nodes& b)
+        [&nodes_area](const ShaderNodesMeshBufferMaterial& a,
+            const ShaderNodesMeshBufferMaterial& b)
         {
-            return nodes_area.at(a.first.first) < nodes_area.at(b.first.first);
+            return nodes_area.at(a.second.first) <
+                nodes_area.at(b.second.first);
+        });
+
+    const bool bind_mesh_textures =
+        GEVulkanFeatures::supportsBindMeshTexturesAtOnce();
+    if (!bind_mesh_textures)
+    {
+        std::stable_sort(visible_nodes.begin(), visible_nodes.end(),
+            [](const ShaderNodesMeshBufferMaterial& a,
+                const ShaderNodesMeshBufferMaterial& b)
+            {
+                return a.second.second < b.second.second;
+            });
+    }
+
+    std::stable_sort(visible_nodes.begin(), visible_nodes.end(),
+        [](const ShaderNodesMeshBufferMaterial& a,
+            const ShaderNodesMeshBufferMaterial& b)
+        {
+            return a.first.first < b.first.first;
         });
 
     size_t min_size = 0;
@@ -511,8 +564,6 @@ start:
     m_dynamic_spm_padded_size = written_size - skinning_data_padded_size;
 
     const bool use_base_vertex = GEVulkanFeatures::supportsBaseVertexRendering();
-    const bool bind_mesh_textures =
-        GEVulkanFeatures::supportsBindMeshTexturesAtOnce();
     unsigned accumulated_instance = 0;
 
     struct InstanceKey
@@ -529,136 +580,69 @@ start:
     std::unordered_map<uint32_t, uint32_t> offset_map;
     for (auto& p : visible_nodes)
     {
-        GESPMBuffer* mb = p.first.first;
-        TexturesList& textures = p.first.second;
-        const irr::video::ITexture** list = &textures[0];
-        const bool skinning = mb->hasSkinning();
-        for (auto& q : p.second)
+        GESPMBuffer* mb = p.second.first;
+        int material_id = p.second.second;
+        unsigned visible_count = p.first.second.size();
+        InstanceKey key;
+        key.m_nodes.reserve(visible_count);
+        key.m_instance_count = visible_count;
+        key.m_first_instance = accumulated_instance;
+        key.m_hue_change = false;
+        bool skip_instance_key = false;
+        for (auto& q : p.first.second)
         {
-            unsigned visible_count = q.second.size();
-            if (visible_count == 0)
-                continue;
-            std::string cur_shader = q.first;
-            int material_id = m_texture_descriptor->getTextureID(list,
-                cur_shader);
-            if (skinning)
-                cur_shader += SKINNING_PIPELINE;
-            if (m_graphics_pipelines.find(cur_shader) ==
-                m_graphics_pipelines.end())
-                continue;
-            InstanceKey key;
-            key.m_nodes.reserve(q.second.size());
-            key.m_instance_count = visible_count;
-            key.m_first_instance = accumulated_instance;
-            key.m_hue_change = false;
-            bool skip_instance_key = false;
-            for (auto& r : q.second)
+            if (q.second == BILLBOARD_NODE || q.second == PARTICLE_NODE)
             {
-                if (r.second == BILLBOARD_NODE || r.second == PARTICLE_NODE)
-                {
-                    skip_instance_key = true;
-                    break;
-                }
-                irr::scene::ISceneNode* node = r.first;
-                const irr::core::matrix4& texture_matrix =
-                    node->getMaterial(r.second).getTextureMatrix(0);
-                if (texture_matrix[8] != 0.0f || texture_matrix[9] != 0.0f)
-                {
-                    skip_instance_key = true;
-                    break;
-                }
-                auto& ri = node->getMaterial(r.second).getRenderInfo();
-                if (ri && ri->getHue() > 0.0f)
-                {
-                    key.m_hue_change = true;
-                    break;
-                }
-                key.m_nodes.push_back(node);
+                skip_instance_key = true;
+                break;
             }
-            irr::scene::IMesh* m = m_mb_map[std::make_pair(mb, textures)];
-            auto& cur_key = instance_keys[m];
-            auto it = cur_key.end();
-            if (!skip_instance_key)
+            irr::scene::ISceneNode* node = q.first;
+            const irr::core::matrix4& texture_matrix =
+                node->getMaterial(q.second).getTextureMatrix(0);
+            if (texture_matrix[8] != 0.0f || texture_matrix[9] != 0.0f)
             {
-                it = std::find_if(cur_key.begin(), cur_key.end(),
-                    [key](const InstanceKey& k)
-                    {
-                        return k.m_nodes == key.m_nodes &&
-                            k.m_instance_count == key.m_instance_count &&
-                            k.m_hue_change == key.m_hue_change;
-                    });
+                skip_instance_key = true;
+                break;
             }
-            const PipelineSettings& settings =
-                m_graphics_pipelines[cur_shader].m_settings;
-            for (auto& r : q.second)
+            auto& ri = node->getMaterial(q.second).getRenderInfo();
+            if (ri && ri->getHue() > 0.0f)
             {
-                irr::scene::ISceneNode* node = r.first;
-                if (r.second == BILLBOARD_NODE || r.second == PARTICLE_NODE)
+                key.m_hue_change = true;
+                break;
+            }
+            key.m_nodes.push_back(node);
+        }
+        irr::scene::IMesh* m = m_mb_map[mb];
+        auto& cur_key = instance_keys[m];
+        auto it = cur_key.end();
+        if (!skip_instance_key)
+        {
+            it = std::find_if(cur_key.begin(), cur_key.end(),
+                [key](const InstanceKey& k)
                 {
-                    if (GEVulkanFeatures::supportsDifferentTexturePerDraw())
-                    {
-                        const irr::video::SMaterial& m = node->getMaterial(0);
-                        TexturesList textures = getTexturesList(m);
-                        const irr::video::ITexture** list = &textures[0];
-                        material_id = m_texture_descriptor->getTextureID(list,
-                            getShader(m));
-                    }
-                    if (r.second == BILLBOARD_NODE)
-                    {
-                        if (written_size + sizeof(ObjectData) >
-                            m_sbo_data->getSize())
-                        {
-                            min_size = (written_size + sizeof(ObjectData)) * 2;
-                            goto start;
-                        }
-                        ObjectData* obj = (ObjectData*)mapped_addr;
-                        obj->init(
-                            static_cast<irr::scene::IBillboardSceneNode*>(
-                            node), material_id, m_billboard_rotation);
-                        written_size += sizeof(ObjectData);
-                        mapped_addr += sizeof(ObjectData);
-                    }
-                    else
-                    {
-                        irr::scene::IParticleSystemSceneNode* pn =
-                            static_cast<irr::scene::IParticleSystemSceneNode*>(
-                            node);
-                        const core::array<SParticle>& particles =
-                            pn->getParticles();
-                        unsigned ps = particles.size();
-                        if (ps == 0)
-                        {
-                            visible_count--;
-                            continue;
-                        }
-                        visible_count += ps - 1;
-                        if (written_size + sizeof(ObjectData) * ps >
-                            m_sbo_data->getSize())
-                        {
-                            min_size =
-                                (written_size + sizeof(ObjectData) * ps) * 2;
-                            goto start;
-                        }
-                        ObjectData* obj = (ObjectData*)mapped_addr;
-                        bool flips = pn->getFlips();
-                        bool sky_particle = pn->isSkyParticle();
-                        for (unsigned i = 0; i < ps; i++)
-                        {
-                            obj[i].init(particles[i], material_id,
-                                m_billboard_rotation, m_view_position, flips,
-                                sky_particle,
-                                settings.m_material->m_backface_culling);
-                            written_size += sizeof(ObjectData);
-                            mapped_addr += sizeof(ObjectData);
-                        }
-                    }
+                    return k.m_nodes == key.m_nodes &&
+                        k.m_instance_count == key.m_instance_count &&
+                        k.m_hue_change == key.m_hue_change;
+                });
+        }
+        std::string cur_shader = p.first.first.substr(1);
+        const PipelineSettings& settings =
+            m_graphics_pipelines[cur_shader].m_settings;
+        for (auto& q : p.first.second)
+        {
+            irr::scene::ISceneNode* node = q.first;
+            if (q.second == BILLBOARD_NODE || q.second == PARTICLE_NODE)
+            {
+                if (GEVulkanFeatures::supportsDifferentTexturePerDraw())
+                {
+                    const irr::video::SMaterial& m = node->getMaterial(0);
+                    TexturesList textures = getTexturesList(m);
+                    const irr::video::ITexture** list = &textures[0];
+                    material_id = m_texture_descriptor->getTextureID(list,
+                        getShader(m));
                 }
-                else if (skip_instance_key || it == cur_key.end())
+                if (q.second == BILLBOARD_NODE)
                 {
-                    int skinning_offset = -1000;
-                    auto it = skinning_offets.find(node);
-                    if (it != skinning_offets.end())
-                        skinning_offset = it->second;
                     if (written_size + sizeof(ObjectData) >
                         m_sbo_data->getSize())
                     {
@@ -666,64 +650,101 @@ start:
                         goto start;
                     }
                     ObjectData* obj = (ObjectData*)mapped_addr;
-                    obj->init(node, bind_mesh_textures ? -1 : material_id,
-                        skinning_offset, r.second);
+                    obj->init(
+                        static_cast<irr::scene::IBillboardSceneNode*>(
+                        node), material_id, m_billboard_rotation);
                     written_size += sizeof(ObjectData);
                     mapped_addr += sizeof(ObjectData);
                 }
-            }
-            VkDrawIndexedIndirectCommand cmd;
-            cmd.indexCount = mb->getIndexCount();
-            cmd.instanceCount = visible_count;
-            cmd.firstIndex = use_base_vertex ? mb->getIBOOffset() : 0;
-            cmd.vertexOffset = use_base_vertex ? mb->getVBOOffset() : 0;
-            if (skip_instance_key || it == cur_key.end())
-            {
-                cmd.firstInstance = accumulated_instance;
-                if (!use_base_vertex)
+                else
                 {
-                    offset_map[accumulated_instance] = instance_offset;
-                    size_t instance_padding = getPadding(written_size,
-                        sbo_alignment);
-                    if (instance_padding > 0)
+                    irr::scene::IParticleSystemSceneNode* pn =
+                        static_cast<irr::scene::IParticleSystemSceneNode*>(
+                        node);
+                    const core::array<SParticle>& particles =
+                        pn->getParticles();
+                    unsigned ps = particles.size();
+                    if (ps == 0)
                     {
-                        if (written_size + instance_padding >
-                            m_sbo_data->getSize())
-                        {
-                            min_size = (written_size + instance_padding) * 2;
-                            goto start;
-                        }
-                        written_size += instance_padding;
-                        mapped_addr += instance_padding;
+                        visible_count--;
+                        continue;
                     }
-                    instance_offset = mapped_addr - instance_start_ptr;
+                    visible_count += ps - 1;
+                    if (written_size + sizeof(ObjectData) * ps >
+                        m_sbo_data->getSize())
+                    {
+                        min_size =
+                            (written_size + sizeof(ObjectData) * ps) * 2;
+                        goto start;
+                    }
+                    ObjectData* obj = (ObjectData*)mapped_addr;
+                    bool flips = pn->getFlips();
+                    bool sky_particle = pn->isSkyParticle();
+                    for (unsigned i = 0; i < ps; i++)
+                    {
+                        obj[i].init(particles[i], material_id,
+                            m_billboard_rotation, m_view_position, flips,
+                            sky_particle,
+                            settings.m_material->m_backface_culling);
+                        written_size += sizeof(ObjectData);
+                        mapped_addr += sizeof(ObjectData);
+                    }
                 }
-                accumulated_instance += visible_count;
             }
-            else
-                cmd.firstInstance = it->m_first_instance;
-            std::string sorting_key =
-                std::string(1, settings.m_drawing_priority) + cur_shader;
-            m_cmds.push_back({ cmd, cur_shader, sorting_key, mb, material_id,
-                offset_map[cmd.firstInstance] });
-            if (!skip_instance_key && it == cur_key.end())
-                 cur_key.push_back(key);
-        }
-    }
-    if (!bind_mesh_textures)
-    {
-        std::stable_sort(m_cmds.begin(), m_cmds.end(),
-            [this](const DrawCallData& a, const DrawCallData& b)
+            else if (skip_instance_key || it == cur_key.end())
             {
-                return a.m_material_id < b.m_material_id;
-            });
-    }
-
-    std::stable_sort(m_cmds.begin(), m_cmds.end(),
-        [](const DrawCallData& a, const DrawCallData& b)
+                int skinning_offset = -1000;
+                auto it = skinning_offets.find(node);
+                if (it != skinning_offets.end())
+                    skinning_offset = it->second;
+                if (written_size + sizeof(ObjectData) >
+                    m_sbo_data->getSize())
+                {
+                    min_size = (written_size + sizeof(ObjectData)) * 2;
+                    goto start;
+                }
+                ObjectData* obj = (ObjectData*)mapped_addr;
+                obj->init(node, bind_mesh_textures ? -1 : material_id,
+                    skinning_offset, q.second);
+                written_size += sizeof(ObjectData);
+                mapped_addr += sizeof(ObjectData);
+            }
+        }
+        VkDrawIndexedIndirectCommand cmd;
+        cmd.indexCount = mb->getIndexCount();
+        cmd.instanceCount = visible_count;
+        cmd.firstIndex = use_base_vertex ? mb->getIBOOffset() : 0;
+        cmd.vertexOffset = use_base_vertex ? mb->getVBOOffset() : 0;
+        if (skip_instance_key || it == cur_key.end())
         {
-            return a.m_sorting_key < b.m_sorting_key;
-        });
+            cmd.firstInstance = accumulated_instance;
+            if (!use_base_vertex)
+            {
+                offset_map[accumulated_instance] = instance_offset;
+                size_t instance_padding = getPadding(written_size,
+                    sbo_alignment);
+                if (instance_padding > 0)
+                {
+                    if (written_size + instance_padding >
+                        m_sbo_data->getSize())
+                    {
+                        min_size = (written_size + instance_padding) * 2;
+                        goto start;
+                    }
+                    written_size += instance_padding;
+                    mapped_addr += instance_padding;
+                }
+                instance_offset = mapped_addr - instance_start_ptr;
+            }
+            accumulated_instance += visible_count;
+        }
+        else
+            cmd.firstInstance = it->m_first_instance;
+        m_cmds.push_back({ cmd, cur_shader, mb, material_id,
+            offset_map[cmd.firstInstance] });
+        if (!skip_instance_key && it == cur_key.end())
+             cur_key.push_back(key);
+    }
 
     size_t object_data_padded_size = written_size - skinning_data_padded_size;
     if (object_data_padded_size > m_object_data_padded_size)
