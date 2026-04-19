@@ -166,7 +166,7 @@ protected:
 
     std::vector<ObjectData> m_visible_objects;
 
-    GEVulkanDynamicBuffer* m_dynamic_data;
+    GEVulkanDynamicBuffer* m_indirect_buffer;
 
     GEVulkanDynamicBuffer* m_sbo_data;
 
@@ -181,6 +181,8 @@ protected:
     size_t m_dynamic_spm_padded_size;
 
     unsigned m_camera_ubo_offset;
+
+    unsigned m_light_data_offset;
 
     std::weak_ptr<bool> m_camera_ubo_observer;
 
@@ -297,7 +299,7 @@ public:
     // ------------------------------------------------------------------------
     void generate(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
-    void uploadDynamicData(GEVulkanDriver* vk,
+    void uploadDynamicData(GEVulkanDriver* vk, bool& has_indirect,
                            VkCommandBuffer custom_cmd = VK_NULL_HANDLE);
     // ------------------------------------------------------------------------
     virtual bool doDepthOnlyRenderingFirst();
@@ -366,6 +368,8 @@ public:
     void setCameraUBOOffset(unsigned offset)  { m_camera_ubo_offset = offset; }
     // ------------------------------------------------------------------------
     GECullingTool* getCullingTool() const            { return m_culling_tool; }
+    // ------------------------------------------------------------------------
+    void setLightDataOffset(unsigned offset)  { m_light_data_offset = offset; }
 
 };   // GEVulkanDrawCall
 

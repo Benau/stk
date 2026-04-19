@@ -6,6 +6,7 @@
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_dynamic_buffer.hpp"
 #include "ge_vulkan_fbo_texture.hpp"
+#include "ge_vulkan_light_handler.hpp"
 #include "ge_vulkan_scene_manager.hpp"
 #include "ge_vulkan_shadow_fbo.hpp"
 
@@ -124,20 +125,32 @@ void GEVulkanCameraSceneNode::collectUBO(GEVulkanDriver* vk,
                                          GEVulkanDrawCall* dc,
                                          VkCommandBuffer cmd)
 {
-    m_camera_ubo_count = 0;
-    unsigned offset = 0;
     std::vector<std::pair<void*, size_t> > data_uploading;
 
-    dc->setCameraUBOOffset(0);
+    GEVulkanLightHandler* lh = dc->getLightHandler();
+    GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
+
+    unsigned max_size = getPaddedCameraUBOSize();
+    m_camera_ubo_count = 1;
+
+    if (lh)
+        max_size += GEVulkanLightHandler::getMaxSize();
+    if (sfbo)
+    {
+        m_camera_ubo_count += sfbo->getDrawCallCount();
+        max_size += getPaddedCameraUBOSize() * sfbo->getDrawCallCount();
+    }
+    m_camera_ubo->resizeIfNeeded(max_size);
+
+    unsigned offset = 0;
+    dc->setCameraUBOOffset(offset);
     data_uploading.emplace_back(&m_ubo_data, sizeof(GEVulkanCameraUBO));
     data_uploading.emplace_back(dc->getCullingTool()->getFrustumData(),
         getFrustumSize());
     if (m_ubo_padding > 0)
         data_uploading.emplace_back((void*)NULL, m_ubo_padding);
-    offset += getCameraUBOSize() + m_ubo_padding;
-    m_camera_ubo_count++;
+    offset += getPaddedCameraUBOSize();
 
-    GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
     if (sfbo)
     {
         for (unsigned i = 0; i < sfbo->getDrawCallCount(); i++)
@@ -150,10 +163,18 @@ void GEVulkanCameraSceneNode::collectUBO(GEVulkanDriver* vk,
                 sdc->getCullingTool()->getFrustumData(), getFrustumSize());
             if (m_ubo_padding > 0)
                 data_uploading.emplace_back((void*)NULL, m_ubo_padding);
-            offset += getCameraUBOSize() + m_ubo_padding;
-            m_camera_ubo_count++;
+            offset += getPaddedCameraUBOSize();
         }
     }
+
+    if (lh)
+    {
+        data_uploading.emplace_back(lh->getData(), lh->getSize());
+        dc->setLightDataOffset(offset);
+    }
+    else
+        dc->setLightDataOffset(0);
+
     if (cmd == VK_NULL_HANDLE)
         cmd = vk->getCurrentCommandBuffer();
     m_camera_ubo->setCurrentData(data_uploading, cmd,

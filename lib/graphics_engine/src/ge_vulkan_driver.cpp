@@ -2535,15 +2535,16 @@ void GEVulkanDriver::buildCommandBuffers()
     GEVulkan2dRenderer::uploadTrisBuffers();
     auto& dcp = static_cast<GEVulkanSceneManager*>(
         m_irrlicht_device->getSceneManager())->getDrawCalls();
+    bool has_indirect = false;
     for (auto& p : dcp)
     {
         p.first->collectUBO(this, p.second.get());
-        p.second->uploadDynamicData(this);
+        p.second->uploadDynamicData(this, has_indirect);
         GEVulkanShadowFBO* sfbo = p.second->getShadowFBO();
         if (sfbo)
-            sfbo->uploadDynamicData(getCurrentCommandBuffer());
+            sfbo->uploadDynamicData(getCurrentCommandBuffer(), has_indirect);
     }
-    insertBufferBarrier(getCurrentCommandBuffer());
+    insertBufferBarrier(getCurrentCommandBuffer(), has_indirect);
     for (auto& p : dcp)
     {
         GEVulkanShadowFBO* sfbo = p.second->getShadowFBO();
@@ -2957,7 +2958,8 @@ void GEVulkanDriver::createBillboardQuad()
 }   // createBillboardQuad
 
 // ----------------------------------------------------------------------------
-void GEVulkanDriver::insertBufferBarrier(VkCommandBuffer cmd)
+void GEVulkanDriver::insertBufferBarrier(VkCommandBuffer cmd,
+                                         bool has_indirect)
 {
     // https://github.com/google/filament/pull/3814
     // Need both vertex and fragment bit
@@ -2969,7 +2971,7 @@ void GEVulkanDriver::insertBufferBarrier(VkCommandBuffer cmd)
         barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
+        if (has_indirect)
         {
             barrier.dstAccessMask |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
             dst_stage |= VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;

@@ -89,7 +89,7 @@ public:
     // ------------------------------------------------------------------------
     virtual void generate();
     // ------------------------------------------------------------------------
-    void uploadDynamicData(VkCommandBuffer cmd);
+    void uploadDynamicData(VkCommandBuffer cmd, bool& has_indirect);
     // ------------------------------------------------------------------------
     void render(VkCommandBuffer cmd, GEVulkanCameraSceneNode* cam);
     // ------------------------------------------------------------------------
