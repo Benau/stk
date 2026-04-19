@@ -95,6 +95,9 @@ public:
     unsigned getCameraUBOCount() const           { return m_camera_ubo_count; }
     // ------------------------------------------------------------------------
     GEVulkanDynamicBuffer* getCameraUBO() const        { return m_camera_ubo; }
+    // ------------------------------------------------------------------------
+    unsigned getPaddedCameraUBOSize() const
+                                 { return getCameraUBOSize() + m_ubo_padding; }
 
 };   // GEVulkanCameraSceneNode
 

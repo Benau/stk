@@ -237,13 +237,14 @@ GEVulkanDrawCall::GEVulkanDrawCall()
 {
     m_culling_tool = new GECullingTool;
     m_light_handler = NULL;
-    m_dynamic_data = NULL;
+    m_indirect_buffer = NULL;
     m_sbo_data = NULL;
     m_object_data_padded_size = 0;
     m_skinning_data_padded_size = 0;
     m_materials_padded_size = 0;
     m_dynamic_spm_padded_size = 0;
     m_camera_ubo_offset = 0;
+    m_light_data_offset = 0;
     m_update_data_descriptor_sets = true;
     m_data_layout = VK_NULL_HANDLE;
     m_descriptor_pool = VK_NULL_HANDLE;
@@ -262,7 +263,7 @@ GEVulkanDrawCall::~GEVulkanDrawCall()
 {
     delete m_culling_tool;
     delete m_light_handler;
-    delete m_dynamic_data;
+    delete m_indirect_buffer;
     delete m_sbo_data;
     for (auto& p : m_billboard_buffers)
        p.second->drop();
@@ -1723,22 +1724,20 @@ void GEVulkanDrawCall::createVulkanData()
     }
     createAllPipelines(vk);
 
-    size_t extra_size = 0;
     const bool use_multidraw =
         GEVulkanFeatures::supportsBindMeshTexturesAtOnce();
-    VkBufferUsageFlags flags = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    VkBufferUsageFlags flags = 0;
     if (use_multidraw)
     {
-        flags |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
-        extra_size = 200 * sizeof(VkDrawIndexedIndirectCommand);
+        flags = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+        // Use VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+        // or a staging buffer when buffer is small
+        m_indirect_buffer = new GEVulkanDynamicBuffer(flags,
+            200 * sizeof(VkDrawIndexedIndirectCommand),
+            GEVulkanDriver::getMaxFrameInFlight() + 1,
+            GEVulkanDynamicBuffer::supportsHostTransfer() ? 0 :
+            GEVulkanDriver::getMaxFrameInFlight() + 1);
     }
-    // Use VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
-    // or a staging buffer when buffer is small
-    m_dynamic_data = new GEVulkanDynamicBuffer(flags,
-        extra_size + GEVulkanLightHandler::getMaxSize(),
-        GEVulkanDriver::getMaxFrameInFlight() + 1,
-        GEVulkanDynamicBuffer::supportsHostTransfer() ? 0 :
-        GEVulkanDriver::getMaxFrameInFlight() + 1);
 
     flags = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     // Using VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
@@ -1750,36 +1749,31 @@ void GEVulkanDrawCall::createVulkanData()
 
 // ----------------------------------------------------------------------------
 void GEVulkanDrawCall::uploadDynamicData(GEVulkanDriver* vk,
+                                         bool& has_indirect,
                                          VkCommandBuffer custom_cmd)
 {
-    if (!m_dynamic_data)
-        return;
-
     VkCommandBuffer cmd =
         custom_cmd ? custom_cmd : vk->getCurrentCommandBuffer();
-
-    std::vector<std::pair<void*, size_t> > data_uploading;
-    if (m_light_handler)
-    {
-        data_uploading.emplace_back(m_light_handler->getData(),
-            m_light_handler->getSize());
-    }
-
+    int current_buffer_idx = vk->getCurrentBufferIdx();
     const bool use_multidraw =
         GEVulkanFeatures::supportsBindMeshTexturesAtOnce();
-    if (use_multidraw)
+
+    if (m_indirect_buffer && use_multidraw)
     {
+        if (!has_indirect)
+            has_indirect = true;
+        std::vector<std::pair<void*, size_t> > data_uploading;
         for (auto& cmd : m_cmds)
         {
             data_uploading.emplace_back(
                 (void*)&cmd.m_cmd, sizeof(VkDrawIndexedIndirectCommand));
         }
+        m_indirect_buffer->setCurrentData(data_uploading, cmd,
+            current_buffer_idx);
     }
-    int current_buffer_idx = vk->getCurrentBufferIdx();
-    m_update_data_descriptor_sets =
-        m_dynamic_data->setCurrentData(data_uploading, cmd,
-        current_buffer_idx) || m_update_data_descriptor_sets;
 
+    if (!m_sbo_data)
+        return;
     const size_t whole_size = m_skinning_data_padded_size +
         m_object_data_padded_size + m_materials_padded_size;
     vmaFlushAllocation(vk->getVmaAllocator(),
@@ -1851,6 +1845,8 @@ std::vector<uint32_t> GEVulkanDrawCall::getDefaultDynamicOffsets() const
     else
         offsets = std::vector<uint32_t>(4, 0);
     offsets[0] = m_camera_ubo_offset;
+    if (m_light_handler != NULL)
+        offsets[3] = m_light_data_offset;
     return offsets;
 }   // getDefaultDynamicOffsets
 
@@ -1925,14 +1921,12 @@ void GEVulkanDrawCall::renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
     {
         cur_pipeline = m_cmds[0].m_shader;
         size_t indirect_offset = 0;
-        if (m_light_handler)
-            indirect_offset += m_light_handler->getSize();
         const size_t indirect_size = sizeof(VkDrawIndexedIndirectCommand);
         unsigned draw_count = 0;
         VkBuffer indirect_buffer =
             GEVulkanDynamicBuffer::supportsHostTransfer() ?
-            m_dynamic_data->getHostBuffer()[current_buffer_idx] :
-            m_dynamic_data->getLocalBuffer()[current_buffer_idx];
+            m_indirect_buffer->getHostBuffer()[current_buffer_idx] :
+            m_indirect_buffer->getLocalBuffer()[current_buffer_idx];
         for (unsigned i = 0; i < m_cmds.size(); i++)
         {
             bool is_last_cmd = (i == m_cmds.size() - 1);
@@ -2187,8 +2181,8 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
         {
             sbo_info_light.buffer =
                 GEVulkanDynamicBuffer::supportsHostTransfer() ?
-                m_dynamic_data->getHostBuffer()[i] :
-                m_dynamic_data->getLocalBuffer()[i];
+                cam->getCameraUBO()->getHostBuffer()[i] :
+                cam->getCameraUBO()->getLocalBuffer()[i];
             sbo_info_light.offset = 0;
             sbo_info_light.range = GEVulkanLightHandler::getMaxSize();
             data_set.push_back({});

@@ -214,11 +214,12 @@ void GEVulkanSceneManager::drawAll(irr::u32 flags)
         core::recti(0, 0, rtt->getSize().Width, rtt->getSize().Height));
     cam->render();
     cam->collectUBO(vk, dc.get(), cmd);
-    dc->uploadDynamicData(vk, cmd);
+    bool has_indirect = false;
+    dc->uploadDynamicData(vk, has_indirect, cmd);
     GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
     if (sfbo)
-        sfbo->uploadDynamicData(cmd);
-    vk->insertBufferBarrier(cmd);
+        sfbo->uploadDynamicData(cmd, has_indirect);
+    vk->insertBufferBarrier(cmd, has_indirect);
     if (sfbo)
         sfbo->render(cmd, cam);
 
