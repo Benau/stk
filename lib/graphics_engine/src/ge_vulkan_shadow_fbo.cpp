@@ -427,13 +427,14 @@ void GEVulkanShadowFBO::generate()
 }   // generate
 
 // ----------------------------------------------------------------------------
-void GEVulkanShadowFBO::uploadDynamicData(VkCommandBuffer cmd)
+void GEVulkanShadowFBO::uploadDynamicData(VkCommandBuffer cmd,
+                                          bool& has_indirect)
 {
     for (unsigned i = 0; i < m_shadow_draw_calls.size(); i++)
     {
         if (!m_shadow_draw_calls[i]->getRenderState())
             continue;
-        m_shadow_draw_calls[i]->uploadDynamicData(m_vk, cmd);
+        m_shadow_draw_calls[i]->uploadDynamicData(m_vk, has_indirect, cmd);
     }
 }   // uploadDynamicData
 
