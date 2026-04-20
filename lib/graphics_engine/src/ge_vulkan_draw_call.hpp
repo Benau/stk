@@ -137,7 +137,7 @@ private:
     // ------------------------------------------------------------------------
     virtual bool useDepthClamp() const                        { return false; }
     // ------------------------------------------------------------------------
-    virtual bool ignoreMaterial(const irr::video::SMaterial& m) const
+    virtual bool ignoreMaterial(irr::video::E_MATERIAL_TYPE mt) const
                                                               { return false; }
     // ------------------------------------------------------------------------
     size_t getDynamicSPMSize() const;
@@ -159,7 +159,7 @@ protected:
 
     btQuaternion m_billboard_rotation;
 
-    std::map<std::pair<GESPMBuffer*, TexturesList>, std::unordered_map<std::string,
+    std::map<std::pair<GESPMBuffer*, TexturesList>, std::unordered_map<uint32_t,
         std::vector<std::pair<irr::scene::ISceneNode*, int> > > >
         m_visible_nodes;
 
@@ -232,6 +232,11 @@ protected:
 
     GEVulkanHiZDepth* m_hiz_depth;
 
+    std::array<irr::video::E_MATERIAL_TYPE,
+        irr::video::EMT_MATERIAL_COUNT> m_fallback_materials;
+
+    // ------------------------------------------------------------------------
+    void initNonPBRFallbackMaterials();
     // ------------------------------------------------------------------------
     void createAllPipelines(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
@@ -239,11 +244,6 @@ protected:
       std::unordered_map<std::string, std::shared_ptr<VkPipeline> >& dp_cache);
     // ------------------------------------------------------------------------
     void createVulkanData();
-    // ------------------------------------------------------------------------
-    virtual const std::string& getShader(const irr::video::SMaterial& m) const;
-    // ------------------------------------------------------------------------
-    const std::string& getShader(irr::scene::ISceneNode* node,
-                                 int material_id) const;
     // ------------------------------------------------------------------------
     bool bindPipeline(VkCommandBuffer cmd, const std::string& name,
                       VkPipeline* prev_pipeline,

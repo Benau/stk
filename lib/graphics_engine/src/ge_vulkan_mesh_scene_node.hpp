@@ -11,6 +11,10 @@ class GEVulkanMeshSceneNode : public irr::scene::CMeshSceneNode
 {
 private:
     bool m_remove_from_mesh_cache;
+
+    std::weak_ptr<bool> m_transparency_observer;
+
+    irr::core::array<irr::video::E_MATERIAL_TYPE> m_ge_materials;
 public:
     // ------------------------------------------------------------------------
     GEVulkanMeshSceneNode(irr::scene::IMesh* mesh,
@@ -23,9 +27,21 @@ public:
     // ------------------------------------------------------------------------
     void setRemoveFromMeshCache(bool val)   { m_remove_from_mesh_cache = val; }
     // ------------------------------------------------------------------------
-    GESPM* getSPM() const;
-    // ------------------------------------------------------------------------
     virtual void OnRegisterSceneNode();
+    // ------------------------------------------------------------------------
+    virtual void setMesh(irr::scene::IMesh* mesh)
+    {
+        CMeshSceneNode::setMesh(mesh);
+        m_transparency_observer.reset();
+        m_ge_materials.clear();
+    }
+    // ------------------------------------------------------------------------
+    virtual irr::video::E_MATERIAL_TYPE getMaterialType(irr::u32 i)
+    {
+        if (m_ge_materials.empty())
+            return CMeshSceneNode::getMaterialType(i);
+        return m_ge_materials[i];
+    }
 };   // GEVulkanMeshSceneNode
 
 }

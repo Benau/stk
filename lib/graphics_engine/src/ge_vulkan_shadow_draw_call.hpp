@@ -34,7 +34,7 @@ private:
     // ------------------------------------------------------------------------
     virtual void prepare(GEVulkanCameraSceneNode* cam)       { assert(false); }
     // ------------------------------------------------------------------------
-    virtual bool ignoreMaterial(const irr::video::SMaterial& m) const;
+    virtual bool ignoreMaterial(irr::video::E_MATERIAL_TYPE mt) const;
 
 public:
     // ------------------------------------------------------------------------
@@ -44,8 +44,6 @@ public:
     virtual ~GEVulkanShadowDrawCall() {}
     // ------------------------------------------------------------------------
     virtual void prepareShadow(unsigned layer);
-    // ------------------------------------------------------------------------
-    virtual const std::string& getShader(const irr::video::SMaterial& m) const;
     // ------------------------------------------------------------------------
     virtual bool doDepthOnlyRenderingFirst()                   { return true; }
     // ------------------------------------------------------------------------

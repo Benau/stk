@@ -26,7 +26,6 @@ namespace scene
 	{
 	private:
 		core::array<u32> m_animation_set;
-		std::shared_ptr<GE::GERenderInfo> m_first_render_info;
 	public:
 
 		//! constructor
@@ -186,6 +185,8 @@ namespace scene
 		void buildFrameNr(u32 timeMs);
 		virtual void checkJoints();
 		void beginTransition();
+
+		std::shared_ptr<GE::GERenderInfo> m_first_render_info;
 
 		core::array<video::SMaterial> Materials;
 		core::aabbox3d<f32> Box;

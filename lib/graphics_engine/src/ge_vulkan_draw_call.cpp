@@ -257,6 +257,8 @@ GEVulkanDrawCall::GEVulkanDrawCall()
     m_texture_descriptor = vk->getMeshTextureDescriptor();
     m_hiz_depth = NULL;
     m_shadow_fbo = NULL;
+    for (unsigned i = 0; i < (unsigned)video::EMT_MATERIAL_COUNT; i++)
+        m_fallback_materials[i] = (video::E_MATERIAL_TYPE)i;
 }   // GEVulkanDrawCall
 
 // ----------------------------------------------------------------------------
@@ -286,6 +288,23 @@ GEVulkanDrawCall::~GEVulkanDrawCall()
     delete m_hiz_depth;
     delete m_shadow_fbo;
 }   // ~GEVulkanDrawCall
+
+// ----------------------------------------------------------------------------
+void GEVulkanDrawCall::initNonPBRFallbackMaterials()
+{
+    for (auto& p : GEMaterialManager::g_materials)
+    {
+        const std::string& shader = p.first;
+        auto* material = GEMaterialManager::getMaterial(shader);
+        if (!material->m_nonpbr_fallback.empty())
+        {
+            auto fallback = GEMaterialManager::getIrrMaterialType(
+                material->m_nonpbr_fallback);
+            m_fallback_materials[
+                GEMaterialManager::getIrrMaterialType(shader)] = fallback;
+        }
+    }
+}   // initNonPBRFallbackMaterials
 
 // ----------------------------------------------------------------------------
 void GEVulkanDrawCall::addNode(irr::scene::ISceneNode* node)
@@ -318,20 +337,21 @@ void GEVulkanDrawCall::addNode(irr::scene::ISceneNode* node)
     {
         GESPMBuffer* buffer = static_cast<GESPMBuffer*>(
             mesh->getMeshBuffer(i));
-        const irr::video::SMaterial& m = node->getMaterial(i);
-        if (ignoreMaterial(m))
+        auto mt = m_fallback_materials[node->getMaterialType(i)];
+        if (ignoreMaterial(mt))
             continue;
         if (m_culling_tool->isCulled(buffer, node))
             continue;
-        const std::string& shader = getShader(m);
         if (buffer->isDynamic())
         {
+            const std::string& shader =
+                GEMaterialManager::getShader(mt);
             m_dynamic_spm_buffers[shader][buffer] = {node};
             continue;
         }
-        TexturesList t = getTexturesList(m);
+        TexturesList t = getTexturesList(node->getMaterial(i));
         std::pair<GESPMBuffer*, TexturesList> k = std::make_pair(buffer, t);
-        m_visible_nodes[k][shader].emplace_back(node, i);
+        m_visible_nodes[k][(uint32_t)mt].emplace_back(node, i);
         m_mb_map[buffer] = mesh;
         if (anode && !added_skinning &&
             !anode->getSkinningMatrices().empty() &&
@@ -350,7 +370,7 @@ void GEVulkanDrawCall::addBillboardNode(irr::scene::ISceneNode* node,
     irr::core::aabbox3df bb = node->getTransformedBoundingBox();
     if (m_culling_tool->isCulled(bb))
         return;
-    irr::video::SMaterial m = node->getMaterial(0);
+    irr::video::SMaterial& m = node->getMaterial(0);
     TexturesList textures = {};
     if (!GEVulkanFeatures::supportsDifferentTexturePerDraw() ||
         !GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
@@ -358,7 +378,8 @@ void GEVulkanDrawCall::addBillboardNode(irr::scene::ISceneNode* node,
     if (m_billboard_buffers.find(textures) == m_billboard_buffers.end())
         m_billboard_buffers[textures] = new GEVulkanBillboardBuffer(m);
     GESPMBuffer* buffer = m_billboard_buffers.at(textures);
-    const std::string& shader = getShader(node, 0);
+    const std::string& shader = GEMaterialManager::getShader(
+        m_fallback_materials[node->getMaterialType(0)]);
     m_dynamic_spm_buffers[shader][buffer].push_back(node);
 }   // addBillboardNode
 
@@ -396,7 +417,8 @@ void GEVulkanDrawCall::generate(GEVulkanDriver* vk)
             else
                 continue;
 
-            std::string shader = q.first;
+            std::string shader = GEMaterialManager::getShader(
+                (video::E_MATERIAL_TYPE)q.first);
             TexturesList textures = p.first.second;
             const irr::video::ITexture** list = &textures[0];
             int material_id = m_texture_descriptor->getTextureID(list, shader);
@@ -507,8 +529,9 @@ start:
 
     for (GEVulkanAnimatedMeshSceneNode* node : m_skinning_nodes)
     {
-        int bone_count = node->getSPM()->getJointCount();
-        size_t bone_size = sizeof(irr::core::matrix4) * bone_count;
+        size_t bone_size = sizeof(irr::core::matrix4) *
+            node->getSkinningMatrices().size();
+        int bone_count = bone_size / sizeof(irr::core::matrix4);
         if (written_size + bone_size > m_sbo_data->getSize())
         {
             min_size = (written_size + bone_size) * 2;
@@ -803,38 +826,6 @@ start:
 }   // generate
 
 // ----------------------------------------------------------------------------
-const std::string& GEVulkanDrawCall::getShader(irr::scene::ISceneNode* node,
-                                               int material_id) const
-{
-    irr::video::SMaterial& m = node->getMaterial(material_id);
-    return getShader(m);
-}   // getShader
-
-// ----------------------------------------------------------------------------
-const std::string& GEVulkanDrawCall::getShader(
-                                          const irr::video::SMaterial& m) const
-{
-    const std::string* shader = &GEMaterialManager::getShader(m.MaterialType);
-    auto material = GEMaterialManager::getMaterial(m.MaterialType);
-    if ((!getGEConfig()->m_pbr && !material->m_nonpbr_fallback.empty()) ||
-        ((m_deferred_layouts.empty() ||
-        m_deferred_layouts[GVDFP_DISPLACE_COLOR] == VK_NULL_HANDLE) &&
-        *shader == "displace"))
-    {
-        shader = &material->m_nonpbr_fallback;
-        material = GEMaterialManager::getMaterial(material->m_nonpbr_fallback);
-    }
-    auto& ri = m.getRenderInfo();
-    // Use real transparent shader first
-    if (!material->isTransparent() && ri && ri->isTransparent())
-    {
-        static std::string ghost("ghost");
-        return ghost;
-    }
-    return *shader;
-}   // getShader
-
-// ----------------------------------------------------------------------------
 void GEVulkanDrawCall::prepare(GEVulkanCameraSceneNode* cam)
 {
     reset();
@@ -890,7 +881,20 @@ void GEVulkanDrawCall::prepare(GEVulkanCameraSceneNode* cam)
     if (m_hiz_depth)
         m_hiz_depth->prepare(cam);
     if (m_data_layout == VK_NULL_HANDLE)
+    {
         createVulkanData();
+        if (!getGEConfig()->m_pbr)
+            initNonPBRFallbackMaterials();
+        if (m_deferred_layouts.empty() ||
+            m_deferred_layouts[GVDFP_DISPLACE_COLOR] == VK_NULL_HANDLE)
+        {
+            auto* displace = GEMaterialManager::getMaterial("displace");
+            auto fallback = GEMaterialManager::getIrrMaterialType(
+                displace->m_nonpbr_fallback);
+            m_fallback_materials[
+                GEMaterialManager::getIrrMaterialType("displace")] = fallback;
+        }
+    }
 }   // prepare
 
 // ----------------------------------------------------------------------------
@@ -962,7 +966,7 @@ void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
         m_deferred_layouts[GVDFP_DISPLACE_COLOR] != VK_NULL_HANDLE;
     for (auto& p : GEMaterialManager::g_materials)
     {
-        if (!p.second->isTransparent())
+        if (!p.second->isTransparent() || p.first == "ghost")
             continue;
         if (!getGEConfig()->m_pbr && !p.second->m_nonpbr_fallback.empty())
             continue;

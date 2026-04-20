@@ -1,6 +1,8 @@
 #include "ge_vulkan_animated_mesh_scene_node.hpp"
 
 #include "ge_animation.hpp"
+#include "ge_material_manager.hpp"
+#include "ge_render_info.hpp"
 #include "ge_spm.hpp"
 
 #include "ISceneManager.h"
@@ -21,16 +23,40 @@ GEVulkanAnimatedMeshSceneNode::GEVulkanAnimatedMeshSceneNode(irr::scene::IAnimat
 }   // GEVulkanAnimatedMeshSceneNode
 
 // ----------------------------------------------------------------------------
-GESPM* GEVulkanAnimatedMeshSceneNode::getSPM() const
-{
-    return static_cast<GESPM*>(Mesh);
-}   // getSPM
-
-// ----------------------------------------------------------------------------
 void GEVulkanAnimatedMeshSceneNode::OnRegisterSceneNode()
 {
     if (!IsVisible)
         return;
+
+    if (m_ge_materials.empty() ||
+        (m_first_render_info &&
+        m_first_render_info->hasTransparencySetting() &&
+        m_transparency_observer.expired()))
+    {
+        m_ge_materials.clear();
+        for (unsigned i = 0; i < getMaterialCount(); i++)
+            m_ge_materials.push_back(getMaterial(i).MaterialType);
+        if (m_first_render_info)
+        {
+            m_transparency_observer =
+                m_first_render_info->getTransparencyObserver();
+            if (m_first_render_info->isTransparent())
+            {
+                video::E_MATERIAL_TYPE ghost =
+                    GEMaterialManager::getIrrMaterialType("ghost");
+                for (unsigned i = 0; i < m_ge_materials.size(); i++)
+                {
+                    auto* material = GEMaterialManager::getMaterial(
+                        m_ge_materials[i]);
+                    // Use real transparent shader first
+                    if (material->isTransparent())
+                        continue;
+                    m_ge_materials[i] = ghost;
+                }
+            }
+        }
+    }
+
     SceneManager->registerNodeForRendering(this, scene::ESNRP_SOLID);
     ISceneNode::OnRegisterSceneNode();
 }   // OnRegisterSceneNode
@@ -38,10 +64,14 @@ void GEVulkanAnimatedMeshSceneNode::OnRegisterSceneNode()
 // ----------------------------------------------------------------------------
 void GEVulkanAnimatedMeshSceneNode::setMesh(irr::scene::IAnimatedMesh* mesh)
 {
-    CAnimatedMeshSceneNode::setMesh(mesh);
+    GESPM* spm = dynamic_cast<GESPM*>(mesh);
+    if (!spm)
+        return;
+    CAnimatedMeshSceneNode::setMesh(spm);
+    m_transparency_observer.reset();
+    m_ge_materials.clear();
     cleanJoints();
-    GESPM* spm = getSPM();
-    if (!spm || spm->isStatic())
+    if (spm->isStatic())
         return;
 
     unsigned bone_idx = 0;
@@ -61,7 +91,7 @@ void GEVulkanAnimatedMeshSceneNode::setMesh(irr::scene::IAnimatedMesh* mesh)
 // ----------------------------------------------------------------------------
 void GEVulkanAnimatedMeshSceneNode::OnAnimate(irr::u32 time_ms)
 {
-    GESPM* spm = getSPM();
+    GESPM* spm = static_cast<GESPM*>(Mesh);
     if (!spm || spm->isStatic())
     {
         IAnimatedMeshSceneNode::OnAnimate(time_ms);
