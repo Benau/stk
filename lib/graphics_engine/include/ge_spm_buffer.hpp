@@ -214,6 +214,11 @@ public:
     std::vector<irr::u16>& getIndicesVector()             { return m_indices; }
     // ------------------------------------------------------------------------
     virtual VkBuffer getVkBuffer() const                   { return m_buffer; }
+    // ------------------------------------------------------------------------
+    virtual void drawDynamicVertexIndexBuffer(VkCommandBuffer cmd,
+                                              int buffer_index)              {}
+    // ------------------------------------------------------------------------
+    virtual bool isDynamic() const                            { return false; }
 };
 
 } // end namespace GE

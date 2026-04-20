@@ -37,7 +37,6 @@ class GEVulkanAnimatedMeshSceneNode;
 class GEVulkanCameraSceneNode;
 class GEVulkanDriver;
 class GEVulkanDynamicBuffer;
-class GEVulkanDynamicSPMBuffer;
 class GEVulkanLightHandler;
 class GEVulkanShadowFBO;
 class GEVulkanSkyBoxRenderer;
@@ -115,7 +114,14 @@ struct DrawCallData
     std::string m_shader;
     GESPMBuffer* m_mb;
     int m_material_id;
+    int m_dynamic_offset;
+};
+
+struct DynamicSPMData
+{
+    int m_material_id;
     uint32_t m_dynamic_offset;
+    uint32_t m_instance_count;
 };
 
 class GEVulkanHiZDepth;
@@ -133,14 +139,19 @@ private:
     // ------------------------------------------------------------------------
     virtual bool ignoreMaterial(const irr::video::SMaterial& m) const
                                                               { return false; }
+    // ------------------------------------------------------------------------
+    size_t getDynamicSPMSize() const;
+    // ------------------------------------------------------------------------
+    void generateDynamicSPM(GEVulkanDriver* vk);
+    // ------------------------------------------------------------------------
+    void drawCommands(VkCommandBuffer cmd, const std::string& pipeline,
+                      int current_buffer_idx,VkBuffer indirect_buffer,
+                      size_t indirect_offset, unsigned draw_count,
+                      GEVulkanPipelineType pt);
 
 protected:
     typedef std::array<const irr::video::ITexture*,
         _IRR_MATERIAL_MAX_TEXTURES_> TexturesList;
-
-    const int BILLBOARD_NODE = -1;
-
-    const int PARTICLE_NODE = -2;
 
     std::map<TexturesList, GESPMBuffer*> m_billboard_buffers;
 
@@ -154,8 +165,8 @@ protected:
 
     std::map<GESPMBuffer*, irr::scene::IMesh*> m_mb_map;
 
-    std::map<std::string, std::vector<
-        std::pair<GEVulkanDynamicSPMBuffer*, irr::scene::ISceneNode*> > >
+    std::map<std::string,
+        std::map<GESPMBuffer*, std::vector<irr::scene::ISceneNode*> > >
         m_dynamic_spm_buffers;
 
     GECullingTool* m_culling_tool;
@@ -169,6 +180,8 @@ protected:
     GEVulkanDynamicBuffer* m_indirect_buffer;
 
     GEVulkanDynamicBuffer* m_sbo_data;
+
+    GEVulkanDynamicBuffer* m_dspm_data;
 
     const VkPhysicalDeviceLimits& m_limits;
 
@@ -192,7 +205,8 @@ protected:
 
     VkDescriptorPool m_descriptor_pool;
 
-    std::vector<VkDescriptorSet> m_data_descriptor_sets;
+    std::vector<VkDescriptorSet> m_data_descriptor_sets,
+        m_dspm_descriptor_sets;
 
     VkDescriptorSet m_env_descriptor_set;
 
@@ -204,7 +218,8 @@ protected:
 
     std::unordered_map<std::string, PipelineData> m_graphics_pipelines;
 
-    std::unordered_map<GEVulkanDynamicSPMBuffer*, std::pair<int, size_t> > m_dyspmb_materials;
+    std::map<std::string, std::map<GESPMBuffer*, DynamicSPMData > >
+        m_dyspmb_materials;
 
     GEVulkanSkyBoxRenderer* m_skybox_renderer;
 
@@ -249,18 +264,6 @@ protected:
     // ------------------------------------------------------------------------
     void bindBaseVertex(GEVulkanDriver* vk, VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
-    std::string getDynamicBufferKey(const std::string& shader) const
-    {
-        char drawing_priority = (char)1;
-        auto it = m_graphics_pipelines.find(shader);
-        if (it != m_graphics_pipelines.end())
-            drawing_priority = it->second.m_settings.m_drawing_priority;
-        return std::string(1, drawing_priority) + shader;
-    }
-    // ------------------------------------------------------------------------
-    std::string getShaderFromKey(const std::string& key) const
-                                                      { return key.substr(1); }
-    // ------------------------------------------------------------------------
     void bindSingleMaterial(VkCommandBuffer cmd,
                             const std::string& cur_pipeline,
                             int material_id, GEVulkanPipelineType pt);
@@ -271,6 +274,16 @@ protected:
         vkCmdBindDescriptorSets(cmd,
             VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline_layout, 1, 1,
             &m_data_descriptor_sets[current_buffer_idx],
+            dynamic_offsets.size(), dynamic_offsets.data());
+    }
+    // ------------------------------------------------------------------------
+    void bindDynamicSPMDescriptor(VkCommandBuffer cmd,
+                                  int current_buffer_idx,
+                                  std::vector<uint32_t>& dynamic_offsets)
+    {
+        vkCmdBindDescriptorSets(cmd,
+            VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline_layout, 1, 1,
+            &m_dspm_descriptor_sets[current_buffer_idx],
             dynamic_offsets.size(), dynamic_offsets.data());
     }
     // ------------------------------------------------------------------------
@@ -351,9 +364,6 @@ public:
     // ------------------------------------------------------------------------
     bool hasShaderForRendering(const std::string& shader)
     {
-        const std::string& dbk = getDynamicBufferKey(shader);
-        if (m_dynamic_spm_buffers.find(dbk) != m_dynamic_spm_buffers.end())
-            return true;
         return m_materials_data.find(shader) != m_materials_data.end();
     }
     // ------------------------------------------------------------------------
