@@ -21,8 +21,6 @@ namespace scene
 
 	class CMeshSceneNode : public IMeshSceneNode
 	{
-	private:
-		std::shared_ptr<GE::GERenderInfo> m_first_render_info;
 	public:
 		//! constructor
 		CMeshSceneNode(IMesh* mesh, ISceneNode* parent, ISceneManager* mgr,	s32 id,
@@ -87,6 +85,8 @@ namespace scene
 	protected:
 
 		void copyMaterials();
+
+		std::shared_ptr<GE::GERenderInfo> m_first_render_info;
 
 		core::array<video::SMaterial> Materials;
 		core::aabbox3d<f32> Box;

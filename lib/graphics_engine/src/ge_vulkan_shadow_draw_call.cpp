@@ -26,7 +26,10 @@ void GEVulkanShadowDrawCall::prepareShadow(unsigned layer)
     reset();
     m_culling_tool->initShadow(m_sfbo, layer);
     if (m_data_layout == VK_NULL_HANDLE)
+    {
         createVulkanData();
+        initNonPBRFallbackMaterials();
+    }
 }   // prepareShadow
 
 // ----------------------------------------------------------------------------
@@ -39,16 +42,6 @@ bool GEVulkanShadowDrawCall::skip(irr::scene::ISceneNode* node) const
 }   // skip
 
 // ----------------------------------------------------------------------------
-const std::string& GEVulkanShadowDrawCall::getShader(
-                                          const irr::video::SMaterial& m) const
-{
-    auto material = GEMaterialManager::getMaterial(m.MaterialType);
-    if (!material->m_nonpbr_fallback.empty())
-        return material->m_nonpbr_fallback;
-    return GEMaterialManager::getShader(m.MaterialType);
-}   // getShader
-
-// ----------------------------------------------------------------------------
 VkRenderPass GEVulkanShadowDrawCall::getRenderPassForPipelineCreation(
                                                             GEVulkanDriver* vk,
                                                      GEVulkanPipelineType type)
@@ -58,13 +51,9 @@ VkRenderPass GEVulkanShadowDrawCall::getRenderPassForPipelineCreation(
 
 // ----------------------------------------------------------------------------
 bool GEVulkanShadowDrawCall::ignoreMaterial(
-                                          const irr::video::SMaterial& m) const
+                                          irr::video::E_MATERIAL_TYPE mt) const
 {
-    auto& ri = m.getRenderInfo();
-    if (ri && ri->isTransparent())
-        return true;
-    auto material = GEMaterialManager::getMaterial(m.MaterialType);
-    return material->isTransparent();
+    return GEMaterialManager::getMaterial(mt)->isTransparent();
 }   // ignoreMaterial
 
 }

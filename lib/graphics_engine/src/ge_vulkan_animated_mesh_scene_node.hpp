@@ -21,6 +21,10 @@ private:
 
     std::vector<irr::core::matrix4> m_skinning_matrices;
 
+    std::weak_ptr<bool> m_transparency_observer;
+
+    irr::core::array<irr::video::E_MATERIAL_TYPE> m_ge_materials;
+
     // ------------------------------------------------------------------------
     void cleanJoints()
     {
@@ -51,12 +55,17 @@ public:
     // ------------------------------------------------------------------------
     virtual void setTransitionTime(irr::f32 Time);
     // ------------------------------------------------------------------------
-    GESPM* getSPM() const;
-    // ------------------------------------------------------------------------
     virtual void OnRegisterSceneNode();
     // ------------------------------------------------------------------------
     const std::vector<irr::core::matrix4>& getSkinningMatrices() const
                                                 { return m_skinning_matrices; }
+    // ------------------------------------------------------------------------
+    virtual irr::video::E_MATERIAL_TYPE getMaterialType(irr::u32 i)
+    {
+        if (m_ge_materials.empty())
+            return CAnimatedMeshSceneNode::getMaterialType(i);
+        return m_ge_materials[i];
+    }
 };   // GEVulkanAnimatedMeshSceneNode
 
 }
