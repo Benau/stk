@@ -257,8 +257,6 @@ protected:
         return textures;
     }
     // ------------------------------------------------------------------------
-    size_t getInitialSBOSize() const;
-    // ------------------------------------------------------------------------
     void updateDataDescriptorSets(GEVulkanDriver* vk,
                                   GEVulkanCameraSceneNode* cam);
     // ------------------------------------------------------------------------
