@@ -115,15 +115,18 @@ namespace scene
 			{
 				// animate this node with all animators
 
-				ISceneNodeAnimatorList::Iterator ait = Animators.begin();
-				while (ait != Animators.end())
+				if (!Animators.empty())
+				{
+					ISceneNodeAnimatorList::Iterator ait = Animators.begin();
+					while (ait != Animators.end())
 					{
-					// continue to the next node before calling animateNode()
-					// so that the animator may remove itself from the scene
-					// node without the iterator becoming invalid
-					ISceneNodeAnimator* anim = *ait;
-					++ait;
-					anim->animateNode(this, timeMs);
+						// continue to the next node before calling animateNode()
+						// so that the animator may remove itself from the scene
+						// node without the iterator becoming invalid
+						ISceneNodeAnimator* anim = *ait;
+						++ait;
+						anim->animateNode(this, timeMs);
+					}
 				}
 
 				// update absolute position
