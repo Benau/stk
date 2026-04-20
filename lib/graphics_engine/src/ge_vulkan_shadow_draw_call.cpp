@@ -25,6 +25,8 @@ void GEVulkanShadowDrawCall::prepareShadow(unsigned layer)
 {
     reset();
     m_culling_tool->initShadow(m_sfbo, layer);
+    if (m_data_layout == VK_NULL_HANDLE)
+        createVulkanData();
 }   // prepareShadow
 
 // ----------------------------------------------------------------------------
