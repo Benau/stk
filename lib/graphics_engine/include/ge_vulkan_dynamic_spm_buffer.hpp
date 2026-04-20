@@ -40,7 +40,10 @@ public:
     // ------------------------------------------------------------------------
     void updateVertexIndexBuffer(int buffer_index);
     // ------------------------------------------------------------------------
-    void drawDynamicVertexIndexBuffer(VkCommandBuffer cmd, int buffer_index);
+    virtual void drawDynamicVertexIndexBuffer(VkCommandBuffer cmd,
+                                              int buffer_index);
+    // ------------------------------------------------------------------------
+    virtual bool isDynamic() const                             { return true; }
     // ------------------------------------------------------------------------
     void setDirtyOffset(irr::u32 offset,
           irr::scene::E_BUFFER_TYPE buffer = irr::scene::EBT_VERTEX_AND_INDEX);
