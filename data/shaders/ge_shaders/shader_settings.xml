@@ -71,6 +71,15 @@
         </shaders>
     </setting>
 
+    <!-- Filled programmatically later -->
+    <setting name="ghost">
+        <properties>
+            <alphablend>true</alphablend>
+        </properties>
+        <shaders>
+        </shaders>
+    </setting>
+
     <setting name="alphablend">
         <properties>
             <alphablend>true</alphablend>

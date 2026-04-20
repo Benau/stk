@@ -1,5 +1,7 @@
 #include "ge_vulkan_mesh_scene_node.hpp"
 
+#include "ge_material_manager.hpp"
+#include "ge_render_info.hpp"
 #include "ge_spm.hpp"
 
 #include "IMeshCache.h"
@@ -26,16 +28,40 @@ GEVulkanMeshSceneNode::~GEVulkanMeshSceneNode()
 }   // ~GEVulkanMeshSceneNode
 
 // ----------------------------------------------------------------------------
-GESPM* GEVulkanMeshSceneNode::getSPM() const
-{
-    return static_cast<GESPM*>(Mesh);
-}   // getSPM
-
-// ----------------------------------------------------------------------------
 void GEVulkanMeshSceneNode::OnRegisterSceneNode()
 {
     if (!IsVisible)
         return;
+
+    if (m_ge_materials.empty() ||
+        (m_first_render_info &&
+        m_first_render_info->hasTransparencySetting() &&
+        m_transparency_observer.expired()))
+    {
+        m_ge_materials.clear();
+        for (unsigned i = 0; i < getMaterialCount(); i++)
+            m_ge_materials.push_back(getMaterial(i).MaterialType);
+        if (m_first_render_info)
+        {
+            m_transparency_observer =
+                m_first_render_info->getTransparencyObserver();
+            if (m_first_render_info->isTransparent())
+            {
+                video::E_MATERIAL_TYPE ghost =
+                    GEMaterialManager::getIrrMaterialType("ghost");
+                for (unsigned i = 0; i < m_ge_materials.size(); i++)
+                {
+                    auto* material = GEMaterialManager::getMaterial(
+                        m_ge_materials[i]);
+                    // Use real transparent shader first
+                    if (material->isTransparent())
+                        continue;
+                    m_ge_materials[i] = ghost;
+                }
+            }
+        }
+    }
+
     SceneManager->registerNodeForRendering(this, scene::ESNRP_SOLID);
     ISceneNode::OnRegisterSceneNode();
 }   // OnRegisterSceneNode

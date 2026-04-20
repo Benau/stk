@@ -419,7 +419,7 @@ void CMeshSceneNode::resetFirstRenderInfo(std::shared_ptr<GE::GERenderInfo> ri)
 		Materials[i].setRenderInfo(nullptr);
 	for (u32 i = 0; i < Materials.size(); i++)
 	{
-		if (Materials[i].isColorizable() || (ri && ri->isTransparent()))
+		if (Materials[i].isColorizable())
 			Materials[i].setRenderInfo(ri);
 	}
 }

@@ -465,6 +465,13 @@ namespace scene
 		}
 
 
+		//! Returns the material type based on the zero based index i.
+		virtual video::E_MATERIAL_TYPE getMaterialType(u32 i)
+		{
+			return getMaterial(i).MaterialType;
+		}
+
+
 		//! Gets the scale of the scene node relative to its parent.
 		/** This is the scale of this node relative to its parent.
 		If you want the absolute scale, use

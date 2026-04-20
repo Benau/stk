@@ -26,6 +26,7 @@
 #define HEADER_GE_RENDER_INFO_HPP
 
 #include "SColor.h"
+#include <memory>
 
 namespace GE
 {
@@ -35,25 +36,44 @@ class GERenderInfo
 private:
     float m_hue;
 
-    bool m_transparent;
-
     irr::video::SColor m_vertex_color;
+
+    std::shared_ptr<bool> m_transparent;
 public:
     // ------------------------------------------------------------------------
     GERenderInfo(float hue = 0.0f, bool transparent = false)
     {
         m_hue = hue;
-        m_transparent = transparent;
         m_vertex_color = (irr::video::SColor)-1;
+        if (transparent)
+            m_transparent = std::make_shared<bool>(true);
     }
     // ------------------------------------------------------------------------
     void setHue(float hue)                                    { m_hue = hue; }
     // ------------------------------------------------------------------------
-    void setTransparent(bool transparent)     { m_transparent = transparent; }
+    void setTransparent(bool transparent)
+    {
+        if (m_transparent && *m_transparent.get() == transparent)
+            return;
+        m_transparent = std::make_shared<bool>(transparent);
+    }
     // ------------------------------------------------------------------------
     float getHue() const                                     { return m_hue; }
     // ------------------------------------------------------------------------
-    bool isTransparent() const                       { return m_transparent; }
+    bool hasTransparencySetting() const
+    {
+        if (m_transparent)
+            return true;
+        return false;
+    }
+    // ------------------------------------------------------------------------
+    void removeTransparencySetting()                { m_transparent.reset(); }
+    // ------------------------------------------------------------------------
+    std::shared_ptr<bool> getTransparencyObserver() const
+                                                     { return m_transparent; }
+    // ------------------------------------------------------------------------
+    bool isTransparent() const
+           { return hasTransparencySetting() ? *m_transparent.get() : false; }
     // ------------------------------------------------------------------------
     irr::video::SColor& getVertexColor()            { return m_vertex_color; }
 
