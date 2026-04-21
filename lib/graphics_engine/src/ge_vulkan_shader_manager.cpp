@@ -100,7 +100,7 @@ void GEVulkanShaderManager::loadAllShaders(const std::string& match_filename)
     if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
         oss << "#define BIND_MESH_TEXTURES_AT_ONCE\n";
 
-    if (GEVulkanFeatures::supportsDifferentTexturePerDraw())
+    if (GEVulkanFeatures::supportsDescriptorIndexing())
     {
         oss << "#extension GL_EXT_nonuniform_qualifier : enable\n";
         oss << "#define GE_SAMPLE_TEX_INDEX nonuniformEXT\n";

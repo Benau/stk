@@ -372,8 +372,7 @@ void GEVulkanDrawCall::addBillboardNode(irr::scene::ISceneNode* node,
         return;
     irr::video::SMaterial& m = node->getMaterial(0);
     TexturesList textures = {};
-    if (!GEVulkanFeatures::supportsDifferentTexturePerDraw() ||
-        !GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
+    if (!GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
         textures = getTexturesList(m);
     if (m_billboard_buffers.find(textures) == m_billboard_buffers.end())
         m_billboard_buffers[textures] = new GEVulkanBillboardBuffer(m);
@@ -2559,7 +2558,7 @@ void GEVulkanDrawCall::generateDynamicSPM(GEVulkanDriver* vk)
                 if (node->getType() == irr::scene::ESNT_BILLBOARD ||
                     node->getType() == irr::scene::ESNT_PARTICLE_SYSTEM)
                 {
-                    if (GEVulkanFeatures::supportsDifferentTexturePerDraw())
+                    if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
                     {
                         const irr::video::SMaterial& m = node->getMaterial(0);
                         TexturesList textures = getTexturesList(m);
