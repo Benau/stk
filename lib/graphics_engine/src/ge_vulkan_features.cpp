@@ -25,7 +25,6 @@ bool g_supports_rgba8_blit = false;
 bool g_supports_r8_blit = false;
 // https://chunkstories.xyz/blog/a-note-on-descriptor-indexing
 bool g_supports_descriptor_indexing = false;
-bool g_supports_non_uniform_indexing = false;
 bool g_supports_partially_bound = false;
 uint32_t g_max_sampler_supported = 0;
 bool g_supports_multi_draw_indirect = false;
@@ -60,10 +59,7 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
     if (max_sampler_size > g_max_sampler_supported)
         g_supports_bind_textures_at_once = false;
     if (vk->getPhysicalDeviceFeatures().shaderSampledImageArrayDynamicIndexing == VK_FALSE)
-    {
         dynamic_indexing = false;
-        g_supports_bind_textures_at_once = false;
-    }
     g_supports_multi_draw_indirect = vk->getPhysicalDeviceFeatures().multiDrawIndirect &&
          vk->getPhysicalDeviceFeatures().drawIndirectFirstInstance;
 
@@ -124,7 +120,8 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
     for (VkExtensionProperties& prop : extensions)
     {
         if (strcmp(prop.extensionName,
-            VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME) == 0)
+            VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME) == 0 &&
+            dynamic_indexing)
             g_supports_descriptor_indexing = true;
     }
 
@@ -171,8 +168,11 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)
         return;
 
-    g_supports_non_uniform_indexing = (descriptor_indexing_features
-        .shaderSampledImageArrayNonUniformIndexing == VK_TRUE);
+    if (descriptor_indexing_features.shaderSampledImageArrayNonUniformIndexing
+        != VK_TRUE)
+        g_supports_descriptor_indexing = false;
+    if (descriptor_indexing_features.runtimeDescriptorArray != VK_TRUE)
+        g_supports_descriptor_indexing = false;
     g_supports_partially_bound = (descriptor_indexing_features
         .descriptorBindingPartiallyBound == VK_TRUE);
     g_supports_shader_draw_parameters = (shader_draw
@@ -231,7 +231,7 @@ void GEVulkanFeatures::printStats()
 {
     os::Printer::log(
         "Vulkan can bind textures at once in shader",
-        g_supports_bind_textures_at_once ? "true" : "false");
+        supportsBindTexturesAtOnce() ? "true" : "false");
     os::Printer::log(
         "Vulkan can bind mesh textures at once in shader",
         supportsBindMeshTexturesAtOnce() ? "true" : "false");
@@ -268,9 +268,6 @@ void GEVulkanFeatures::printStats()
     os::Printer::log("Vulkan supports shader storage image extended formats",
         supportsShaderStorageImageExtendedFormats() ? "true" : "false");
     os::Printer::log(
-        "Vulkan descriptor indexes can be dynamically non-uniform",
-        g_supports_non_uniform_indexing ? "true" : "false");
-    os::Printer::log(
         "Vulkan descriptor can be partially bound",
         g_supports_partially_bound ? "true" : "false");
 }   // printStats
@@ -278,7 +275,7 @@ void GEVulkanFeatures::printStats()
 // ----------------------------------------------------------------------------
 bool GEVulkanFeatures::supportsBindTexturesAtOnce()
 {
-    return g_supports_bind_textures_at_once;
+    return supportsDescriptorIndexing() && g_supports_bind_textures_at_once;
 }   // supportsBindTexturesAtOnce
 
 // ----------------------------------------------------------------------------
@@ -300,19 +297,6 @@ bool GEVulkanFeatures::supportsDescriptorIndexing()
 }   // supportsDescriptorIndexing
 
 // ----------------------------------------------------------------------------
-bool GEVulkanFeatures::supportsNonUniformIndexing()
-{
-    return g_supports_non_uniform_indexing;
-}   // supportsNonUniformIndexing
-
-// ----------------------------------------------------------------------------
-bool GEVulkanFeatures::supportsDifferentTexturePerDraw()
-{
-    return g_supports_bind_textures_at_once &&
-        g_supports_descriptor_indexing && g_supports_non_uniform_indexing;
-}   // supportsDifferentTexturePerDraw
-
-// ----------------------------------------------------------------------------
 bool GEVulkanFeatures::supportsPartiallyBound()
 {
     return g_supports_partially_bound;
@@ -321,7 +305,7 @@ bool GEVulkanFeatures::supportsPartiallyBound()
 // ----------------------------------------------------------------------------
 bool GEVulkanFeatures::supportsBindMeshTexturesAtOnce()
 {
-    if (!g_supports_bind_textures_at_once || !g_supports_multi_draw_indirect ||
+    if (!supportsBindTexturesAtOnce() || !g_supports_multi_draw_indirect ||
         !g_supports_shader_draw_parameters)
         return false;
     const unsigned sampler_count = GEVulkanShaderManager::getSamplerSize() *
