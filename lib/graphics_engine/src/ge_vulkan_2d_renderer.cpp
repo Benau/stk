@@ -337,7 +337,7 @@ void GEVulkan2dRenderer::render()
     {
         Tri& cur_tri = g_tris_queue[g_tris_index_queue[idx]];
         int cur_sampler_idx = cur_tri.sampler_idx;
-        if (GEVulkanFeatures::supportsDifferentTexturePerDraw())
+        if (GEVulkanFeatures::supportsBindTexturesAtOnce())
             cur_sampler_idx = g_tris_queue[0].sampler_idx;
         const core::recti& cur_clip = g_tris_clip[g_tris_index_queue[idx]];
         if (cur_sampler_idx != sampler_idx || cur_clip != clip)
@@ -437,7 +437,7 @@ void GEVulkan2dRenderer::addVerticesIndices(irr::video::S3DVertex* vertices,
         const core::vector3df& pos_1 = vertices[indices[idx]].Pos;
         const core::vector3df& pos_2 = vertices[indices[idx + 1]].Pos;
         const core::vector3df& pos_3 = vertices[indices[idx + 2]].Pos;
-        if (GEVulkanFeatures::supportsDifferentTexturePerDraw() &&
+        if (GEVulkanFeatures::supportsBindTexturesAtOnce() &&
             fclip != cur_clip &&
             cur_clip.isPointInside(core::position2di(pos_1.X, pos_1.Y)) &&
             cur_clip.isPointInside(core::position2di(pos_2.X, pos_2.Y)) &&

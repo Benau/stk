@@ -1,5 +1,5 @@
 #ifdef BIND_MESH_TEXTURES_AT_ONCE
-layout(binding = 0) uniform sampler2D f_mesh_textures[SAMPLER_SIZE * TOTAL_MESH_TEXTURE_LAYER];
+layout(binding = 0) uniform sampler2D f_mesh_textures[];
 
 vec4 sampleMeshTexture0(int material_id, vec2 uv)
 {

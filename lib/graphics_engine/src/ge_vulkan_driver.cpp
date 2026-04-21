@@ -1068,7 +1068,7 @@ void GEVulkanDriver::createDevice()
 
     VkPhysicalDeviceFeatures device_features = {};
     device_features.shaderSampledImageArrayDynamicIndexing =
-        GEVulkanFeatures::supportsBindTexturesAtOnce();
+        GEVulkanFeatures::supportsDescriptorIndexing();
     device_features.multiDrawIndirect =
         GEVulkanFeatures::supportsMultiDrawIndirect();
     device_features.drawIndirectFirstInstance =
@@ -1078,7 +1078,9 @@ void GEVulkanDriver::createDevice()
     descriptor_indexing_features.sType =
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
     descriptor_indexing_features.shaderSampledImageArrayNonUniformIndexing =
-        GEVulkanFeatures::supportsNonUniformIndexing();
+        GEVulkanFeatures::supportsDescriptorIndexing();
+    descriptor_indexing_features.runtimeDescriptorArray =
+        GEVulkanFeatures::supportsDescriptorIndexing();
     descriptor_indexing_features.descriptorBindingPartiallyBound =
         GEVulkanFeatures::supportsPartiallyBound();
 
