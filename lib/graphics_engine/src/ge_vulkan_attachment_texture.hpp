@@ -40,16 +40,14 @@ public:
     // ------------------------------------------------------------------------
     virtual void regenerateMipMapLevels(void* mipmap_data = NULL)            {}
     // ------------------------------------------------------------------------
-    virtual u64 getTextureHandler() const
-                                  { return (u64)(m_image_view.get()->load()); }
+    virtual u64 getTextureHandler() const         { return (u64)m_image_view; }
     // ------------------------------------------------------------------------
     virtual void reload()                                                    {}
     // ------------------------------------------------------------------------
     virtual void updateTexture(void* data, irr::video::ECOLOR_FORMAT format,
                                u32 w, u32 h, u32 x, u32 y)                   {}
     // ------------------------------------------------------------------------
-    virtual std::shared_ptr<std::atomic<VkImageView> > getImageView(
-                                                       bool srgb = false) const
+    virtual VkImageView getImageView(bool srgb = false) const
                                                        { return m_image_view; }
     // ------------------------------------------------------------------------
     static GEVulkanAttachmentTexture* createDepthTexture(

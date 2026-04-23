@@ -200,7 +200,7 @@ void GEVulkanEnvironmentMap::load()
         VkDescriptorImageInfo info = {};
         info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         info.sampler = vk->getSampler(GVS_SKYBOX);
-        info.imageView = texture_cubemap->getImageView(true/*srgb*/)->load();
+        info.imageView = texture_cubemap->getImageView(true/*srgb*/);
         image_infos.push_back(info);
         info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         info.imageView = view;

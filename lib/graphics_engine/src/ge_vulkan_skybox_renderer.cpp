@@ -266,12 +266,11 @@ void GEVulkanSkyBoxRenderer::addSkyBox(irr::scene::ISceneNode* skybox)
 }   // addSkyBox
 
 // ----------------------------------------------------------------------------
-std::shared_ptr<std::atomic<VkImageView> >
-                                 GEVulkanSkyBoxRenderer::getEnvObserver() const
+std::shared_ptr<bool> GEVulkanSkyBoxRenderer::getEnvObserver() const
 {
     if (m_texture_cubemap)
-        return m_texture_cubemap->getImageView();
-    return std::shared_ptr<std::atomic<VkImageView> >();
+        return m_texture_cubemap->getTextureObserver();
+    return std::shared_ptr<bool>();
 }   // getEnvObserver
 
 // ----------------------------------------------------------------------------
@@ -293,7 +292,7 @@ void GEVulkanSkyBoxRenderer::fillDescriptor(VkDescriptorSet ds,
     info[2] = info[0];
     info[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     info[2].imageView =
-        (VkImageView)m_texture_cubemap->getImageView(srgb)->load();
+        (VkImageView)m_texture_cubemap->getImageView(srgb);
     info[3].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     info[3].sampler = vk->getSampler(GVS_SHADOW_MAP);
     if (sfbo)

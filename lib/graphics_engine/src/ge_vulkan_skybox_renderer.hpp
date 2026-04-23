@@ -74,7 +74,7 @@ public:
             m_env_cubemap_loading.load() == true;
     }
     // ------------------------------------------------------------------------
-    std::shared_ptr<std::atomic<VkImageView> > getEnvObserver() const;
+    std::shared_ptr<bool> getEnvObserver() const;
     // ------------------------------------------------------------------------
     void fillDescriptor(VkDescriptorSet ds, bool srgb,
                         GEVulkanShadowFBO* sfbo) const;

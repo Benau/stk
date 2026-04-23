@@ -32,7 +32,6 @@ GEVulkanFBOTexture::~GEVulkanFBOTexture()
 {
     delete m_depth_texture;
     clearVulkanData();
-    m_vk->handleDeletedTextures();
     for (VkFramebuffer fb : m_rtt_frame_buffer)
     {
         if (fb != VK_NULL_HANDLE)
@@ -122,7 +121,7 @@ void GEVulkanFBOTexture::createRTT()
 
     std::array<VkImageView, 2> attachments =
     {{
-        *(m_image_view.get()),
+        m_image_view,
         (VkImageView)m_depth_texture->getTextureHandler(),
     }};
 

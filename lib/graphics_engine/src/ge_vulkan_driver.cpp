@@ -1814,6 +1814,8 @@ bool GEVulkanDriver::endScene()
         return false;
     }
 
+    GEVulkan2dRenderer::updateTextureDescriptor();
+    m_mesh_texture_descriptor->updateDescriptor();
     if (m_vk->in_flight_fences.empty() || vkWaitForFences(m_vk->device, 1,
         &m_vk->in_flight_fences[m_current_frame], VK_TRUE, 2000000000) ==
         VK_TIMEOUT)
@@ -1821,7 +1823,6 @@ bool GEVulkanDriver::endScene()
         // Attempt to restore after out focus in gnome fullscreen
         video::CNullDriver::endScene();
         GEVulkan2dRenderer::clear();
-        handleDeletedTextures();
         destroySwapChainRelated(false/*handle_surface*/);
         try
         {
@@ -1849,7 +1850,6 @@ bool GEVulkanDriver::endScene()
     {
         video::CNullDriver::endScene();
         GEVulkan2dRenderer::clear();
-        handleDeletedTextures();
         return false;
     }
 
@@ -2581,8 +2581,6 @@ void GEVulkanDriver::buildCommandBuffers()
 
     vkCmdEndRenderPass(getCurrentCommandBuffer());
     vkEndCommandBuffer(getCurrentCommandBuffer());
-
-    handleDeletedTextures();
 }   // buildCommandBuffers
 
 // ----------------------------------------------------------------------------
@@ -2771,13 +2769,6 @@ VkFormat GEVulkanDriver::findSupportedFormat(const std::vector<VkFormat>& candid
     }
     throw std::runtime_error("failed to find supported format!");
 }   // findSupportedFormat
-
-// ----------------------------------------------------------------------------
-void GEVulkanDriver::handleDeletedTextures()
-{
-    GEVulkan2dRenderer::handleDeletedTextures();
-    m_mesh_texture_descriptor->handleDeletedTextures();
-}   // handleDeletedTextures
 
 // ----------------------------------------------------------------------------
 ITexture* GEVulkanDriver::addRenderTargetTexture(const core::dimension2d<u32>& size,

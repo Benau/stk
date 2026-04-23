@@ -1,8 +1,11 @@
 #include "ge_vulkan_mesh_scene_node.hpp"
 
+#include "ge_main.hpp"
 #include "ge_material_manager.hpp"
 #include "ge_render_info.hpp"
 #include "ge_spm.hpp"
+#include "ge_vulkan_driver.hpp"
+#include "ge_vulkan_texture_descriptor.hpp"
 
 #include "IMeshCache.h"
 #include "ISceneManager.h"
@@ -18,6 +21,8 @@ GEVulkanMeshSceneNode::GEVulkanMeshSceneNode(irr::scene::IMesh* mesh,
                                  scale)
 {
     m_remove_from_mesh_cache = false;
+    m_texture_descriptor_ids.resize(getMaterialCount());
+    m_texture_descriptor_ids_observer.resize(getMaterialCount());
 }   // GEVulkanMeshSceneNode
 
 // ----------------------------------------------------------------------------
@@ -59,6 +64,22 @@ void GEVulkanMeshSceneNode::OnRegisterSceneNode()
                     m_ge_materials[i] = ghost;
                 }
             }
+        }
+    }
+
+    for (unsigned i = 0; i < m_texture_descriptor_ids.size(); i++)
+    {
+        if (m_texture_descriptor_ids_observer[i].expired())
+        {
+            GEVulkanTextureDescriptor* td =
+                getVKDriver()->getMeshTextureDescriptor();
+            // Ghost shader uses the same srgb setting so we can use the
+            // original material
+            video::SMaterial& m = getMaterial(i);
+            std::shared_ptr<int>& slot = td->getTextureID(m,
+                GEMaterialManager::getMaterial(m.MaterialType));
+            m_texture_descriptor_ids_observer[i] = slot;
+            m_texture_descriptor_ids[i] = *slot;
         }
     }
 
