@@ -25,6 +25,10 @@ private:
 
     irr::core::array<irr::video::E_MATERIAL_TYPE> m_ge_materials;
 
+    std::vector<int> m_texture_descriptor_ids;
+
+    std::vector<std::weak_ptr<int> > m_texture_descriptor_ids_observer;
+
     // ------------------------------------------------------------------------
     void cleanJoints()
     {
@@ -65,6 +69,13 @@ public:
         if (m_ge_materials.empty())
             return CAnimatedMeshSceneNode::getMaterialType(i);
         return m_ge_materials[i];
+    }
+    // ------------------------------------------------------------------------
+    virtual irr::s32 getTextureDescriptorID(irr::u32 i) const
+    {
+        if (m_texture_descriptor_ids.empty())
+            return CAnimatedMeshSceneNode::getTextureDescriptorID(i);
+        return m_texture_descriptor_ids[i];
     }
 };   // GEVulkanAnimatedMeshSceneNode
 

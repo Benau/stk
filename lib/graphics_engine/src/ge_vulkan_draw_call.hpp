@@ -61,7 +61,7 @@ struct ObjectData
     float m_texture_trans[2];
     // ------------------------------------------------------------------------
     void init(irr::scene::ISceneNode* node, int material_id,
-              int skinning_offset, int irrlicht_material_id);
+              int skinning_offset, irr::video::SMaterial& m);
     // ------------------------------------------------------------------------
     void init(irr::scene::IBillboardSceneNode* node, int material_id,
               const btQuaternion& rotation);
@@ -148,6 +148,8 @@ private:
                       int current_buffer_idx,VkBuffer indirect_buffer,
                       size_t indirect_offset, unsigned draw_count,
                       GEVulkanPipelineType pt);
+    // ------------------------------------------------------------------------
+    void createPipelineLayout(GEVulkanDriver* vk);
 
 protected:
     typedef std::array<const irr::video::ITexture*,
@@ -159,9 +161,10 @@ protected:
 
     btQuaternion m_billboard_rotation;
 
-    std::map<std::pair<GESPMBuffer*, TexturesList>, std::unordered_map<uint32_t,
-        std::vector<std::pair<irr::scene::ISceneNode*, int> > > >
-        m_visible_nodes;
+    using Nodes = std::vector<std::pair<irr::scene::ISceneNode*,
+        irr::video::SMaterial&> >;
+    std::map<std::pair<GESPMBuffer*, int>,
+        std::unordered_map<uint32_t, Nodes> > m_visible_nodes;
 
     std::map<GESPMBuffer*, irr::scene::IMesh*> m_mb_map;
 
@@ -210,7 +213,9 @@ protected:
 
     VkDescriptorSet m_env_descriptor_set;
 
-    std::weak_ptr<std::atomic<VkImageView> > m_env_observer;
+    std::weak_ptr<bool> m_env_observer;
+
+    std::weak_ptr<VkDescriptorSetLayout> m_texture_descriptor_set_layout;
 
     VkPipelineLayout m_pipeline_layout, m_skybox_layout;
 

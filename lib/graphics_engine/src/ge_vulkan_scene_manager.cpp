@@ -192,6 +192,7 @@ void GEVulkanSceneManager::drawAll(irr::u32 flags)
     if (!rtt)
         return;
 
+    vk->getMeshTextureDescriptor()->updateDescriptor();
     std::vector<VkClearValue> clear_values(2);
     video::SColorf cf(vk->getRTTClearColor());
     clear_values[0].color =
@@ -241,7 +242,6 @@ void GEVulkanSceneManager::drawAll(irr::u32 flags)
     vkCmdEndRenderPass(cmd);
 
     GEVulkanCommandLoader::endSingleTimeCommands(cmd);
-    vk->handleDeletedTextures();
 }   // drawAll
 
 // ----------------------------------------------------------------------------

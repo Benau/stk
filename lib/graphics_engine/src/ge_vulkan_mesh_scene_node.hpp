@@ -2,6 +2,7 @@
 #define HEADER_GE_VULKAN_MESH_SCENE_NODE_HPP
 
 #include "../source/Irrlicht/CMeshSceneNode.h"
+#include <vector>
 
 namespace GE
 {
@@ -15,6 +16,10 @@ private:
     std::weak_ptr<bool> m_transparency_observer;
 
     irr::core::array<irr::video::E_MATERIAL_TYPE> m_ge_materials;
+
+    std::vector<int> m_texture_descriptor_ids;
+
+    std::vector<std::weak_ptr<int> > m_texture_descriptor_ids_observer;
 public:
     // ------------------------------------------------------------------------
     GEVulkanMeshSceneNode(irr::scene::IMesh* mesh,
@@ -34,6 +39,9 @@ public:
         CMeshSceneNode::setMesh(mesh);
         m_transparency_observer.reset();
         m_ge_materials.clear();
+        m_texture_descriptor_ids.resize(getMaterialCount());
+        m_texture_descriptor_ids_observer.clear();
+        m_texture_descriptor_ids_observer.resize(getMaterialCount());
     }
     // ------------------------------------------------------------------------
     virtual irr::video::E_MATERIAL_TYPE getMaterialType(irr::u32 i)
@@ -41,6 +49,13 @@ public:
         if (m_ge_materials.empty())
             return CMeshSceneNode::getMaterialType(i);
         return m_ge_materials[i];
+    }
+    // ------------------------------------------------------------------------
+    virtual irr::s32 getTextureDescriptorID(irr::u32 i) const
+    {
+        if (m_texture_descriptor_ids.empty())
+            return CMeshSceneNode::getTextureDescriptorID(i);
+        return m_texture_descriptor_ids[i];
     }
 };   // GEVulkanMeshSceneNode
 
