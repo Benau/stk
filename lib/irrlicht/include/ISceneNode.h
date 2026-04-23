@@ -803,6 +803,7 @@ namespace scene
 		void setNeedsUpdateAbsTrans(bool val) { NeedsUpdateAbsTrans = val; }
 		void setUpdatedAbsTrans(bool val) { UpdatedAbsTrans = val; }
 		virtual void resetFirstRenderInfo(std::shared_ptr<GE::GERenderInfo> ri) {}
+		virtual s32 getTextureDescriptorID(u32 i) const { return 0; }
 
 	protected:
 

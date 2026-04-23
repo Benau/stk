@@ -30,13 +30,16 @@ GEVulkanTexture::GEVulkanTexture(const std::string& path,
                : video::ITexture(path.c_str()), m_image_mani(image_mani),
                  m_locked_data(NULL),
                  m_vulkan_device(getVKDriver()->getDevice()),
-                 m_image(VK_NULL_HANDLE), m_vma_allocation(VK_NULL_HANDLE),
+                 m_image(VK_NULL_HANDLE), m_image_view(VK_NULL_HANDLE),
+                 m_image_view_srgb(VK_NULL_HANDLE),
+                 m_vma_allocation(VK_NULL_HANDLE),
                  m_vma_info(), m_layer_count(1),
                  m_image_view_type(VK_IMAGE_VIEW_TYPE_2D),
                  m_disable_reload(false), m_has_mipmaps(true),
                  m_ondemand_load(false), m_ondemand_loading(false),
                  m_internal_format(VK_FORMAT_R8G8B8A8_UNORM),
-                 m_vk(getVKDriver())
+                 m_vk(getVKDriver()),
+                 m_texture_observer(std::make_shared<bool>(true))
 {
     core::dimension2du max_size = getDriver()->getDriverAttributes()
         .getAttributeAsDimension2d("MAX_TEXTURE_SIZE");
@@ -61,7 +64,6 @@ GEVulkanTexture::GEVulkanTexture(const std::string& path,
             m_size = getResizingTarget(m_orig_size, max_size);
             if (m_size.Width < 4 || m_size.Height < 4)
                 m_has_mipmaps = false;
-            setPlaceHolderView();
         }
         else
             LoadingFailed = true;
@@ -81,13 +83,16 @@ GEVulkanTexture::GEVulkanTexture(video::IImage* img, const std::string& name)
                : video::ITexture(name.c_str()), m_image_mani(nullptr),
                  m_locked_data(NULL),
                  m_vulkan_device(getVKDriver()->getDevice()),
-                 m_image(VK_NULL_HANDLE), m_vma_allocation(VK_NULL_HANDLE),
+                 m_image(VK_NULL_HANDLE), m_image_view(VK_NULL_HANDLE),
+                 m_image_view_srgb(VK_NULL_HANDLE),
+                 m_vma_allocation(VK_NULL_HANDLE),
                  m_vma_info(), m_layer_count(1),
                  m_image_view_type(VK_IMAGE_VIEW_TYPE_2D),
                  m_disable_reload(true), m_has_mipmaps(true),
                  m_ondemand_load(false), m_ondemand_loading(false),
                  m_internal_format(VK_FORMAT_R8G8B8A8_UNORM),
-                 m_vk(getVKDriver())
+                 m_vk(getVKDriver()),
+                 m_texture_observer(std::make_shared<bool>(true))
 {
     if (!img)
     {
@@ -109,13 +114,15 @@ GEVulkanTexture::GEVulkanTexture(const std::string& name, unsigned int size,
                                  bool single_channel)
            : video::ITexture(name.c_str()), m_image_mani(nullptr),
              m_locked_data(NULL), m_vulkan_device(getVKDriver()->getDevice()),
-             m_image(VK_NULL_HANDLE), m_vma_allocation(VK_NULL_HANDLE),
-             m_vma_info(), m_layer_count(1),
+             m_image(VK_NULL_HANDLE), m_image_view(VK_NULL_HANDLE),
+             m_image_view_srgb(VK_NULL_HANDLE),
+             m_vma_allocation(VK_NULL_HANDLE), m_vma_info(), m_layer_count(1),
              m_image_view_type(VK_IMAGE_VIEW_TYPE_2D), m_disable_reload(true),
              m_has_mipmaps(true), m_ondemand_load(false),
              m_ondemand_loading(false), m_internal_format(single_channel ?
              VK_FORMAT_R8_UNORM : VK_FORMAT_R8G8B8A8_UNORM),
-             m_vk(getVKDriver())
+             m_vk(getVKDriver()),
+             m_texture_observer(std::make_shared<bool>(true))
 {
     if (isSingleChannel() && !GEVulkanFeatures::supportsR8Blit())
         m_has_mipmaps = false;
@@ -481,32 +488,20 @@ bool GEVulkanTexture::createImageView(VkImageAspectFlags aspect_flags,
         view_info.components.a = VK_COMPONENT_SWIZZLE_R;
     }
 
-    auto image_view = std::make_shared<std::atomic<VkImageView> >();
-    VkImageView view_ptr = VK_NULL_HANDLE;
     VkResult result = vkCreateImageView(m_vulkan_device, &view_info, NULL,
-        &view_ptr);
+        &m_image_view);
     if (result == VK_SUCCESS)
     {
-        image_view.get()->store(view_ptr);
-        m_image_view = image_view;
         VkFormat srgb_format = getSRGBformat(m_internal_format);
         if (create_srgb_view && m_internal_format != srgb_format)
         {
-            image_view = std::make_shared<std::atomic<VkImageView> >();
             view_info.format = srgb_format;
-            view_ptr = VK_NULL_HANDLE;
-            if (vkCreateImageView(m_vulkan_device, &view_info,
-                NULL, &view_ptr) == VK_SUCCESS)
-            {
-                image_view.get()->store(view_ptr);
-                m_image_view_srgb = image_view;
-            }
+            result = vkCreateImageView(m_vulkan_device, &view_info,
+                NULL, &m_image_view_srgb);
         }
 
-        if (m_placeholder_view)
-            m_placeholder_view.get()->store(VK_NULL_HANDLE);
         m_ondemand_loading.store(false);
-        return true;
+        return result == VK_SUCCESS;
     }
     else
     {
@@ -518,18 +513,12 @@ bool GEVulkanTexture::createImageView(VkImageAspectFlags aspect_flags,
 // ----------------------------------------------------------------------------
 void GEVulkanTexture::clearVulkanData()
 {
-    if (m_image_view)
+    if (m_image_view != VK_NULL_HANDLE)
     {
-        vkDestroyImageView(m_vulkan_device, m_image_view.get()->load(), NULL);
-        m_image_view.get()->store(VK_NULL_HANDLE);
-        m_image_view.reset();
-        if (m_image_view_srgb)
-        {
-            vkDestroyImageView(m_vulkan_device,
-                m_image_view_srgb.get()->load(), NULL);
-            m_image_view_srgb.get()->store(VK_NULL_HANDLE);
-            m_image_view_srgb.reset();
-        }
+        vkDestroyImageView(m_vulkan_device, m_image_view, NULL);
+        if (m_image_view_srgb != VK_NULL_HANDLE)
+            vkDestroyImageView(m_vulkan_device, m_image_view_srgb, NULL);
+        m_image_view = m_image_view_srgb = VK_NULL_HANDLE;
     }
     if (m_image != VK_NULL_HANDLE)
     {
@@ -552,21 +541,15 @@ void GEVulkanTexture::reloadInternal(const core::dimension2du& max_size)
         max_size, &m_orig_size);
     if (texture_image == NULL)
     {
-        if (m_ondemand_load)
-        {
-            printf("Missing texture_image in getResizedImageFullPath when "
-                "reloadInternal during ondemand loading for %s\n",
-                m_full_path.c_str());
-            m_size_lock.unlock();
-            m_image_view_lock.unlock();
-            m_thread_loading_lock.unlock();
-            return;
-        }
-        else
-        {
-            throw std::runtime_error(
-                "Missing texture_image in getResizedImageFullPath");
-        }
+        printf("Missing texture_image in getResizedImageFullPath when "
+            "reloadInternal for %s\n",
+            m_full_path.c_str());
+        if (!m_ondemand_loading)
+            m_size = m_orig_size = core::dimension2du(2, 2);
+        m_size_lock.unlock();
+        m_image_view_lock.unlock();
+        m_thread_loading_lock.unlock();
+        return;
     }
 
     m_size = texture_image->getDimension();
@@ -902,14 +885,13 @@ void GEVulkanTexture::reload()
             return;
     }
 
-    if (m_image_view || m_image != VK_NULL_HANDLE ||
+    if (m_image_view != VK_NULL_HANDLE || m_image != VK_NULL_HANDLE ||
         m_vma_allocation != VK_NULL_HANDLE)
         m_vk->waitIdle();
 
     if (m_ondemand_load)
     {
         clearVulkanData();
-        setPlaceHolderView();
     }
     else if (!m_disable_reload)
     {
@@ -924,43 +906,42 @@ void GEVulkanTexture::reload()
 }   // reload
 
 //-----------------------------------------------------------------------------
-void GEVulkanTexture::setPlaceHolderView()
+VkImageView GEVulkanTexture::getImageView(bool srgb, bool load_ondemand) const
 {
-    auto tex = static_cast<GEVulkanTexture*>(m_vk->getTransparentTexture());
-    auto image_view = std::make_shared<std::atomic<VkImageView> >();
-    image_view.get()->store((VkImageView)tex->getTextureHandler());
-    if (m_placeholder_view)
-        m_placeholder_view.get()->store(VK_NULL_HANDLE);
-    m_placeholder_view = image_view;
-}   // setPlaceHolderView
-
-//-----------------------------------------------------------------------------
-std::shared_ptr<std::atomic<VkImageView> > GEVulkanTexture::getImageViewLive(
-                                                               bool srgb) const
-{
-    assert(m_ondemand_load && m_placeholder_view);
-    if (m_ondemand_loading.load() == false)
+    if (!m_ondemand_load)
     {
-        if (m_image_view)
+        m_image_view_lock.lock();
+        m_image_view_lock.unlock();
+        if (srgb && m_image_view_srgb)
+            return m_image_view_srgb;
+        else if (m_image_view)
+            return m_image_view;
+    }
+    else
+    {
+        if (m_ondemand_loading.load() == false)
         {
-            if (srgb && m_image_view_srgb)
-                return m_image_view_srgb;
-            else
-                return m_image_view;
-        }
-        else
-        {
-            GEVulkanTexture* tex = const_cast<GEVulkanTexture*>(this);
-            core::dimension2du max_size = getDriver()->getDriverAttributes()
-                .getAttributeAsDimension2d("MAX_TEXTURE_SIZE");
-            tex->m_thread_loading_lock.lock();
-            tex->m_ondemand_loading.store(true);
-            GEVulkanCommandLoader::addMultiThreadingCommand(
-                std::bind(&GEVulkanTexture::reloadInternal, tex, max_size));
-            return m_placeholder_view;
+            if (m_image_view)
+            {
+                if (srgb && m_image_view_srgb)
+                    return m_image_view_srgb;
+                else
+                    return m_image_view;
+            }
+            else if (load_ondemand)
+            {
+                GEVulkanTexture* tex = const_cast<GEVulkanTexture*>(this);
+                core::dimension2du max_size = getDriver()->getDriverAttributes()
+                    .getAttributeAsDimension2d("MAX_TEXTURE_SIZE");
+                m_thread_loading_lock.lock();
+                tex->m_ondemand_loading.store(true);
+                GEVulkanCommandLoader::addMultiThreadingCommand(
+                    std::bind(&GEVulkanTexture::reloadInternal, tex, max_size));
+            }
         }
     }
-    return m_placeholder_view;
-}   // getImageViewLive
+    return static_cast<GEVulkanTexture*>(
+        m_vk->getTransparentTexture())->m_image_view;
+}   // getImageView
 
 }

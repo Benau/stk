@@ -69,7 +69,7 @@ void PipelineSettings::loadMaterial(const GEMaterial& m)
 
 // ============================================================================
 void ObjectData::init(irr::scene::ISceneNode* node, int material_id,
-                      int skinning_offset, int irrlicht_material_id)
+                      int skinning_offset, irr::video::SMaterial& m)
 {
     using namespace MiniGLM;
     const irr::core::matrix4& model_mat = node->getAbsoluteTransformation();
@@ -97,11 +97,10 @@ void ObjectData::init(irr::scene::ISceneNode* node, int material_id,
     memcpy(&m_scale_x, &scale, sizeof(irr::core::vector3df));
     m_skinning_offset = skinning_offset;
     m_material_id = material_id;
-    const irr::core::matrix4& texture_matrix =
-        node->getMaterial(irrlicht_material_id).getTextureMatrix(0);
+    const irr::core::matrix4& texture_matrix = m.getTextureMatrix(0);
     m_texture_trans[0] = texture_matrix[8];
     m_texture_trans[1] = texture_matrix[9];
-    auto& ri = node->getMaterial(irrlicht_material_id).getRenderInfo();
+    auto& ri = m.getRenderInfo();
     if (ri && ri->getHue() > 0.0f)
         m_hue_change = ri->getHue();
     else
@@ -349,9 +348,10 @@ void GEVulkanDrawCall::addNode(irr::scene::ISceneNode* node)
             m_dynamic_spm_buffers[shader][buffer] = {node};
             continue;
         }
-        TexturesList t = getTexturesList(node->getMaterial(i));
-        std::pair<GESPMBuffer*, TexturesList> k = std::make_pair(buffer, t);
-        m_visible_nodes[k][(uint32_t)mt].emplace_back(node, i);
+        irr::video::SMaterial& m = node->getMaterial(i);
+        std::pair<GESPMBuffer*, int> k = std::make_pair(buffer,
+            node->getTextureDescriptorID(i));
+        m_visible_nodes[k][(uint32_t)mt].emplace_back(node, m);
         m_mb_map[buffer] = mesh;
         if (anode && !added_skinning &&
             !anode->getSkinningMatrices().empty() &&
@@ -388,7 +388,6 @@ void GEVulkanDrawCall::generate(GEVulkanDriver* vk)
     if (m_light_handler)
          m_light_handler->generate(m_view_position, m_skybox_renderer);
 
-    using Nodes = std::vector<std::pair<irr::scene::ISceneNode*, int> >;
     using ShaderNodes = std::pair<std::string, Nodes>;
     using MeshBufferMaterial = std::pair<GESPMBuffer*, int>;
     using ShaderNodesMeshBufferMaterial =
@@ -418,9 +417,7 @@ void GEVulkanDrawCall::generate(GEVulkanDriver* vk)
 
             std::string shader = GEMaterialManager::getShader(
                 (video::E_MATERIAL_TYPE)q.first);
-            TexturesList textures = p.first.second;
-            const irr::video::ITexture** list = &textures[0];
-            int material_id = m_texture_descriptor->getTextureID(list, shader);
+            int material_id = p.first.second;
             bool skinning = p.first.first->hasSkinning();
             if (skinning)
             {
@@ -495,6 +492,13 @@ void GEVulkanDrawCall::generate(GEVulkanDriver* vk)
         });
 
     generateDynamicSPM(vk);
+    if (m_texture_descriptor_set_layout.expired())
+    {
+        vk->waitIdle();
+        createPipelineLayout(vk);
+        createAllPipelines(vk);
+    }
+
     if (m_visible_nodes.empty())
     {
         for (auto& p : visible_nodes)
@@ -613,13 +617,13 @@ start:
         {
             irr::scene::ISceneNode* node = q.first;
             const irr::core::matrix4& texture_matrix =
-                node->getMaterial(q.second).getTextureMatrix(0);
+                q.second.getTextureMatrix(0);
             if (texture_matrix[8] != 0.0f || texture_matrix[9] != 0.0f)
             {
                 skip_instance_key = true;
                 break;
             }
-            auto& ri = node->getMaterial(q.second).getRenderInfo();
+            auto& ri = q.second.getRenderInfo();
             if (ri && ri->getHue() > 0.0f)
             {
                 key.m_hue_change = true;
@@ -897,8 +901,65 @@ void GEVulkanDrawCall::prepare(GEVulkanCameraSceneNode* cam)
 }   // prepare
 
 // ----------------------------------------------------------------------------
+void GEVulkanDrawCall::createPipelineLayout(GEVulkanDriver* vk)
+{
+    if (m_data_layout == VK_NULL_HANDLE)
+        return;
+
+    if (m_pipeline_layout != VK_NULL_HANDLE)
+    {
+        vkDestroyPipelineLayout(vk->getDevice(), m_pipeline_layout, NULL);
+        m_pipeline_layout = VK_NULL_HANDLE;
+    }
+
+    auto tdsl = m_texture_descriptor->getDescriptorSetLayout();
+    std::vector<VkDescriptorSetLayout> all_layouts =
+    {
+        *tdsl,
+        m_data_layout
+    };
+    if (getGEConfig()->m_pbr)
+    {
+        all_layouts.push_back(
+            vk->getSkyBoxRenderer()->getEnvDescriptorSetLayout());
+        if (vk->getRTTTexture() && vk->getRTTTexture()->isDeferredFBO())
+        {
+            auto* dfbo = static_cast<GEVulkanDeferredFBO*>(vk->getRTTTexture());
+            if (dfbo->getAttachment<GVDFT_DISPLACE_COLOR>())
+            {
+                all_layouts.push_back(
+                    dfbo->getDescriptorSetLayout(GVDFP_DISPLACE_COLOR));
+            }
+        }
+    }
+
+    VkPipelineLayoutCreateInfo pipeline_layout_info = {};
+    pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipeline_layout_info.setLayoutCount = all_layouts.size();
+    pipeline_layout_info.pSetLayouts = all_layouts.data();
+
+    VkPushConstantRange push_constant;
+    push_constant.offset = 0;
+    const VkPhysicalDeviceLimits& limit =
+        vk->getPhysicalDeviceProperties().limits;
+    push_constant.size = std::min(limit.maxPushConstantsSize, 128u);
+    push_constant.stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS;
+    pipeline_layout_info.pPushConstantRanges = &push_constant;
+    pipeline_layout_info.pushConstantRangeCount = 1;
+
+    if (vkCreatePipelineLayout(vk->getDevice(), &pipeline_layout_info,
+        NULL, &m_pipeline_layout) != VK_SUCCESS)
+    {
+        throw std::runtime_error(
+            "vkCreatePipelineLayout failed for m_pipeline_layout");
+    }
+    m_texture_descriptor_set_layout = tdsl;
+}   // createPipelineLayout
+
+// ----------------------------------------------------------------------------
 void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
 {
+    m_graphics_pipelines.clear();
     PipelineSettings settings;
     if (isShadow())
         settings.m_depth_op = VK_COMPARE_OP_LESS;
@@ -1594,25 +1655,14 @@ void GEVulkanDrawCall::createVulkanData()
     }
 
     // m_pipeline_layout
+    createPipelineLayout(vk);
+
+    // m_skybox_layout
     std::vector<VkDescriptorSetLayout> all_layouts =
     {
-        *m_texture_descriptor->getDescriptorSetLayout(),
+        vk->getSkyBoxRenderer()->getEnvDescriptorSetLayout(),
         m_data_layout
     };
-    if (getGEConfig()->m_pbr)
-    {
-        all_layouts.push_back(
-            vk->getSkyBoxRenderer()->getEnvDescriptorSetLayout());
-        if (vk->getRTTTexture() && vk->getRTTTexture()->isDeferredFBO())
-        {
-            auto* dfbo = static_cast<GEVulkanDeferredFBO*>(vk->getRTTTexture());
-            if (dfbo->getAttachment<GVDFT_DISPLACE_COLOR>())
-            {
-                all_layouts.push_back(
-                    dfbo->getDescriptorSetLayout(GVDFP_DISPLACE_COLOR));
-            }
-        }
-    }
 
     VkPipelineLayoutCreateInfo pipeline_layout_info = {};
     pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -1627,20 +1677,6 @@ void GEVulkanDrawCall::createVulkanData()
     push_constant.stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS;
     pipeline_layout_info.pPushConstantRanges = &push_constant;
     pipeline_layout_info.pushConstantRangeCount = 1;
-
-    result = vkCreatePipelineLayout(vk->getDevice(), &pipeline_layout_info,
-        NULL, &m_pipeline_layout);
-
-    if (result != VK_SUCCESS)
-    {
-        throw std::runtime_error(
-            "vkCreatePipelineLayout failed for m_pipeline_layout");
-    }
-
-    all_layouts.resize(2);
-    all_layouts[0] = vk->getSkyBoxRenderer()->getEnvDescriptorSetLayout();
-    pipeline_layout_info.setLayoutCount = all_layouts.size();
-    pipeline_layout_info.pSetLayouts = all_layouts.data();
     result = vkCreatePipelineLayout(vk->getDevice(), &pipeline_layout_info,
         NULL, &m_skybox_layout);
 
@@ -1768,7 +1804,6 @@ void GEVulkanDrawCall::prepareRendering(GEVulkanDriver* vk,
                                         GEVulkanCameraSceneNode* cam)
 {
     updateDataDescriptorSets(vk, cam);
-    m_texture_descriptor->updateDescriptor();
 }   // prepareRendering
 
 // ----------------------------------------------------------------------------
@@ -2542,16 +2577,14 @@ void GEVulkanDrawCall::generateDynamicSPM(GEVulkanDriver* vk)
     for (auto& p : m_dynamic_spm_buffers)
     {
         const std::string& shader = p.first;
+        auto* material = GEMaterialManager::getMaterial(shader);
         const PipelineSettings& settings =
             m_graphics_pipelines[shader].m_settings;
         for (auto& q : p.second)
         {
             GESPMBuffer* buf = q.first;
-            const irr::video::SMaterial& m = buf->getMaterial();
-            TexturesList textures = getTexturesList(m);
-            const irr::video::ITexture** list = &textures[0];
-            int material_id = m_texture_descriptor->getTextureID(list,
-                shader);
+            int material_id = *m_texture_descriptor->getTextureID(
+                buf->getMaterial(), material);
             unsigned dynamic_spm_offset = written_size;
             for (irr::scene::ISceneNode* node : q.second)
             {
@@ -2560,11 +2593,8 @@ void GEVulkanDrawCall::generateDynamicSPM(GEVulkanDriver* vk)
                 {
                     if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
                     {
-                        const irr::video::SMaterial& m = node->getMaterial(0);
-                        TexturesList textures = getTexturesList(m);
-                        const irr::video::ITexture** list = &textures[0];
-                        material_id = m_texture_descriptor->getTextureID(list,
-                            shader);
+                        material_id = *m_texture_descriptor->getTextureID(
+                            node->getMaterial(0), material);
                     }
                     if (node->getType() == irr::scene::ESNT_PARTICLE_SYSTEM)
                     {
@@ -2599,7 +2629,7 @@ void GEVulkanDrawCall::generateDynamicSPM(GEVulkanDriver* vk)
                 else
                 {
                     ObjectData* data = (ObjectData*)mapped_addr;
-                    data->init(node, material_id, -1, 0);
+                    data->init(node, material_id, -1, node->getMaterial(0));
                     written_size += sizeof(ObjectData);
                     mapped_addr += sizeof(ObjectData);
                 }

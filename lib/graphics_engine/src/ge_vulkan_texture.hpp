@@ -36,15 +36,13 @@ protected:
 
     VkImage m_image;
 
+    VkImageView m_image_view;
+
+    VkImageView m_image_view_srgb;
+
     VmaAllocation m_vma_allocation;
 
     VmaAllocationInfo m_vma_info;
-
-    std::shared_ptr<std::atomic<VkImageView> > m_image_view;
-
-    std::shared_ptr<std::atomic<VkImageView> > m_image_view_srgb;
-
-    std::shared_ptr<std::atomic<VkImageView> > m_placeholder_view;
 
     unsigned m_layer_count;
 
@@ -69,6 +67,8 @@ protected:
     VkFormat m_internal_format;
 
     GEVulkanDriver* m_vk;
+
+    std::shared_ptr<bool> m_texture_observer;
 
     // ------------------------------------------------------------------------
     VkFormat getSRGBformat(VkFormat format)
@@ -112,11 +112,6 @@ protected:
     bool isSingleChannel() const
                             { return m_internal_format == VK_FORMAT_R8_UNORM; }
     // ------------------------------------------------------------------------
-    void setPlaceHolderView();
-    // ------------------------------------------------------------------------
-    std::shared_ptr<std::atomic<VkImageView> > getImageViewLive(
-                                                      bool srgb = false) const;
-    // ------------------------------------------------------------------------
     bool waitImageView() const
     {
         if (!m_ondemand_load)
@@ -133,10 +128,15 @@ protected:
         return true;
     }
     // ------------------------------------------------------------------------
-    GEVulkanTexture() : video::ITexture(""), m_vma_info(), m_layer_count(1),
+    GEVulkanTexture() : video::ITexture(""), m_image(VK_NULL_HANDLE),
+                        m_image_view(VK_NULL_HANDLE),
+                        m_image_view_srgb(VK_NULL_HANDLE),
+                        m_vma_allocation(VK_NULL_HANDLE), m_vma_info(),
+                        m_layer_count(1),
                         m_image_view_type(VK_IMAGE_VIEW_TYPE_2D),
                         m_disable_reload(true), m_ondemand_load(false),
-                        m_ondemand_loading(false)                            {}
+                        m_ondemand_loading(false),
+                        m_texture_observer(std::make_shared<bool>(true))     {}
 public:
     // ------------------------------------------------------------------------
     GEVulkanTexture(const std::string& path,
@@ -194,19 +194,7 @@ public:
     virtual void regenerateMipMapLevels(void* mipmap_data = NULL)            {}
     // ------------------------------------------------------------------------
     virtual u64 getTextureHandler() const
-    {
-        if (!m_ondemand_load)
-        {
-            m_image_view_lock.lock();
-            m_image_view_lock.unlock();
-            return m_image_view ? (u64)(m_image_view.get()->load()) : 0;
-        }
-        else
-        {
-            auto image_view = getImageViewLive();
-            return (u64)(image_view.get()->load());
-        }
-    }
+            { return (u64)getImageView(false/*srgb*/, true/*load_ondemand*/); }
     // ------------------------------------------------------------------------
     virtual unsigned int getTextureSize() const
     {
@@ -218,22 +206,6 @@ public:
     // ------------------------------------------------------------------------
     virtual void updateTexture(void* data, irr::video::ECOLOR_FORMAT format,
                                u32 w, u32 h, u32 x, u32 y);
-    // ------------------------------------------------------------------------
-    virtual std::shared_ptr<std::atomic<VkImageView> > getImageView(
-                                                       bool srgb = false) const
-    {
-        if (!m_ondemand_load)
-        {
-            m_image_view_lock.lock();
-            m_image_view_lock.unlock();
-            if (srgb && m_image_view_srgb)
-                return m_image_view_srgb;
-            else
-                return m_image_view;
-        }
-        else
-            return getImageViewLive(srgb);
-    }
     // ------------------------------------------------------------------------
     virtual bool useOnDemandLoad() const            { return m_ondemand_load; }
     // ------------------------------------------------------------------------
@@ -253,6 +225,12 @@ public:
             return 1;
         return std::floor(std::log2(std::max(m_size.Width, m_size.Height))) + 1;
     }
+    // ------------------------------------------------------------------------
+    virtual VkImageView getImageView(bool srgb = false,
+                                     bool load_ondemand = false) const;
+    // ------------------------------------------------------------------------
+    std::shared_ptr<bool> getTextureObserver() const
+                                                 { return m_texture_observer; }
 };   // GEVulkanTexture
 
 }

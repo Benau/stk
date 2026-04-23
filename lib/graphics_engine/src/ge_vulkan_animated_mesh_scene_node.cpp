@@ -1,9 +1,12 @@
 #include "ge_vulkan_animated_mesh_scene_node.hpp"
 
 #include "ge_animation.hpp"
+#include "ge_main.hpp"
 #include "ge_material_manager.hpp"
 #include "ge_render_info.hpp"
 #include "ge_spm.hpp"
+#include "ge_vulkan_driver.hpp"
+#include "ge_vulkan_texture_descriptor.hpp"
 
 #include "ISceneManager.h"
 #include "../../../lib/irrlicht/source/Irrlicht/CBoneSceneNode.h"
@@ -57,6 +60,22 @@ void GEVulkanAnimatedMeshSceneNode::OnRegisterSceneNode()
         }
     }
 
+    for (unsigned i = 0; i < m_texture_descriptor_ids.size(); i++)
+    {
+        if (m_texture_descriptor_ids_observer[i].expired())
+        {
+            GEVulkanTextureDescriptor* td =
+                getVKDriver()->getMeshTextureDescriptor();
+            // Ghost shader uses the same srgb setting so we can use the
+            // original material
+            video::SMaterial& m = getMaterial(i);
+            std::shared_ptr<int>& slot = td->getTextureID(m,
+                GEMaterialManager::getMaterial(m.MaterialType));
+            m_texture_descriptor_ids_observer[i] = slot;
+            m_texture_descriptor_ids[i] = *slot;
+        }
+    }
+
     SceneManager->registerNodeForRendering(this, scene::ESNRP_SOLID);
     ISceneNode::OnRegisterSceneNode();
 }   // OnRegisterSceneNode
@@ -68,6 +87,9 @@ void GEVulkanAnimatedMeshSceneNode::setMesh(irr::scene::IAnimatedMesh* mesh)
     if (!spm)
         return;
     CAnimatedMeshSceneNode::setMesh(spm);
+    m_texture_descriptor_ids.resize(getMaterialCount());
+    m_texture_descriptor_ids_observer.clear();
+    m_texture_descriptor_ids_observer.resize(getMaterialCount());
     m_transparency_observer.reset();
     m_ge_materials.clear();
     cleanJoints();

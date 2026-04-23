@@ -753,7 +753,6 @@ void KartPropertiesManager::onDemandLoadKartTextures(
         ingame_karts_folder.insert(StringUtils::getPath(kart_dir));
     }
 
-    bool unloaded_unused = false;
     for (auto tex : STKTexManager::getInstance()->getAllTextures())
     {
         if (!tex.second || !tex.second->useOnDemandLoad())
@@ -786,15 +785,10 @@ void KartPropertiesManager::onDemandLoadKartTextures(
         if (in_use)
             tex.second->getTextureHandler();
         else if (unload_unused)
-        {
-            unloaded_unused = true;
             tex.second->reload();
-        }
     }
 
     gevd->setDisableWaitIdle(false);
-    if (unloaded_unused)
-        gevd->handleDeletedTextures();
 #endif
 }   // onDemandLoadKartTextures
 

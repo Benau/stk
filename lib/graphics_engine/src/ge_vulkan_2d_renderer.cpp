@@ -37,6 +37,8 @@ GEVulkanDynamicBuffer* g_tris_buffer = NULL;
 
 std::vector<VkDescriptorSet> g_descriptor_sets;
 
+std::weak_ptr<VkDescriptorSetLayout> g_descriptor_set_layout;
+
 struct Tri
 {
     core::vector2df pos;
@@ -58,6 +60,7 @@ void GEVulkan2dRenderer::init(GEVulkanDriver* vk)
         GEVulkanShaderManager::getSamplerSize(), 1,
         GEVulkanFeatures::supportsBindTexturesAtOnce());
     g_texture_descriptor->setSamplerUse(GVS_2D_RENDER);
+    g_descriptor_set_layout = g_texture_descriptor->getDescriptorSetLayout();
     createPipelineLayout();
     createGraphicsPipeline();
     createTrisBuffers();
@@ -83,7 +86,7 @@ void GEVulkan2dRenderer::createPipelineLayout()
     VkPipelineLayoutCreateInfo pipeline_layout_info = {};
     pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipeline_layout_info.setLayoutCount = 1;
-    pipeline_layout_info.pSetLayouts = g_texture_descriptor->getDescriptorSetLayout();
+    pipeline_layout_info.pSetLayouts = g_texture_descriptor->getDescriptorSetLayout().get();
 
     VkResult result = vkCreatePipelineLayout(g_vk->getDevice(), &pipeline_layout_info,
         nullptr, &g_pipeline_layout);
@@ -276,21 +279,23 @@ void GEVulkan2dRenderer::uploadTrisBuffers()
         { (void*)g_tris_queue.data(), g_tris_queue.size() * sizeof(Tri) },
         { (void*)g_tris_index_queue.data(), g_tris_index_queue.size() * sizeof(uint16_t) }
     });
-
-    g_texture_descriptor->updateDescriptor();
 }   // uploadTrisBuffers
-
-// ----------------------------------------------------------------------------
-void GEVulkan2dRenderer::handleDeletedTextures()
-{
-    g_texture_descriptor->handleDeletedTextures();
-}   // handleDeletedTextures
 
 // ----------------------------------------------------------------------------
 void GEVulkan2dRenderer::render()
 {
     if (g_tris_queue.empty())
         return;
+
+    if (g_descriptor_set_layout.expired())
+    {
+        g_vk->waitIdle();
+        vkDestroyPipeline(g_vk->getDevice(), g_graphics_pipeline, NULL);
+        vkDestroyPipelineLayout(g_vk->getDevice(), g_pipeline_layout, NULL);
+        g_descriptor_set_layout = g_texture_descriptor->getDescriptorSetLayout();
+        createPipelineLayout();
+        createGraphicsPipeline();
+    }
 
     VkDeviceSize offsets[] = {0};
     VkBuffer buffer = VK_NULL_HANDLE;
@@ -408,7 +413,7 @@ void GEVulkan2dRenderer::addVerticesIndices(irr::video::S3DVertex* vertices,
     uint16_t last_index = (uint16_t)g_tris_queue.size();
     if (last_index + vertices_count > 65535)
         return;
-    int sampler_idx = g_texture_descriptor->getTextureID(&t);
+    int sampler_idx = *g_texture_descriptor->getTextureID(t);
     for (unsigned idx = 0; idx < vertices_count; idx++)
     {
         Tri t;
@@ -449,5 +454,11 @@ void GEVulkan2dRenderer::addVerticesIndices(irr::video::S3DVertex* vertices,
         }
     }
 }   // addVerticesIndices
+
+// ----------------------------------------------------------------------------
+void GEVulkan2dRenderer::updateTextureDescriptor()
+{
+    g_texture_descriptor->updateDescriptor();
+}   // updateTextureDescriptor
 
 }
