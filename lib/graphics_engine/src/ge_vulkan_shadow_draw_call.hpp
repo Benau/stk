@@ -35,6 +35,8 @@ private:
     virtual void prepare(GEVulkanCameraSceneNode* cam)       { assert(false); }
     // ------------------------------------------------------------------------
     virtual bool ignoreMaterial(irr::video::E_MATERIAL_TYPE mt) const;
+    // ------------------------------------------------------------------------
+    virtual void generateDynamicSPM(GEVulkanDriver* vk);
 
 public:
     // ------------------------------------------------------------------------

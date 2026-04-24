@@ -405,12 +405,23 @@ void STKTextBillboard::initLegacy(const core::stringw& text, FontWithFace* face)
             }
             for (unsigned i = 0; i < p.second.size(); i++)
             {
+                // Front-facing triangles
                 spm_mb->getIndicesVector().push_back(4 * i + 2);
                 spm_mb->getIndicesVector().push_back(4 * i + 1);
                 spm_mb->getIndicesVector().push_back(4 * i + 0);
                 spm_mb->getIndicesVector().push_back(4 * i + 3);
                 spm_mb->getIndicesVector().push_back(4 * i + 2);
                 spm_mb->getIndicesVector().push_back(4 * i + 0);
+                if (CVS->isShadowEnabled())
+                {
+                    // Back-facing triangles (reverse winding)
+                    spm_mb->getIndicesVector().push_back(4 * i + 0);
+                    spm_mb->getIndicesVector().push_back(4 * i + 1);
+                    spm_mb->getIndicesVector().push_back(4 * i + 2);
+                    spm_mb->getIndicesVector().push_back(4 * i + 0);
+                    spm_mb->getIndicesVector().push_back(4 * i + 2);
+                    spm_mb->getIndicesVector().push_back(4 * i + 3);
+                }
             }
             spm_mb->recalculateBoundingBox();
             spm->addMeshBuffer(spm_mb);
