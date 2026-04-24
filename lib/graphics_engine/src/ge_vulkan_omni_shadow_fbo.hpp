@@ -27,6 +27,7 @@ private:
 public:
     // ------------------------------------------------------------------------
     GEVulkanOmniShadowFBO(GEVulkanDriver* vk, unsigned shadow_size,
+                          GEVulkanDrawCall* master_dc,
                           irr::scene::ILightSceneNode* sun);
     // ------------------------------------------------------------------------
     virtual void createDrawCalls();

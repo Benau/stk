@@ -18,9 +18,10 @@ namespace GE
 {
 // ----------------------------------------------------------------------------
 GEVulkanShadowFBO::GEVulkanShadowFBO(GEVulkanDriver* vk, unsigned shadow_size,
+                                     GEVulkanDrawCall* master_dc,
                                      irr::scene::ILightSceneNode* sun,
                                      unsigned layer_count)
-                 : GEVulkanTexture(), m_sun(sun),
+                 : GEVulkanTexture(), m_master_dc(master_dc), m_sun(sun),
                    m_rtt_render_pass(VK_NULL_HANDLE),
                    m_rtt_frame_buffer(VK_NULL_HANDLE),
                    m_frame_buffer_image_views({}),
@@ -477,6 +478,7 @@ void GEVulkanShadowFBO::render(VkCommandBuffer cmd,
     scissor.extent.height = vp.height;
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
+    m_master_dc->updateDataDescriptorSets(m_vk, cam);
     for (unsigned i = 0; i < m_shadow_draw_calls.size(); i++)
     {
         if (m_shadow_draw_calls[i]->getRenderState())
@@ -485,7 +487,7 @@ void GEVulkanShadowFBO::render(VkCommandBuffer cmd,
                 m_shadow_draw_calls[i]->bindAllMaterials(cmd);
             else
                 rebind_base_vertex = true;
-            m_shadow_draw_calls[i]->prepareRendering(m_vk, cam);
+            m_shadow_draw_calls[i]->updateDataDescriptorSets(m_vk, cam);
             m_shadow_draw_calls[i]->renderPipeline(m_vk, cmd, GVPT_DEPTH,
                 rebind_base_vertex);
         }

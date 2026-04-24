@@ -36,6 +36,9 @@ enum GEVulkanShadowCameraCascade : unsigned
 
 class GEVulkanShadowFBO : public GEVulkanTexture
 {
+private:
+    GEVulkanDrawCall* m_master_dc;
+
 protected:
     irr::scene::ILightSceneNode* m_sun;
 
@@ -69,6 +72,7 @@ protected:
 public:
     // ------------------------------------------------------------------------
     GEVulkanShadowFBO(GEVulkanDriver* vk, unsigned shadow_size,
+                      GEVulkanDrawCall* master_dc = NULL,
                       irr::scene::ILightSceneNode* sun = NULL,
                       unsigned layer_count = GVSCC_COUNT);
     // ------------------------------------------------------------------------
@@ -104,6 +108,8 @@ public:
     GEVulkanDrawCall* getDrawCall(unsigned i) const;
     // ------------------------------------------------------------------------
     unsigned getDrawCallCount() const    { return m_shadow_draw_calls.size(); }
+    // ------------------------------------------------------------------------
+    GEVulkanDrawCall* getMasterDrawCall() const         { return m_master_dc; }
 
 };   // GEVulkanShadowFBO
 

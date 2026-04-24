@@ -2610,7 +2610,7 @@ void GEVulkanDriver::renderDrawCalls(
                 q.first->bindAllMaterials(cmd);
             else
                 rebind_base_vertex = true;
-            q.first->prepareRendering(this, q.second);
+            q.first->updateDataDescriptorSets(this, q.second);
             q.first->prepareViewport(this, q.second->getViewPort(), cmd);
             if (q.first->doDepthOnlyRenderingFirst())
             {
@@ -2727,7 +2727,7 @@ void GEVulkanDriver::renderDrawCalls(
                 q.first->bindAllMaterials(cmd);
             else
                 rebind_base_vertex = true;
-            q.first->prepareRendering(this, q.second);
+            q.first->updateDataDescriptorSets(this, q.second);
             q.first->prepareViewport(this, q.second->getViewPort(), cmd);
             if (q.first->doDepthOnlyRenderingFirst())
             {

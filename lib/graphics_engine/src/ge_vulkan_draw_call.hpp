@@ -64,7 +64,7 @@ struct ObjectData
               int skinning_offset, irr::video::SMaterial& m);
     // ------------------------------------------------------------------------
     void init(irr::scene::IBillboardSceneNode* node, int material_id,
-              const btQuaternion& rotation);
+              const btQuaternion& rotation, bool mirror);
     // ------------------------------------------------------------------------
     void init(const irr::scene::SParticle& particle, int material_id,
               const btQuaternion& rotation,
@@ -122,6 +122,7 @@ struct DynamicSPMData
     int m_material_id;
     uint32_t m_dynamic_offset;
     uint32_t m_instance_count;
+    VkDescriptorSet m_descriptor_set;
 };
 
 class GEVulkanHiZDepth;
@@ -141,8 +142,6 @@ private:
                                                               { return false; }
     // ------------------------------------------------------------------------
     size_t getDynamicSPMSize() const;
-    // ------------------------------------------------------------------------
-    void generateDynamicSPM(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
     void drawCommands(VkCommandBuffer cmd, const std::string& pipeline,
                       int current_buffer_idx,VkBuffer indirect_buffer,
@@ -224,7 +223,7 @@ protected:
     std::unordered_map<std::string, PipelineData> m_graphics_pipelines;
 
     std::map<std::string, std::map<GESPMBuffer*, DynamicSPMData > >
-        m_dyspmb_materials;
+        m_rendered_dspm;
 
     GEVulkanSkyBoxRenderer* m_skybox_renderer;
 
@@ -262,9 +261,6 @@ protected:
         return textures;
     }
     // ------------------------------------------------------------------------
-    void updateDataDescriptorSets(GEVulkanDriver* vk,
-                                  GEVulkanCameraSceneNode* cam);
-    // ------------------------------------------------------------------------
     void bindBaseVertex(GEVulkanDriver* vk, VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
     void bindSingleMaterial(VkCommandBuffer cmd,
@@ -280,16 +276,6 @@ protected:
             dynamic_offsets.size(), dynamic_offsets.data());
     }
     // ------------------------------------------------------------------------
-    void bindDynamicSPMDescriptor(VkCommandBuffer cmd,
-                                  int current_buffer_idx,
-                                  std::vector<uint32_t>& dynamic_offsets)
-    {
-        vkCmdBindDescriptorSets(cmd,
-            VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline_layout, 1, 1,
-            &m_dspm_descriptor_sets[current_buffer_idx],
-            dynamic_offsets.size(), dynamic_offsets.data());
-    }
-    // ------------------------------------------------------------------------
     VertexDescription getDefaultVertexDescription() const;
     // ------------------------------------------------------------------------
     std::vector<uint32_t> getDefaultDynamicOffsets() const;
@@ -299,6 +285,8 @@ protected:
     // ------------------------------------------------------------------------
     virtual uint32_t getSubpassForPipelineCreation(GEVulkanDriver* vk,
                                            GEVulkanPipelineType type);
+    // ------------------------------------------------------------------------
+    virtual void generateDynamicSPM(GEVulkanDriver* vk);
 
 public:
     // ------------------------------------------------------------------------
@@ -322,7 +310,8 @@ public:
     // ------------------------------------------------------------------------
     void bindAllMaterials(VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
-    void prepareRendering(GEVulkanDriver* vk, GEVulkanCameraSceneNode* cam);
+    void updateDataDescriptorSets(GEVulkanDriver* vk,
+                                  GEVulkanCameraSceneNode* cam);
     // ------------------------------------------------------------------------
     void prepareViewport(GEVulkanDriver* vk,
                          const irr::core::rect<irr::s32>& viewp,
@@ -354,7 +343,7 @@ public:
         m_mb_map.clear();
         m_cmds.clear();
         m_visible_objects.clear();
-        m_dyspmb_materials.clear();
+        m_rendered_dspm.clear();
         m_skinning_nodes.clear();
         m_materials_data.clear();
         m_dynamic_spm_buffers.clear();
@@ -383,6 +372,9 @@ public:
     GECullingTool* getCullingTool() const            { return m_culling_tool; }
     // ------------------------------------------------------------------------
     void setLightDataOffset(unsigned offset)  { m_light_data_offset = offset; }
+    // ------------------------------------------------------------------------
+    const std::map<std::string, std::map<GESPMBuffer*, DynamicSPMData > >&
+                      getRenderedDynamicSPM() const { return m_rendered_dspm; }
 
 };   // GEVulkanDrawCall
 
