@@ -23,6 +23,8 @@ GEVulkanMeshSceneNode::GEVulkanMeshSceneNode(irr::scene::IMesh* mesh,
     m_remove_from_mesh_cache = false;
     m_texture_descriptor_ids.resize(getMaterialCount());
     m_texture_descriptor_ids_observer.resize(getMaterialCount());
+    setAbsoluteRotationScale(AbsoluteTransformation, m_abs_rotation,
+        m_abs_scale);
 }   // GEVulkanMeshSceneNode
 
 // ----------------------------------------------------------------------------
@@ -86,5 +88,16 @@ void GEVulkanMeshSceneNode::OnRegisterSceneNode()
     SceneManager->registerNodeForRendering(this, scene::ESNRP_SOLID);
     ISceneNode::OnRegisterSceneNode();
 }   // OnRegisterSceneNode
+
+// ----------------------------------------------------------------------------
+void GEVulkanMeshSceneNode::updateAbsolutePosition()
+{
+    scene::CMeshSceneNode::updateAbsolutePosition();
+    if (UpdatedAbsTrans)
+    {
+        setAbsoluteRotationScale(AbsoluteTransformation, m_abs_rotation,
+            m_abs_scale);
+    }
+}   // updateAbsolutePosition
 
 }

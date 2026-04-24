@@ -23,6 +23,8 @@ GEVulkanAnimatedMeshSceneNode::GEVulkanAnimatedMeshSceneNode(irr::scene::IAnimat
                                          rotation, scale)
 {
     m_saved_transition_frame = -1.0f;
+    setAbsoluteRotationScale(AbsoluteTransformation, m_abs_rotation,
+        m_abs_scale);
 }   // GEVulkanAnimatedMeshSceneNode
 
 // ----------------------------------------------------------------------------
@@ -183,5 +185,16 @@ void GEVulkanAnimatedMeshSceneNode::setTransitionTime(irr::f32 Time)
         m_saved_transition_frame = getFrameNr();
     }
 }   // setTransitionTime
+
+// ----------------------------------------------------------------------------
+void GEVulkanAnimatedMeshSceneNode::updateAbsolutePosition()
+{
+    scene::CAnimatedMeshSceneNode::updateAbsolutePosition();
+    if (UpdatedAbsTrans)
+    {
+        setAbsoluteRotationScale(AbsoluteTransformation, m_abs_rotation,
+            m_abs_scale);
+    }
+}   // updateAbsolutePosition
 
 }

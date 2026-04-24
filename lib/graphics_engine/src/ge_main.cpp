@@ -237,4 +237,28 @@ std::array<float, 4>& getDisplaceDirection()
     return g_displace_direction;
 }
 
+void setAbsoluteRotationScale(const irr::core::matrix4& model_matrix,
+                              irr::core::quaternion& rotation,
+                              irr::core::vector3df& scale)
+{
+    rotation = irr::core::quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+    scale = model_matrix.getScale();
+    if (scale.X != 0.0f && scale.Y != 0.0f && scale.Z != 0.0f)
+    {
+        irr::core::matrix4 local_mat = model_matrix;
+        local_mat[0] = local_mat[0] / scale.X / local_mat[15];
+        local_mat[1] = local_mat[1] / scale.X / local_mat[15];
+        local_mat[2] = local_mat[2] / scale.X / local_mat[15];
+        local_mat[4] = local_mat[4] / scale.Y / local_mat[15];
+        local_mat[5] = local_mat[5] / scale.Y / local_mat[15];
+        local_mat[6] = local_mat[6] / scale.Y / local_mat[15];
+        local_mat[8] = local_mat[8] / scale.Z / local_mat[15];
+        local_mat[9] = local_mat[9] / scale.Z / local_mat[15];
+        local_mat[10] = local_mat[10] / scale.Z / local_mat[15];
+        rotation = MiniGLM::getQuaternion(local_mat);
+        // Conjugated quaternion in glsl
+        rotation.W = -rotation.W;
+    }
+}
+
 }
