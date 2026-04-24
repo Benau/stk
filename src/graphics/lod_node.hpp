@@ -31,9 +31,6 @@ namespace irr
 }
 using namespace irr;
 
-#include <set>
-#include <memory>
-
 namespace irr
 {
     namespace scene
@@ -53,9 +50,9 @@ private:
     core::aabbox3d<f32> Box;
 
     std::vector<int> m_detail;
-    std::vector<irr::scene::ISceneNode*> m_nodes;
+    core::array<irr::scene::ISceneNode*> m_nodes;
 
-    std::set<scene::ISceneNode*> m_nodes_set;
+    core::array<irr::scene::ISceneNode*> m_non_lod_children;
 
     std::string m_group_name;
 
@@ -119,8 +116,8 @@ public:
         else                    return NULL;
     }
 
-    std::vector<scene::ISceneNode*>& getAllNodes() { return m_nodes; }
-    std::set<scene::ISceneNode*>& getNodesSet() { return m_nodes_set; }
+    core::array<scene::ISceneNode*>& getAllNodes() { return m_nodes; }
+    core::array<scene::ISceneNode*>& getNonLODChildren() { return m_non_lod_children; }
 
     //! OnAnimate() is called just before rendering the whole scene.
     /** This method will be called once per frame, independent
@@ -133,6 +130,27 @@ public:
     virtual scene::ESCENE_NODE_TYPE getType() const { return (scene::ESCENE_NODE_TYPE)scene::ESNT_LOD_NODE; }
 
     const std::string& getGroupName() const { return m_group_name; }
+
+    virtual void addChild(scene::ISceneNode* child)
+    {
+        scene::ISceneNode::addChild(child);
+        s32 idx = m_nodes.linear_search(child);
+        if (idx < 0)
+            m_non_lod_children.push_back(child);
+    }
+
+    virtual bool removeChild(scene::ISceneNode* child)
+    {
+        bool result = scene::ISceneNode::removeChild(child);
+        if (result)
+        {
+            s32 idx = m_non_lod_children.linear_search(child);
+            if (idx >= 0)
+                m_non_lod_children.erase(idx);
+        }
+        return result;
+    }
+
 };
 
 #endif

@@ -333,9 +333,9 @@ void Item::setMesh(scene::IMesh* mesh, scene::IMesh* lowres_mesh)
     if (m_node == NULL)
         return;
 
-    unsigned i = 0;
-    for (auto* node : m_node->getAllNodes())
+    for (unsigned i = 0; i < m_node->getAllNodes().size(); i++)
     {
+        scene::ISceneNode* node = m_node->getAllNodes()[i];
         scene::IMesh* m = i == 0 ? mesh : lowres_mesh;
         if (m == NULL)
         {
@@ -350,7 +350,6 @@ void Item::setMesh(scene::IMesh* mesh, scene::IMesh* lowres_mesh)
         {
             ((scene::IMeshSceneNode*)node)->setMesh(m);
         }
-        i++;
     }
 #endif
 }   // setMesh
@@ -403,8 +402,9 @@ void Item::handleNewMesh(ItemType type)
         return;
     setMesh(ItemManager::getItemModel(type),
         ItemManager::getItemLowResolutionModel(type));
-    for (auto* node : m_node->getAllNodes())
+    for (unsigned i = 0; i < m_node->getAllNodes().size(); i++)
     {
+        scene::ISceneNode* node = m_node->getAllNodes()[i];
         SP::SPMeshNode* spmn = dynamic_cast<SP::SPMeshNode*>(node);
         if (spmn)
             spmn->setGlowColor(ItemManager::getGlowColor(type));

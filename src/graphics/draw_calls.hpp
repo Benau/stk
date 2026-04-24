@@ -47,6 +47,9 @@ private:
     void parseSceneManager(core::array<scene::ISceneNode*> &List,
                            const scene::ICameraSceneNode *cam);
 
+    bool handleSceneNode(scene::ISceneNode* scene_node,
+                         const scene::ICameraSceneNode *cam);
+
     bool isCulledPrecise(const scene::ICameraSceneNode *cam,
                          const scene::ISceneNode* node,
                          bool visualization = false);
