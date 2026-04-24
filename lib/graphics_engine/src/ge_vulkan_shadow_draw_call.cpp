@@ -3,6 +3,7 @@
 #include "ge_culling_tool.hpp"
 #include "ge_material_manager.hpp"
 #include "ge_render_info.hpp"
+#include "ge_spm_buffer.hpp"
 #include "ge_vulkan_camera_scene_node.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_shadow_fbo.hpp"
@@ -55,5 +56,21 @@ bool GEVulkanShadowDrawCall::ignoreMaterial(
 {
     return GEMaterialManager::getMaterial(mt)->isTransparent();
 }   // ignoreMaterial
+
+// ----------------------------------------------------------------------------
+void GEVulkanShadowDrawCall::generateDynamicSPM(GEVulkanDriver* vk)
+{
+    GEVulkanDrawCall::generateDynamicSPM(vk);
+    for (auto& p : m_sfbo->getMasterDrawCall()->getRenderedDynamicSPM())
+    {
+        if (GEMaterialManager::getMaterial(p.first)->isTransparent())
+            continue;
+        for (auto& q : p.second)
+        {
+            if (!q.first->isDynamic())
+                m_rendered_dspm[p.first][q.first] = q.second;
+        }
+    }
+}   // generateDynamicSPM
 
 }

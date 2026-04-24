@@ -146,8 +146,9 @@ static irr::core::matrix4 buildSpotViewMatrix(const irr::core::vector3df& pos,
 // ----------------------------------------------------------------------------
 GEVulkanOmniShadowFBO::GEVulkanOmniShadowFBO(GEVulkanDriver* vk,
                                              unsigned shadow_size,
+                                             GEVulkanDrawCall* master_dc,
                                              irr::scene::ILightSceneNode* sun)
-                     : GEVulkanShadowFBO(vk, shadow_size, sun,
+                     : GEVulkanShadowFBO(vk, shadow_size, master_dc, sun,
                                          getGEConfig()->m_shadow_type ==
                                          GST_COMBINED ?
                                          getGEConfig()->m_point_shadow_limit *

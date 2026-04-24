@@ -107,13 +107,13 @@ void ObjectData::init(irr::scene::ISceneNode* node, int material_id,
 
 // ============================================================================
 void ObjectData::init(irr::scene::IBillboardSceneNode* node, int material_id,
-                      const btQuaternion& rotation)
+                      const btQuaternion& rotation, bool mirror)
 {
     memcpy(&m_translation_x, &node->getAbsoluteTransformation()[12],
         sizeof(float) * 3);
     memcpy(m_rotation, &rotation[0], sizeof(btQuaternion));
     irr::core::vector2df billboard_size = node->getSize();
-    m_scale_x = billboard_size.X / 2.0f;
+    m_scale_x = billboard_size.X / (mirror ? -2.0f : 2.0f);
     m_scale_y = billboard_size.Y / 2.0f;
     m_scale_z = 0.0f;
     m_skinning_offset = 0;
@@ -426,8 +426,9 @@ void GEVulkanDrawCall::generate(GEVulkanDriver* vk)
         }
     }
 
+    generateDynamicSPM(vk);
     nodes_area[NULL] = 0.0f;
-    for (auto& p : m_dynamic_spm_buffers)
+    for (auto& p : m_rendered_dspm)
     {
         const std::string& shader = p.first;
         const PipelineSettings& settings =
@@ -469,7 +470,6 @@ void GEVulkanDrawCall::generate(GEVulkanDriver* vk)
             return a.first.first < b.first.first;
         });
 
-    generateDynamicSPM(vk);
     if (m_texture_descriptor_set_layout.expired())
     {
         vk->waitIdle();
@@ -834,15 +834,15 @@ void GEVulkanDrawCall::prepare(GEVulkanCameraSceneNode* cam)
             {
             case GST_SUN:
                 m_shadow_fbo = new GEVulkanShadowFBO(vk,
-                    getGEConfig()->m_shadow_size, sun);
+                    getGEConfig()->m_shadow_size, this, sun);
                 break;
             case GST_POINTLIGHT:
                 m_shadow_fbo = new GEVulkanOmniShadowFBO(vk,
-                    getGEConfig()->m_shadow_size, sun);
+                    getGEConfig()->m_shadow_size, this, sun);
                 break;
             case GST_COMBINED:
                 m_shadow_fbo = new GEVulkanCombinedShadowFBO(vk,
-                    getGEConfig()->m_shadow_size, sun);
+                    getGEConfig()->m_shadow_size, this, sun);
                 break;
             default:
                 break;
@@ -1778,13 +1778,6 @@ void GEVulkanDrawCall::bindBaseVertex(GEVulkanDriver* vk, VkCommandBuffer cmd)
 }   // bindBaseVertex
 
 // ----------------------------------------------------------------------------
-void GEVulkanDrawCall::prepareRendering(GEVulkanDriver* vk,
-                                        GEVulkanCameraSceneNode* cam)
-{
-    updateDataDescriptorSets(vk, cam);
-}   // prepareRendering
-
-// ----------------------------------------------------------------------------
 void GEVulkanDrawCall::prepareViewport(GEVulkanDriver* vk,
                                        const irr::core::rect<irr::s32>& viewp,
                                        VkCommandBuffer cmd)
@@ -1919,42 +1912,43 @@ void GEVulkanDrawCall::renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
             indirect_offset += draw_count *
                 sizeof(VkDrawIndexedIndirectCommand);
 
-            auto it = m_dynamic_spm_buffers.find(cur_pipeline);
-            if (bound && it != m_dynamic_spm_buffers.end())
+            auto it = m_rendered_dspm.find(cur_pipeline);
+            if (bound && it != m_rendered_dspm.end())
             {
                 int cur_mid = -1;
-                for (auto& buf : it->second)
+                for (auto& p : it->second)
                 {
-                    auto& dy_offsets =
-                        m_dyspmb_materials[cur_pipeline][buf.first];
+                    DynamicSPMData& dspm_data = p.second;
                     if (!indirect_buffer &&
-                        cur_mid != dy_offsets.m_material_id)
+                        cur_mid != dspm_data.m_material_id)
                     {
-                        cur_mid = dy_offsets.m_material_id;
+                        cur_mid = dspm_data.m_material_id;
                         bindSingleMaterial(cmd, cur_pipeline, cur_mid, pt);
                     }
-                    dynamic_offsets[1] = dy_offsets.m_dynamic_offset;
-                    bindDynamicSPMDescriptor(cmd, current_buffer_idx,
-                        dynamic_offsets);
-                    if (buf.first->isDynamic())
+                    dynamic_offsets[1] = dspm_data.m_dynamic_offset;
+                    vkCmdBindDescriptorSets(cmd,
+                        VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline_layout, 1,
+                        1, &dspm_data.m_descriptor_set,
+                        dynamic_offsets.size(), dynamic_offsets.data());
+                    if (p.first->isDynamic())
                     {
                         rebind_base_vertex = true;
-                        buf.first->drawDynamicVertexIndexBuffer(cmd,
+                        p.first->drawDynamicVertexIndexBuffer(cmd,
                             current_buffer_idx);
                     }
                     else
                     {
                         if (!use_base_vertex)
-                            buf.first->bindVertexIndexBuffer(cmd);
+                            p.first->bindVertexIndexBuffer(cmd);
                         else if (rebind_base_vertex)
                         {
                             bindBaseVertex(vk, cmd);
                             rebind_base_vertex = false;
                         }
-                        vkCmdDrawIndexed(cmd, buf.first->getIndexCount(),
-                            dy_offsets.m_instance_count,
-                            use_base_vertex ? buf.first->getIBOOffset() : 0,
-                            use_base_vertex ? buf.first->getVBOOffset() : 0,
+                        vkCmdDrawIndexed(cmd, p.first->getIndexCount(),
+                            dspm_data.m_instance_count,
+                            use_base_vertex ? p.first->getIBOOffset() : 0,
+                            use_base_vertex ? p.first->getVBOOffset() : 0,
                             0);
                     }
                 }
@@ -2510,6 +2504,8 @@ size_t GEVulkanDrawCall::getDynamicSPMSize() const
     size_t sbo_alignment = m_limits.minStorageBufferOffsetAlignment;
     for (auto& p : m_dynamic_spm_buffers)
     {
+        const std::string& shader = p.first;
+        auto* material = GEMaterialManager::getMaterial(shader);
         for (auto& q : p.second)
         {
             size_t count = 0;
@@ -2523,6 +2519,13 @@ size_t GEVulkanDrawCall::getDynamicSPMSize() const
                     const core::array<SParticle>& particles =
                         pn->getParticles();
                     count += particles.size();
+                }
+                else if (node->getType() == irr::scene::ESNT_BILLBOARD)
+                {
+                    if (m_shadow_fbo && material->m_backface_culling)
+                        count += 2;
+                    else
+                        count += 1;
                 }
                 else
                     count += 1;
@@ -2596,12 +2599,21 @@ void GEVulkanDrawCall::generateDynamicSPM(GEVulkanDriver* vk)
                     }
                     else
                     {
+                        irr::scene::IBillboardSceneNode* bb = static_cast<
+                            irr::scene::IBillboardSceneNode*>(node);
                         ObjectData* obj = (ObjectData*)mapped_addr;
-                        obj->init(
-                            static_cast<irr::scene::IBillboardSceneNode*>(
-                            node), material_id, m_billboard_rotation);
+                        obj->init(bb, material_id, m_billboard_rotation,
+                            false);
                         written_size += sizeof(ObjectData);
                         mapped_addr += sizeof(ObjectData);
+                        if (m_shadow_fbo && material->m_backface_culling)
+                        {
+                            obj = (ObjectData*)mapped_addr;
+                            obj->init(bb, material_id, m_billboard_rotation,
+                                true);
+                            written_size += sizeof(ObjectData);
+                            mapped_addr += sizeof(ObjectData);
+                        }
                     }
                 }
                 else
@@ -2617,8 +2629,9 @@ void GEVulkanDrawCall::generateDynamicSPM(GEVulkanDriver* vk)
             size_t padding = getPadding(written_size, sbo_alignment);
             written_size += padding;
             mapped_addr += padding;
-            m_dyspmb_materials[shader][buf] = { material_id,
-                dynamic_spm_offset, instance_count };
+            m_rendered_dspm[shader][buf] = { material_id,
+                dynamic_spm_offset, instance_count,
+                m_dspm_descriptor_sets[vk->getCurrentBufferIdx()] };
         }
     }
     m_dynamic_spm_padded_size = written_size;
