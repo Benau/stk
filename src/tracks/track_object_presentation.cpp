@@ -378,8 +378,9 @@ void TrackObjectPresentationLOD::reset()
     LODNode* ln = dynamic_cast<LODNode*>(m_node);
     if (ln)
     {
-        for (scene::ISceneNode* node : ln->getAllNodes())
+        for (unsigned i = 0; i < ln->getAllNodes().size(); i++)
         {
+            scene::ISceneNode* node = ln->getAllNodes()[i];
             scene::IAnimatedMeshSceneNode* a_node =
                 dynamic_cast<scene::IAnimatedMeshSceneNode*>(node);
             if (a_node)

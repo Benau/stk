@@ -28,6 +28,23 @@
 #include <IMeshSceneNode.h>
 #include <IAnimatedMeshSceneNode.h>
 
+// ============================================================================
+inline float getDistanceSQ(const irr::core::matrix4& m1,
+                           const irr::core::matrix4& m2)
+{
+    // translation components in irr::core::matrix4 are at indices 12,13,14
+    const float* __restrict m1x = &m1[12];
+    const float* __restrict m2x = &m2[12];
+
+    // compute differences
+    float dx = m1x[0] - m2x[0];
+    float dy = m1x[1] - m2x[1];
+    float dz = m1x[2] - m2x[2];
+
+    return dx * dx + dy * dy + dz * dz;
+}  // getDistanceSQ
+
+// ============================================================================
 /**
   * @param group_name Only useful for getGroupName()
   */
@@ -83,10 +100,10 @@ int LODNode::getLevel()
     Camera* camera = Camera::getActiveCamera();
     if (camera == NULL)
         return (int)m_detail.size() - 1;
-    const Vec3 &pos = camera->getCameraSceneNode()->getAbsolutePosition();
 
     const int squared_dist =
-        (int)((m_nodes[0]->getAbsolutePosition()).getDistanceFromSQ(pos.toIrrVector() ));
+        (int)getDistanceSQ(m_nodes[0]->getAbsoluteTransformation(),
+        camera->getCameraSceneNode()->getAbsoluteTransformation());
 
     if (!m_lod_distances_updated)
     {
@@ -142,16 +159,10 @@ void LODNode::OnAnimate(u32 timeMs)
             Box = m_nodes[m_detail.size() - 1]->getBoundingBox();
 
         // If this node has children other than the LOD nodes, animate it
-        for (unsigned i = 0; i < Children.size(); ++i)
+        for (unsigned i = 0; i < m_non_lod_children.size(); ++i)
         {
-            if (m_nodes_set.find(Children[i]) == m_nodes_set.end())
-            {
-                assert(Children[i] != NULL);
-                if (Children[i]->isVisible())
-                {
-                    Children[i]->OnAnimate(timeMs);
-                }
-            }
+            if (m_non_lod_children[i]->isVisible())
+                m_non_lod_children[i]->OnAnimate(timeMs);
         }
     } // if isVisible() && m_nodes.size() > 0
 }
@@ -184,15 +195,13 @@ void LODNode::OnRegisterSceneNode()
     if (isVisible() && m_nodes.size() > 0)
     {
         int level = getLevel();
-        
         if (level >= 0)
         {
             m_nodes[level]->OnRegisterSceneNode();
         }
-        for (unsigned i = 0; i < Children.size(); i++)
+        for (unsigned i = 0; i < m_non_lod_children.size(); i++)
         {
-            if (m_nodes_set.find(Children[i]) == m_nodes_set.end())
-                Children[i]->OnRegisterSceneNode();
+            m_non_lod_children[i]->OnRegisterSceneNode();
         }
     } // if isVisible() && m_nodes.size() > 0
 }
@@ -300,7 +309,6 @@ void LODNode::add(int level, scene::ISceneNode* node, bool reparent)
     node->setPosition(core::vector3df(0,0,0));
     m_detail.push_back(level*level);
     m_nodes.push_back(node);
-    m_nodes_set.insert(node);
     node->setParent(this);
 
     node->drop();

@@ -145,55 +145,61 @@ void DrawCalls::parseSceneManager(core::array<scene::ISceneNode*> &List,
 {
     for (unsigned i = 0; i < List.size(); ++i)
     {
-        if (!List[i]->isVisible())
-            continue;
-
-        if (List[i]->getType() == ESNT_LOD_NODE)
-        {
-            LODNode *node = static_cast<LODNode *>(List[i]);
-            node->updateVisibility();
-
-            core::array<scene::ISceneNode*> child;
-            if (node->getLevel() >= 0)
-                child.push_back(node->getAllNodes()[node->getLevel()]);
-            for (unsigned int i = 0; i < node->getChildren().size(); i++)
-            {
-                if (node->getNodesSet().find(node->getChildren()[i]) == node->getNodesSet().end())
-                    child.push_back(node->getChildren()[i]);
-            }
-            parseSceneManager(child, cam);
-            continue;
-        }
-        else if (List[i]->getType() == ESNT_ANIMATED_MESH)
-        {
-            SP::SPMeshNode* node = static_cast<SP::SPMeshNode*>(List[i]);
-            SP::addObject(node);
-        }
-        else if (STKParticle *node = dynamic_cast<STKParticle*>(List[i]))
-        {
-            node->updateAbsolutePosition();
-            if (!isCulledPrecise(cam, List[i], irr_driver->getBoundingBoxesViz()))
-                CPUParticleManager::getInstance()->addParticleNode(node);
-            continue;
-        }
-        else if (scene::IBillboardSceneNode *node =
-            dynamic_cast<scene::IBillboardSceneNode*>(List[i]))
-        {
-            node->updateAbsolutePosition();
-            if (!isCulledPrecise(cam, List[i]))
-                CPUParticleManager::getInstance()->addBillboardNode(node);
-            continue;
-        }
-        else if (STKTextBillboard *tb =
-            dynamic_cast<STKTextBillboard*>(List[i]))
-        {
-            tb->updateAbsolutePosition();
-            if (!isCulledPrecise(cam, List[i], irr_driver->getBoundingBoxesViz()))
-                TextBillboardDrawer::addTextBillboard(tb);
-            continue;
-        }
-        parseSceneManager(List[i]->getChildren(), cam);
+        scene::ISceneNode* scene_node = List[i];
+        if (handleSceneNode(scene_node, cam))
+            parseSceneManager(scene_node->getChildren(), cam);
     }
+}
+
+// ----------------------------------------------------------------------------
+bool DrawCalls::handleSceneNode(scene::ISceneNode* scene_node,
+                                const scene::ICameraSceneNode *cam)
+{
+    if (!scene_node->isVisible())
+        return false;
+
+    if (scene_node->getType() == ESNT_LOD_NODE)
+    {
+        LODNode *node = static_cast<LODNode *>(scene_node);
+        node->updateVisibility();
+        if (node->getLevel() >= 0)
+        {
+            scene::ISceneNode* level = node->getAllNodes()[node->getLevel()];
+            if (handleSceneNode(level, cam))
+                parseSceneManager(level->getChildren(), cam);
+        }
+        parseSceneManager(node->getNonLODChildren(), cam);
+        return false;
+    }
+    else if (scene_node->getType() == ESNT_ANIMATED_MESH)
+    {
+        SP::SPMeshNode* node = static_cast<SP::SPMeshNode*>(scene_node);
+        SP::addObject(node);
+    }
+    else if (STKParticle *node = dynamic_cast<STKParticle*>(scene_node))
+    {
+        node->updateAbsolutePosition();
+        if (!isCulledPrecise(cam, scene_node, irr_driver->getBoundingBoxesViz()))
+            CPUParticleManager::getInstance()->addParticleNode(node);
+        return false;
+    }
+    else if (scene::IBillboardSceneNode *node =
+        dynamic_cast<scene::IBillboardSceneNode*>(scene_node))
+    {
+        node->updateAbsolutePosition();
+        if (!isCulledPrecise(cam, scene_node))
+            CPUParticleManager::getInstance()->addBillboardNode(node);
+        return false;
+    }
+    else if (STKTextBillboard *tb =
+        dynamic_cast<STKTextBillboard*>(scene_node))
+    {
+        tb->updateAbsolutePosition();
+        if (!isCulledPrecise(cam, scene_node, irr_driver->getBoundingBoxesViz()))
+            TextBillboardDrawer::addTextBillboard(tb);
+        return false;
+    }
+    return true;
 }
 
 // ----------------------------------------------------------------------------
