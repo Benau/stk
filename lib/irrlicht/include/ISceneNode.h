@@ -17,6 +17,7 @@
 #include "matrix4.h"
 #include "irrList.h"
 #include "IAttributes.h"
+#include "quaternion.h"
 
 #include <memory>
 namespace GE
@@ -804,6 +805,12 @@ namespace scene
 		void setUpdatedAbsTrans(bool val) { UpdatedAbsTrans = val; }
 		virtual void resetFirstRenderInfo(std::shared_ptr<GE::GERenderInfo> ri) {}
 		virtual s32 getTextureDescriptorID(u32 i) const { return 0; }
+		virtual const core::quaternion& getAbsoluteRotation() const
+		{
+			static core::quaternion identity;
+			return identity;
+		}
+		virtual const core::vector3df& getAbsoluteScale() const { return getScale(); }
 
 	protected:
 
