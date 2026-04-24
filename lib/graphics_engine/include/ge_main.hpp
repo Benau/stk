@@ -2,8 +2,10 @@
 #define HEADER_GE_MAIN_HPP
 
 #include <IVideoDriver.h>
-#include <matrix4.h>
 #include <SColor.h>
+#include <matrix4.h>
+#include <quaternion.h>
+#include <vector3d.h>
 
 #include <array>
 #include <cstdint>
@@ -136,6 +138,9 @@ void resetOcclusionCulling();
 bool hasOcclusionCulling();
 bool needsDeferredRendering(bool auto_deferred = true);
 std::array<float, 4>& getDisplaceDirection();
+void setAbsoluteRotationScale(const irr::core::matrix4& model_matrix,
+                              irr::core::quaternion& rotation,
+                              irr::core::vector3df& scale);
 
 }
 #endif

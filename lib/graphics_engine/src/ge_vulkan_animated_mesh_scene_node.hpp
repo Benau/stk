@@ -29,6 +29,10 @@ private:
 
     std::vector<std::weak_ptr<int> > m_texture_descriptor_ids_observer;
 
+    irr::core::quaternion m_abs_rotation;
+
+    irr::core::vector3df m_abs_scale;
+
     // ------------------------------------------------------------------------
     void cleanJoints()
     {
@@ -77,6 +81,14 @@ public:
             return CAnimatedMeshSceneNode::getTextureDescriptorID(i);
         return m_texture_descriptor_ids[i];
     }
+    // ------------------------------------------------------------------------
+    virtual void updateAbsolutePosition();
+    // ------------------------------------------------------------------------
+    virtual const irr::core::quaternion& getAbsoluteRotation() const
+                                                     { return m_abs_rotation; }
+    // ------------------------------------------------------------------------
+    virtual const irr::core::vector3df& getAbsoluteScale() const
+                                                        { return m_abs_scale; }
 };   // GEVulkanAnimatedMeshSceneNode
 
 }

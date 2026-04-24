@@ -71,30 +71,12 @@ void PipelineSettings::loadMaterial(const GEMaterial& m)
 void ObjectData::init(irr::scene::ISceneNode* node, int material_id,
                       int skinning_offset, irr::video::SMaterial& m)
 {
-    using namespace MiniGLM;
-    const irr::core::matrix4& model_mat = node->getAbsoluteTransformation();
-    irr::core::quaternion rotation(0.0f, 0.0f, 0.0f, 1.0f);
-    irr::core::vector3df scale = model_mat.getScale();
-    if (scale.X != 0.0f && scale.Y != 0.0f && scale.Z != 0.0f)
-    {
-        irr::core::matrix4 local_mat = model_mat;
-        local_mat[0] = local_mat[0] / scale.X / local_mat[15];
-        local_mat[1] = local_mat[1] / scale.X / local_mat[15];
-        local_mat[2] = local_mat[2] / scale.X / local_mat[15];
-        local_mat[4] = local_mat[4] / scale.Y / local_mat[15];
-        local_mat[5] = local_mat[5] / scale.Y / local_mat[15];
-        local_mat[6] = local_mat[6] / scale.Y / local_mat[15];
-        local_mat[8] = local_mat[8] / scale.Z / local_mat[15];
-        local_mat[9] = local_mat[9] / scale.Z / local_mat[15];
-        local_mat[10] = local_mat[10] / scale.Z / local_mat[15];
-        rotation = getQuaternion(local_mat);
-        // Conjugated quaternion in glsl
-        rotation.W = -rotation.W;
-    }
     memcpy(&m_translation_x, &node->getAbsoluteTransformation()[12],
         sizeof(float) * 3);
-    memcpy(m_rotation, &rotation, sizeof(irr::core::quaternion));
-    memcpy(&m_scale_x, &scale, sizeof(irr::core::vector3df));
+    memcpy(m_rotation, &node->getAbsoluteRotation(),
+        sizeof(irr::core::quaternion));
+    memcpy(&m_scale_x, &node->getAbsoluteScale(),
+        sizeof(irr::core::vector3df));
     m_skinning_offset = skinning_offset;
     m_material_id = material_id;
     const irr::core::matrix4& texture_matrix = m.getTextureMatrix(0);
@@ -321,12 +303,6 @@ void GEVulkanDrawCall::addNode(irr::scene::ISceneNode* node)
     else if (node->getType() == irr::scene::ESNT_MESH)
     {
         mesh = static_cast<irr::scene::IMeshSceneNode*>(node)->getMesh();
-        for (unsigned i = 0; i < mesh->getMeshBufferCount(); i++)
-        {
-            irr::scene::IMeshBuffer* b = mesh->getMeshBuffer(i);
-            if (b->getVertexType() != irr::video::EVT_SKINNED_MESH)
-                return;
-        }
     }
     else
         return;
@@ -334,8 +310,10 @@ void GEVulkanDrawCall::addNode(irr::scene::ISceneNode* node)
     bool added_skinning = false;
     for (unsigned i = 0; i < mesh->getMeshBufferCount(); i++)
     {
-        GESPMBuffer* buffer = static_cast<GESPMBuffer*>(
-            mesh->getMeshBuffer(i));
+        irr::scene::IMeshBuffer* b = mesh->getMeshBuffer(i);
+        if (b->getVertexType() != irr::video::EVT_SKINNED_MESH)
+            continue;
+        GESPMBuffer* buffer = static_cast<GESPMBuffer*>(b);
         auto mt = m_fallback_materials[node->getMaterialType(i)];
         if (ignoreMaterial(mt))
             continue;
