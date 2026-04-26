@@ -15,6 +15,7 @@ namespace GE
 class GESPMBuffer;
 class GEVulkanCameraSceneNode;
 class GEVulkanShadowFBO;
+class GEVulkanOmniShadowFBO;
 
 class GECullingTool
 {
@@ -24,9 +25,19 @@ private:
     irr::core::quaternion m_frustum[6];
 
     irr::core::aabbox3df m_cam_bbox;
+
+    const GEVulkanOmniShadowFBO* m_omni_sfbo;
+
+    // Inclusive range [m_bucket_light_start, m_bucket_light_end) of the
+    // lights in m_omni_sfbo that this draw call's bucket covers.
+    // Only valid when m_omni_sfbo != NULL.
+    unsigned m_bucket_light_start;
+    unsigned m_bucket_light_end;
+
 public:
     // ------------------------------------------------------------------------
-    GECullingTool() : m_skip_near_plane(false)                               {}
+    GECullingTool() : m_skip_near_plane(false), m_omni_sfbo(NULL),
+                      m_bucket_light_start(0), m_bucket_light_end(0)         {}
     // ------------------------------------------------------------------------
     void init(GEVulkanCameraSceneNode* cam);
     // ------------------------------------------------------------------------

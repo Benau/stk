@@ -110,6 +110,14 @@ public:
     unsigned getDrawCallCount() const    { return m_shadow_draw_calls.size(); }
     // ------------------------------------------------------------------------
     GEVulkanDrawCall* getMasterDrawCall() const         { return m_master_dc; }
+    // ------------------------------------------------------------------------
+    virtual unsigned getLayerOffset() const                       { return 0; }
+    // ------------------------------------------------------------------------
+    // The number of draw calls that share a generated draw call with different
+    // camera UBO offsets.
+    virtual unsigned getSharingDrawCallCount() const              { return 0; }
+    // ------------------------------------------------------------------------
+    virtual int getLayerOwner(int pointlight_layer) const        { return -1; }
 
 };   // GEVulkanShadowFBO
 

@@ -38,6 +38,8 @@ private:
 
     unsigned m_fullscreen_light_count;
 
+    unsigned m_non_occluded_lights;
+
     // ------------------------------------------------------------------------
     // Typed pointers into m_buffer (private helpers, defined in .cpp).
     GEGlobalLightBuffer* getGlobalLightPtr() const;
@@ -94,6 +96,12 @@ public:
     // Returns the outer-cone half-angle in radians (same convention as
     // Irrlicht's SLight::OuterCone).  Returns 0 for point lights.
     float getLightOuterCone(unsigned light_id) const;
+    // ------------------------------------------------------------------------
+    // Number of lights (in render order) that are not occluded.  The
+    // rendered-light array is stable-partitioned so these come first.
+    // Only meaningful when isDeferredFBO() + hasOcclusionCulling(); otherwise
+    // equals getLightCount() (all lights are considered non-occluded).
+    unsigned getNonOccludedLightCount() const    { return m_non_occluded_lights; }
 
 };   // GEVulkanLightHandler
 
