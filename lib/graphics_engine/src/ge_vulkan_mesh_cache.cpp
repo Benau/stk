@@ -77,6 +77,7 @@ void GEVulkanMeshCache::updateCache()
         });
     size_t aabb_size = 0;
     size_t aabb_ssbo_padding = 0;
+#ifdef GPU_CULLING
     if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
     {
         aabb_size = buffers.size() * sizeof(core::aabbox3df);
@@ -85,6 +86,7 @@ void GEVulkanMeshCache::updateCache()
             minStorageBufferOffsetAlignment);
         aabb_size += aabb_ssbo_padding;
     }
+#endif
 
     VkBuffer staging_buffer = VK_NULL_HANDLE;
     VmaAllocation staging_memory = VK_NULL_HANDLE;
@@ -151,6 +153,7 @@ void GEVulkanMeshCache::updateCache()
     assert(static_vertex_offset < m_skinning_vbo_offset);
     m_skinning_vbo_offset -= static_vertex_offset;
 
+#ifdef GPU_CULLING
     if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
     {
         m_aabb_offset = vbo_size + ibo_size + aabb_ssbo_padding;
@@ -165,6 +168,7 @@ void GEVulkanMeshCache::updateCache()
         m_aabb_size = offset - m_aabb_offset;
         assert(m_aabb_size == buffers.size() * sizeof(core::aabbox3df));
     }
+#endif
 
     vmaUnmapMemory(m_vk->getVmaAllocator(), staging_memory);
     vmaFlushAllocation(m_vk->getVmaAllocator(), staging_memory, 0, offset);
