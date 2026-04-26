@@ -176,6 +176,7 @@ void GEVulkanOmniShadowFBO::buildSingleFaceMatrices(unsigned light_id)
     const float  radius             = m_light_handler->getLightRadius(light_id);
     const float  outer_cone         = m_light_handler->getLightOuterCone(light_id);
     const irr::core::vector3df dir  = m_light_handler->getLightDirection(light_id);
+    m_lights.push_back({core::vector3df(pos.X, pos.Y, pos.Z), radius});
 
     // Full-angle FOV = 2 * outer_cone (radians → degrees) + padding.
     const float fov_deg =
@@ -200,6 +201,7 @@ void GEVulkanOmniShadowFBO::buildSixFaceMatrices(unsigned light_id)
     const irr::core::vector3df& pos = m_light_handler->getLightPosition(light_id);
     const float radius              = m_light_handler->getLightRadius(light_id);
     const irr::core::matrix4 proj   = buildPerspective(90.0f, 0.2f, radius);
+    m_lights.push_back({core::vector3df(pos.X, pos.Y, pos.Z), radius});
 
     for (unsigned face = 0; face < OMNI_FACES_PER_LIGHT; face++)
     {
@@ -221,11 +223,17 @@ void GEVulkanOmniShadowFBO::generate()
     const unsigned shadow_limit = getGEConfig()->m_point_shadow_limit;
     const unsigned light_count = std::min(m_light_handler->getLightCount(),
         shadow_limit);
+    // Non-occluded lights are stable-partitioned to the front of the rendered
+    // light array by GEVulkanLightHandler::generate().  Shadow cubemaps are
+    // only built for those; occluded lights get depth layers cleared to 1.0.
+    const unsigned non_occluded = std::min(
+        m_light_handler->getNonOccludedLightCount(), light_count);
 
     // -------------------------------------------------------------------------
-    // Phase 1 – build projection-view matrices for active lights.
+    // Phase 1 – build projection-view matrices for active, non-occluded lights.
     // -------------------------------------------------------------------------
-    for (unsigned i = 0; i < light_count; i++)
+    m_lights.clear();
+    for (unsigned i = 0; i < non_occluded; i++)
     {
         if (m_light_handler->getLightIsSpot(i))
             buildSingleFaceMatrices(i);
@@ -244,15 +252,15 @@ void GEVulkanOmniShadowFBO::generate()
     // -------------------------------------------------------------------------
     for (unsigned i = 0; i < shadow_limit; i++)
     {
-        const bool single_face = (i < light_count) &&
+        const bool single_face = (i < non_occluded) &&
             m_light_handler->getLightIsSpot(i);
 
         for (unsigned face = 0; face < OMNI_FACES_PER_LIGHT; face++)
         {
-            const unsigned layer =
-                i * OMNI_FACES_PER_LIGHT + face + getLayerOffset();
+            const unsigned pointlight_layer = i * OMNI_FACES_PER_LIGHT + face;
+            const unsigned layer = pointlight_layer + getLayerOffset();
 
-            if (i >= light_count || (single_face && face != 0))
+            if (i >= non_occluded || (single_face && face != 0))
             {
                 // Disabled: clear the depth layer to 1.0 (fully lit) via
                 // VkRenderPass load-op, but submit no geometry.
@@ -260,9 +268,16 @@ void GEVulkanOmniShadowFBO::generate()
                 continue;
             }
             m_shadow_draw_calls[layer]->prepareShadow(layer);
-            for (irr::scene::ISceneNode* node : m_nodes)
-                m_shadow_draw_calls[layer]->addNode(node);
-            m_shadow_draw_calls[layer]->generate(m_vk);
+
+            // Build geometry only for the owner of each bucket (face 0 of the
+            // first light in the bucket).  All other layers in the bucket
+            // share this geometry at render time.
+            if ((pointlight_layer % getSharingDrawCallCount()) == 0)
+            {
+                for (irr::scene::ISceneNode* node : m_nodes)
+                    m_shadow_draw_calls[layer]->addNode(node);
+                m_shadow_draw_calls[layer]->generate(m_vk);
+            }
         }
     }
 }   // generate

@@ -479,7 +479,7 @@ void GEVulkanShadowFBO::render(VkCommandBuffer cmd,
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     m_master_dc->updateDataDescriptorSets(m_vk, cam);
-    for (unsigned i = 0; i < m_shadow_draw_calls.size(); i++)
+    for (int i = 0; i < (int)m_shadow_draw_calls.size(); i++)
     {
         if (m_shadow_draw_calls[i]->getRenderState())
         {
@@ -488,8 +488,28 @@ void GEVulkanShadowFBO::render(VkCommandBuffer cmd,
             else
                 rebind_base_vertex = true;
             m_shadow_draw_calls[i]->updateDataDescriptorSets(m_vk, cam);
+
+            // Determine whether this layer must borrow from a bucket owner.
+            int bucket_owner = -1;
+            if (getSharingDrawCallCount() != 0)
+            {
+                int pointlight_layer = i - (int)getLayerOffset();
+                bucket_owner = getLayerOwner(pointlight_layer);
+                if (bucket_owner != -1)
+                    bucket_owner += getLayerOffset();
+            }
+            if (bucket_owner != -1 && bucket_owner != i)
+            {
+                m_shadow_draw_calls[bucket_owner].get()
+                    ->swapDrawCallData(m_shadow_draw_calls[i].get());
+            }
             m_shadow_draw_calls[i]->renderPipeline(m_vk, cmd, GVPT_DEPTH,
                 rebind_base_vertex);
+            if (bucket_owner != -1 && bucket_owner != i)
+            {
+                m_shadow_draw_calls[bucket_owner].get()
+                    ->swapDrawCallData(m_shadow_draw_calls[i].get());
+            }
         }
         if (i != m_shadow_draw_calls.size() - 1)
             vkCmdNextSubpass(cmd, VK_SUBPASS_CONTENTS_INLINE);
