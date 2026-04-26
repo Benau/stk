@@ -29,8 +29,7 @@ private:
                                                     GEVulkanPipelineType type);
     // ------------------------------------------------------------------------
     virtual uint32_t getSubpassForPipelineCreation(GEVulkanDriver* vk,
-                                                   GEVulkanPipelineType type)
-                                                { return (uint32_t)m_cascade; }
+                                                   GEVulkanPipelineType type);
     // ------------------------------------------------------------------------
     virtual void prepare(GEVulkanCameraSceneNode* cam)       { assert(false); }
     // ------------------------------------------------------------------------
