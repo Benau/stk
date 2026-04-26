@@ -138,6 +138,8 @@ extern "C" PFN_vkVoidFunction loader(void* user_ptr, const char* name)
         "vkCmdBeginDebugUtilsLabelEXT",
         "vkCmdBeginQuery",
         "vkCmdBeginQueryIndexedEXT",
+        "vkCmdBeginRendering",
+        "vkCmdBeginRenderingKHR",
         "vkCmdBeginRenderPass",
         "vkCmdBeginRenderPass2",
         "vkCmdBeginRenderPass2KHR",
@@ -191,6 +193,8 @@ extern "C" PFN_vkVoidFunction loader(void* user_ptr, const char* name)
         "vkCmdEndDebugUtilsLabelEXT",
         "vkCmdEndQuery",
         "vkCmdEndQueryIndexedEXT",
+        "vkCmdEndRendering",
+        "vkCmdEndRenderingKHR",
         "vkCmdEndRenderPass",
         "vkCmdEndRenderPass2",
         "vkCmdEndRenderPass2KHR",
@@ -860,7 +864,7 @@ void GEVulkanDriver::createInstance(SDL_Window* window)
     {
         // From https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkApplicationInfo.html
         // Implementations that support Vulkan 1.1 or later must not return VK_ERROR_INCOMPATIBLE_DRIVER for any value of apiVersion.
-        app_info.apiVersion = VK_API_VERSION_1_2;
+        app_info.apiVersion = VK_API_VERSION_1_3;
     }
     VkInstanceCreateInfo create_info = {};
     create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -956,6 +960,13 @@ bool GEVulkanDriver::checkDeviceExtensions(VkPhysicalDevice device)
         {
             m_device_extensions.push_back(
                 VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME);
+        }
+        else if (properties.apiVersion < VK_API_VERSION_1_3 &&
+            strcmp(ext.extensionName,
+            VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME) == 0)
+        {
+            m_device_extensions.push_back(
+                VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
         }
     }
 
@@ -1090,6 +1101,13 @@ void GEVulkanDriver::createDevice()
     shader_draw.shaderDrawParameters =
         GEVulkanFeatures::supportsShaderDrawParameters();
     descriptor_indexing_features.pNext = &shader_draw;
+
+    VkPhysicalDeviceDynamicRenderingFeatures dynamic_rendering_features = {};
+    dynamic_rendering_features.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
+    dynamic_rendering_features.dynamicRendering =
+        GEVulkanFeatures::supportsDynamicRendering();
+    shader_draw.pNext = &dynamic_rendering_features;
 
     if (m_features.samplerAnisotropy == VK_TRUE)
         device_features.samplerAnisotropy = VK_TRUE;
