@@ -5,7 +5,9 @@
 #include "ge_material_manager.hpp"
 #include "ge_render_info.hpp"
 #include "ge_spm.hpp"
+#include "ge_vulkan_draw_call.hpp"
 #include "ge_vulkan_driver.hpp"
+#include "ge_vulkan_scene_manager.hpp"
 #include "ge_vulkan_texture_descriptor.hpp"
 
 #include "ISceneManager.h"
@@ -23,6 +25,7 @@ GEVulkanAnimatedMeshSceneNode::GEVulkanAnimatedMeshSceneNode(irr::scene::IAnimat
                                          rotation, scale)
 {
     m_saved_transition_frame = -1.0f;
+    m_skinning_offset = 0;
     setAbsoluteRotationScale(AbsoluteTransformation, m_abs_rotation,
         m_abs_scale);
 }   // GEVulkanAnimatedMeshSceneNode
@@ -99,7 +102,6 @@ void GEVulkanAnimatedMeshSceneNode::setMesh(irr::scene::IAnimatedMesh* mesh)
         return;
 
     unsigned bone_idx = 0;
-    m_skinning_matrices.resize(spm->getJointCount());
     for (Armature& arm : spm->getArmatures())
     {
         for (const std::string& bone_name : arm.m_joint_names)
@@ -130,8 +132,15 @@ void GEVulkanAnimatedMeshSceneNode::OnAnimate(irr::u32 time_ms)
     buildFrameNr(time_ms - LastTimeMs);
     LastTimeMs = time_ms;
 
-    spm->getSkinningMatrices(getFrameNr(), m_skinning_matrices,
-        m_saved_transition_frame, TransitingBlend);
+    GEVulkanSceneManager* sm =
+        static_cast<GEVulkanSceneManager*>(SceneManager);
+    GEVulkanDrawCall* dc = sm->getActiveDrawCall();
+    if (dc)
+    {
+        spm->getSkinningMatrices(getFrameNr(), dc->getSkinningOffset(
+            spm->getJointCount(), &m_skinning_offset),
+            m_saved_transition_frame, TransitingBlend);
+    }
     recursiveUpdateAbsolutePosition();
 
     for (Armature& arm : spm->getArmatures())

@@ -74,6 +74,8 @@ public:
                                         getDrawCalls() { return m_draw_calls; }
     // ------------------------------------------------------------------------
     irr::scene::ILightSceneNode* getSunNode(irr::scene::ISceneNode* node);
+    // ------------------------------------------------------------------------
+    GEVulkanDrawCall* getActiveDrawCall() const;
 };   // GEVulkanSceneManager
 
 }

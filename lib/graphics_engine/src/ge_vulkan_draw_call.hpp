@@ -7,7 +7,6 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "vulkan_wrapper.h"
@@ -33,7 +32,6 @@ namespace GE
 {
 class GECullingTool;
 class GESPMBuffer;
-class GEVulkanAnimatedMeshSceneNode;
 class GEVulkanCameraSceneNode;
 class GEVulkanDriver;
 class GEVulkanDynamicBuffer;
@@ -149,6 +147,8 @@ private:
                       GEVulkanPipelineType pt);
     // ------------------------------------------------------------------------
     void createPipelineLayout(GEVulkanDriver* vk);
+    // ------------------------------------------------------------------------
+    virtual const GEVulkanDrawCall* getMasterDrawCall() const  { return this; }
 
 protected:
     typedef std::array<const irr::video::ITexture*,
@@ -183,13 +183,13 @@ protected:
 
     GEVulkanDynamicBuffer* m_sbo_data;
 
+    GEVulkanDynamicBuffer* m_skinning_data;
+
     GEVulkanDynamicBuffer* m_dspm_data;
 
     const VkPhysicalDeviceLimits& m_limits;
 
     size_t m_object_data_padded_size;
-
-    size_t m_skinning_data_padded_size;
 
     size_t m_materials_padded_size;
 
@@ -199,7 +199,9 @@ protected:
 
     unsigned m_light_data_offset;
 
-    std::weak_ptr<bool> m_camera_ubo_observer;
+    unsigned m_skinning_offset;
+
+    std::weak_ptr<bool> m_camera_ubo_observer, m_skinning_data_observer;
 
     bool m_update_data_descriptor_sets;
 
@@ -228,8 +230,6 @@ protected:
     GEVulkanSkyBoxRenderer* m_skybox_renderer;
 
     GEVulkanTextureDescriptor* m_texture_descriptor;
-
-    std::unordered_set<GEVulkanAnimatedMeshSceneNode*> m_skinning_nodes;
 
     std::unordered_map<std::string, std::pair<uint32_t, std::vector<int> > >
         m_materials_data;
@@ -344,7 +344,6 @@ public:
         m_cmds.clear();
         m_visible_objects.clear();
         m_rendered_dspm.clear();
-        m_skinning_nodes.clear();
         m_materials_data.clear();
         m_dynamic_spm_buffers.clear();
         m_skybox_renderer = NULL;
@@ -375,6 +374,9 @@ public:
     // ------------------------------------------------------------------------
     const std::map<std::string, std::map<GESPMBuffer*, DynamicSPMData > >&
                       getRenderedDynamicSPM() const { return m_rendered_dspm; }
+    // ------------------------------------------------------------------------
+    irr::core::matrix4* getSkinningOffset(unsigned bone_count,
+                                          unsigned* offset);
 
 };   // GEVulkanDrawCall
 

@@ -396,4 +396,15 @@ irr::scene::ILightSceneNode* GEVulkanSceneManager::getSunNode(
     return sun;
 }   // getSunNode
 
+
+// ----------------------------------------------------------------------------
+GEVulkanDrawCall* GEVulkanSceneManager::getActiveDrawCall() const
+{
+    auto it = m_draw_calls.find(static_cast<
+        GEVulkanCameraSceneNode*>(getActiveCamera()));
+    if (it == m_draw_calls.end())
+        return NULL;
+    return it->second.get();
+}   // getActiveDrawCall
+
 }

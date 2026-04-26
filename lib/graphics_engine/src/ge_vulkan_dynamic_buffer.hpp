@@ -35,6 +35,10 @@ private:
     void initLocalBuffer(unsigned frame);
     // ------------------------------------------------------------------------
     void destroy();
+    // ------------------------------------------------------------------------
+    /** Destroys everything and creates all host and local buffers again with
+     *  the given size, all contents are lost. */
+    void recreate(size_t size);
 public:
     // ------------------------------------------------------------------------
     GEVulkanDynamicBuffer(VkBufferUsageFlags usage, size_t initial_size,
@@ -56,6 +60,22 @@ public:
     VkBuffer getCurrentBuffer() const;
     // ------------------------------------------------------------------------
     bool resizeIfNeeded(size_t new_size);
+    // ------------------------------------------------------------------------
+    /** Same as resizeIfNeeded, but keeps the content of one host buffer.
+     *  \param slot Index into the host buffers (not a frame number), it must
+     *  be the index the caller is writing into right now, ie.
+     *  getCurrentBufferIdx() for a buffer written through the (frames in
+     *  flight + 1) host buffers directly, or getCurrentFrame() for a buffer
+     *  filled by the default setCurrentData.
+     *  \param keep_size Number of bytes to keep (clamped to the old size),
+     *  the whole old buffer by default.
+     *  The other host buffers and all local buffers are recreated empty, so
+     *  this is only for buffers whose every slot is rewritten before it is
+     *  used again by the gpu (the usual per-frame data). If there are local
+     *  buffers, the kept data is also copied to the local buffer used by the
+     *  current frame. */
+    bool resizeKeepData(size_t new_size, unsigned slot,
+                        size_t keep_size = (size_t)-1);
     // ------------------------------------------------------------------------
     size_t getSize() const                                   { return m_size; }
     // ------------------------------------------------------------------------

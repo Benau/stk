@@ -1,8 +1,10 @@
 #include "ge_vulkan_dynamic_buffer.hpp"
 
+#include "ge_vulkan_command_loader.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_main.hpp"
 
+#include <algorithm>
 #include <array>
 #include <vector>
 #include <functional>
@@ -139,6 +141,17 @@ void GEVulkanDynamicBuffer::destroy()
 }   // destroy
 
 // ----------------------------------------------------------------------------
+void GEVulkanDynamicBuffer::recreate(size_t size)
+{
+    destroy();
+    m_size = size;
+    for (unsigned i = 0; i < m_host_buffer.size(); i++)
+        initHostBuffer(i, m_local_buffer.size() == 0);
+    for (unsigned i = 0; i < m_local_buffer.size(); i++)
+        initLocalBuffer(i);
+}   // recreate
+
+// ----------------------------------------------------------------------------
 bool GEVulkanDynamicBuffer::setCurrentData(const std::vector<
                                            std::pair<void*, size_t> >& data,
                                            VkCommandBuffer custom_cmd,
@@ -195,12 +208,7 @@ bool GEVulkanDynamicBuffer::resizeIfNeeded(size_t new_size)
 {
     if (new_size > m_size)
     {
-        destroy();
-        m_size = new_size + 100;
-        for (unsigned i = 0; i < m_host_buffer.size(); i++)
-            initHostBuffer(i, m_local_buffer.size() == 0);
-        for (unsigned i = 0; i < m_local_buffer.size(); i++)
-            initLocalBuffer(i);
+        recreate(new_size + 100);
         return true;
     }
     return false;
@@ -223,5 +231,50 @@ VkBuffer GEVulkanDynamicBuffer::getCurrentBuffer() const
         return m_local_buffer[cur_frame];
     }
 }   // getCurrentBuffer
+
+// ----------------------------------------------------------------------------
+bool GEVulkanDynamicBuffer::resizeKeepData(size_t new_size, unsigned slot,
+                                           size_t keep_size)
+{
+    if (new_size <= m_size)
+        return false;
+
+    GEVulkanDriver* vk = getVKDriver();
+
+    // The slot is written by the cpu only and the gpu never writes a host
+    // buffer, so it can be read back right away. recreate() waits for the
+    // device before destroying the old buffers.
+    std::vector<uint8_t> prev_data;
+    if (slot < m_mapped_addr.size() && m_mapped_addr[slot] != NULL)
+    {
+        prev_data.resize(std::min(keep_size, m_size));
+        memcpy(prev_data.data(), m_mapped_addr[slot], prev_data.size());
+    }
+
+    recreate(new_size + 100);
+
+    if (prev_data.empty() || slot >= m_mapped_addr.size() ||
+        m_mapped_addr[slot] == NULL)
+        return true;
+
+    memcpy(m_mapped_addr[slot], prev_data.data(), prev_data.size());
+    vmaFlushAllocation(vk->getVmaAllocator(), m_host_memory[slot], 0,
+        prev_data.size());
+
+    if (!m_local_buffer.empty())
+    {
+        // Same local buffer selection as setCurrentData
+        unsigned local_idx = vk->getCurrentFrame();
+        if (local_idx >= m_local_buffer.size())
+            local_idx = 0;
+        VkBufferCopy copy_region = {};
+        copy_region.size = prev_data.size();
+        VkCommandBuffer cmd = GEVulkanCommandLoader::beginSingleTimeCommands();
+        vkCmdCopyBuffer(cmd, m_host_buffer[slot], m_local_buffer[local_idx], 1,
+            &copy_region);
+        GEVulkanCommandLoader::endSingleTimeCommands(cmd);
+    }
+    return true;
+}   // resizeKeepData
 
 }
