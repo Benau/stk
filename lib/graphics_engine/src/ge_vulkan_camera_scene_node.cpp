@@ -145,8 +145,10 @@ void GEVulkanCameraSceneNode::collectUBO(GEVulkanDriver* vk,
     unsigned offset = 0;
     dc->setCameraUBOOffset(offset);
     data_uploading.emplace_back(&m_ubo_data, sizeof(GEVulkanCameraUBO));
+#ifdef GPU_CULLING
     data_uploading.emplace_back(dc->getCullingTool()->getFrustumData(),
         getFrustumSize());
+#endif
     if (m_ubo_padding > 0)
         data_uploading.emplace_back((void*)NULL, m_ubo_padding);
     offset += getPaddedCameraUBOSize();
@@ -159,8 +161,10 @@ void GEVulkanCameraSceneNode::collectUBO(GEVulkanDriver* vk,
             sdc->setCameraUBOOffset(offset);
             data_uploading.emplace_back(sfbo->getCameraUBO(i),
                 sizeof(GEVulkanCameraUBO));
+#ifdef GPU_CULLING
             data_uploading.emplace_back(
                 sdc->getCullingTool()->getFrustumData(), getFrustumSize());
+#endif
             if (m_ubo_padding > 0)
                 data_uploading.emplace_back((void*)NULL, m_ubo_padding);
             offset += getPaddedCameraUBOSize();
