@@ -46,7 +46,12 @@ public:
     // ------------------------------------------------------------------------
     static const unsigned getCameraUBOSize()
     {
-        return sizeof(GEVulkanCameraUBO) + getFrustumSize();
+#ifdef GPU_CULLING
+        const unsigned frustum_size = getFrustumSize();
+#else
+        const unsigned frustum_size = 0;
+#endif
+        return sizeof(GEVulkanCameraUBO) + frustum_size;
     }
     // ------------------------------------------------------------------------
     GEVulkanCameraSceneNode(irr::scene::ISceneNode* parent,
