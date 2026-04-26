@@ -61,7 +61,7 @@ bool GEVulkanShadowDrawCall::ignoreMaterial(
 void GEVulkanShadowDrawCall::generateDynamicSPM(GEVulkanDriver* vk)
 {
     GEVulkanDrawCall::generateDynamicSPM(vk);
-    for (auto& p : m_sfbo->getMasterDrawCall()->getRenderedDynamicSPM())
+    for (auto& p : getMasterDrawCall()->getRenderedDynamicSPM())
     {
         if (GEMaterialManager::getMaterial(p.first)->isTransparent())
             continue;
@@ -72,5 +72,11 @@ void GEVulkanShadowDrawCall::generateDynamicSPM(GEVulkanDriver* vk)
         }
     }
 }   // generateDynamicSPM
+
+// ----------------------------------------------------------------------------
+const GEVulkanDrawCall* GEVulkanShadowDrawCall::getMasterDrawCall() const
+{
+    return m_sfbo->getMasterDrawCall();
+}   // getMasterDrawCall
 
 }

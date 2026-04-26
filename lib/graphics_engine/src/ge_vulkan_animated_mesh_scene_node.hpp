@@ -19,8 +19,6 @@ private:
 
     float m_saved_transition_frame;
 
-    std::vector<irr::core::matrix4> m_skinning_matrices;
-
     std::weak_ptr<bool> m_transparency_observer;
 
     irr::core::array<irr::video::E_MATERIAL_TYPE> m_ge_materials;
@@ -33,13 +31,14 @@ private:
 
     irr::core::vector3df m_abs_scale;
 
+    unsigned m_skinning_offset;
+
     // ------------------------------------------------------------------------
     void cleanJoints()
     {
         for (auto& p : m_joint_nodes)
             removeChild(p.second);
         m_joint_nodes.clear();
-        m_skinning_matrices.clear();
     }
 public:
     // ------------------------------------------------------------------------
@@ -65,9 +64,6 @@ public:
     // ------------------------------------------------------------------------
     virtual void OnRegisterSceneNode();
     // ------------------------------------------------------------------------
-    const std::vector<irr::core::matrix4>& getSkinningMatrices() const
-                                                { return m_skinning_matrices; }
-    // ------------------------------------------------------------------------
     virtual irr::video::E_MATERIAL_TYPE getMaterialType(irr::u32 i)
     {
         if (m_ge_materials.empty())
@@ -89,6 +85,8 @@ public:
     // ------------------------------------------------------------------------
     virtual const irr::core::vector3df& getAbsoluteScale() const
                                                         { return m_abs_scale; }
+    // ------------------------------------------------------------------------
+    unsigned getSkinningOffset() const            { return m_skinning_offset; }
 };   // GEVulkanAnimatedMeshSceneNode
 
 }

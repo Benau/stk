@@ -1,5 +1,6 @@
 #include "ge_vulkan_dynamic_buffer.hpp"
 
+#include "ge_vulkan_command_loader.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_main.hpp"
 
@@ -223,5 +224,32 @@ VkBuffer GEVulkanDynamicBuffer::getCurrentBuffer() const
         return m_local_buffer[cur_frame];
     }
 }   // getCurrentBuffer
+
+// ----------------------------------------------------------------------------
+bool GEVulkanDynamicBuffer::resizeKeepData(size_t new_size)
+{
+    if (new_size > m_size)
+    {
+        const size_t old_size = m_size;
+        GEVulkanDriver* vk = static_cast<GEVulkanDriver*>(getDriver());
+        int current_buffer_idx = vk->getCurrentBufferIdx();
+        vmaFlushAllocation(vk->getVmaAllocator(),
+            m_host_memory[current_buffer_idx], 0, old_size);
+
+        vk->waitIdle();
+        vk->setDisableWaitIdle(true);
+        std::vector<uint8_t> prev_data(old_size);
+        memcpy(prev_data.data(), m_mapped_addr[current_buffer_idx], old_size);
+        resizeIfNeeded(new_size);
+
+        VkCommandBuffer cmd = GEVulkanCommandLoader::beginSingleTimeCommands();
+        setCurrentData((void*)prev_data.data(), old_size, cmd);
+        GEVulkanCommandLoader::endSingleTimeCommands(cmd);
+
+        vk->setDisableWaitIdle(false);
+        return true;
+    }
+    return false;
+}   // resizeKeepData
 
 }
