@@ -220,13 +220,14 @@ GEVulkanDrawCall::GEVulkanDrawCall()
     m_light_handler = NULL;
     m_indirect_buffer = NULL;
     m_sbo_data = NULL;
+    m_skinning_data = NULL;
     m_dspm_data = NULL;
     m_object_data_padded_size = 0;
-    m_skinning_data_padded_size = 0;
     m_materials_padded_size = 0;
     m_dynamic_spm_padded_size = 0;
     m_camera_ubo_offset = 0;
     m_light_data_offset = 0;
+    m_skinning_offset = 1;
     m_update_data_descriptor_sets = true;
     m_data_layout = VK_NULL_HANDLE;
     m_descriptor_pool = VK_NULL_HANDLE;
@@ -249,6 +250,7 @@ GEVulkanDrawCall::~GEVulkanDrawCall()
     delete m_light_handler;
     delete m_indirect_buffer;
     delete m_sbo_data;
+    delete m_skinning_data;
     delete m_dspm_data;
     for (auto& p : m_billboard_buffers)
        p.second->drop();
@@ -294,11 +296,9 @@ void GEVulkanDrawCall::addNode(irr::scene::ISceneNode* node)
         return;
 
     irr::scene::IMesh* mesh;
-    GEVulkanAnimatedMeshSceneNode* anode = NULL;
     if (node->getType() == irr::scene::ESNT_ANIMATED_MESH)
     {
-        anode = static_cast<GEVulkanAnimatedMeshSceneNode*>(node);
-        mesh = anode->getMesh();
+        mesh = static_cast<GEVulkanAnimatedMeshSceneNode*>(node)->getMesh();
     }
     else if (node->getType() == irr::scene::ESNT_MESH)
     {
@@ -307,7 +307,6 @@ void GEVulkanDrawCall::addNode(irr::scene::ISceneNode* node)
     else
         return;
 
-    bool added_skinning = false;
     for (unsigned i = 0; i < mesh->getMeshBufferCount(); i++)
     {
         irr::scene::IMeshBuffer* b = mesh->getMeshBuffer(i);
@@ -331,13 +330,6 @@ void GEVulkanDrawCall::addNode(irr::scene::ISceneNode* node)
             node->getTextureDescriptorID(i));
         m_visible_nodes[k][(uint32_t)mt].emplace_back(node, m);
         m_mb_map[buffer] = mesh;
-        if (anode && !added_skinning &&
-            !anode->getSkinningMatrices().empty() &&
-            m_skinning_nodes.find(anode) == m_skinning_nodes.end())
-        {
-            added_skinning = true;
-            m_skinning_nodes.insert(anode);
-        }
     }
 }   // addNode
 
@@ -498,65 +490,8 @@ start:
     int current_buffer_idx = vk->getCurrentBufferIdx();
     uint8_t* mapped_addr = (uint8_t*)m_sbo_data->getMappedAddr()
         [current_buffer_idx];
-
-    std::unordered_map<irr::scene::ISceneNode*, int> skinning_offets;
-    int added_joint = 1;
-    size_t skinning_data_padded_size = sizeof(irr::core::matrix4);
-
-    static irr::core::matrix4 identity = irr::core::matrix4();
-    memcpy(mapped_addr, identity.pointer(), sizeof(irr::core::matrix4));
-    size_t written_size = sizeof(irr::core::matrix4);
-    mapped_addr += sizeof(irr::core::matrix4);
-
-    for (GEVulkanAnimatedMeshSceneNode* node : m_skinning_nodes)
-    {
-        size_t bone_size = sizeof(irr::core::matrix4) *
-            node->getSkinningMatrices().size();
-        int bone_count = bone_size / sizeof(irr::core::matrix4);
-        if (written_size + bone_size > m_sbo_data->getSize())
-        {
-            min_size = (written_size + bone_size) * 2;
-            goto start;
-        }
-        memcpy(mapped_addr, node->getSkinningMatrices().data(), bone_size);
-        written_size += bone_size;
-        mapped_addr += bone_size;
-        skinning_offets[node] = added_joint;
-        added_joint += bone_count;
-        skinning_data_padded_size += bone_size;
-    }
-
+    size_t written_size = 0;
     size_t sbo_alignment = m_limits.minStorageBufferOffsetAlignment;
-    if (skinning_data_padded_size > m_skinning_data_padded_size)
-    {
-        m_update_data_descriptor_sets = true;
-        size_t skinning_padding = getPadding(skinning_data_padded_size,
-            sbo_alignment);
-        if (skinning_padding > 0)
-        {
-            if (written_size + skinning_padding > m_sbo_data->getSize())
-            {
-                min_size = (written_size + skinning_padding) * 2;
-                goto start;
-            }
-            skinning_data_padded_size += skinning_padding;
-            written_size += skinning_padding;
-            mapped_addr += skinning_padding;
-        }
-        m_skinning_data_padded_size = skinning_data_padded_size;
-    }
-    else
-    {
-        size_t extra = m_skinning_data_padded_size - skinning_data_padded_size;
-        if (written_size + extra > m_sbo_data->getSize())
-        {
-            min_size = (written_size + extra) * 2;
-            goto start;
-        }
-        skinning_data_padded_size = m_skinning_data_padded_size;
-        written_size += extra;
-        mapped_addr += extra;
-    }
 
     const bool use_base_vertex = GEVulkanFeatures::supportsBaseVertexRendering();
     unsigned accumulated_instance = 0;
@@ -629,10 +564,13 @@ start:
             irr::scene::ISceneNode* node = q.first;
             if (skip_instance_key || it == cur_key.end())
             {
-                int skinning_offset = -1000;
-                auto it = skinning_offets.find(node);
-                if (it != skinning_offets.end())
-                    skinning_offset = it->second;
+                int skinning_offset = 0;
+                if (node->getType() == irr::scene::ESNT_ANIMATED_MESH)
+                {
+                    skinning_offset =
+                        static_cast<GEVulkanAnimatedMeshSceneNode*>(
+                        node)->getSkinningOffset();
+                }
                 if (written_size + sizeof(ObjectData) >
                     m_sbo_data->getSize())
                 {
@@ -681,7 +619,7 @@ start:
              cur_key.push_back(key);
     }
 
-    size_t object_data_padded_size = written_size - skinning_data_padded_size;
+    size_t object_data_padded_size = written_size;
     if (object_data_padded_size > m_object_data_padded_size)
     {
         m_update_data_descriptor_sets = true;
@@ -782,10 +720,10 @@ start:
         }
 
         // Make sure dynamic offsets won't become invalid
-        if (skinning_data_padded_size + (object_data_padded_size * 2) +
-            (materials_padded_size * 2) > m_sbo_data->getSize())
+        if ((object_data_padded_size * 2) + (materials_padded_size * 2) >
+            m_sbo_data->getSize())
         {
-            min_size = skinning_data_padded_size +
+            min_size =
                 (object_data_padded_size * 2) + (materials_padded_size * 2);
             goto start;
         }
@@ -796,11 +734,9 @@ start:
         for (unsigned i = 0; i < m_cmds.size(); i++)
             m_materials_data[m_cmds[i].m_shader] = {};
         // Make sure dynamic offset of objects won't become invalid
-        if (skinning_data_padded_size + (object_data_padded_size * 2) >
-            m_sbo_data->getSize())
+        if (object_data_padded_size * 2 > m_sbo_data->getSize())
         {
-            min_size = skinning_data_padded_size +
-                (object_data_padded_size * 2);
+            min_size = object_data_padded_size * 2;
             goto start;
         }
     }
@@ -1740,7 +1676,7 @@ void GEVulkanDrawCall::uploadDynamicData(GEVulkanDriver* vk,
     if (m_sbo_data &&
         m_sbo_data->getHostMemory()[current_buffer_idx] != VK_NULL_HANDLE)
     {
-        const size_t whole_size = m_skinning_data_padded_size +
+        const size_t whole_size =
             m_object_data_padded_size + m_materials_padded_size;
         vmaFlushAllocation(vk->getVmaAllocator(),
             m_sbo_data->getHostMemory()[current_buffer_idx], 0,
@@ -1754,6 +1690,15 @@ void GEVulkanDrawCall::uploadDynamicData(GEVulkanDriver* vk,
             m_dspm_data->getHostMemory()[current_buffer_idx], 0,
             m_dynamic_spm_padded_size);
     }
+
+    if (m_skinning_data &&
+        m_skinning_data->getHostMemory()[current_buffer_idx] != VK_NULL_HANDLE)
+    {
+        vmaFlushAllocation(vk->getVmaAllocator(),
+            m_skinning_data->getHostMemory()[current_buffer_idx], 0,
+            m_skinning_offset * sizeof(irr::core::matrix4));
+    }
+    m_skinning_offset = 1;
 }   // uploadDynamicData
 
 // ----------------------------------------------------------------------------
@@ -2027,6 +1972,16 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
     if (m_camera_ubo_observer.expired())
         m_update_data_descriptor_sets = true;
 
+    if (m_skinning_data_observer.expired())
+    {
+        if (getMasterDrawCall()->m_skinning_data)
+        {
+            m_update_data_descriptor_sets = true;
+            m_skinning_data_observer =
+                getMasterDrawCall()->m_skinning_data->getBufferObserver();
+        }
+    }
+
     if (!m_update_data_descriptor_sets)
         return;
 
@@ -2060,7 +2015,7 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
         if (sbo_buffer != VK_NULL_HANDLE)
         {
             sbo_info_objects.buffer = sbo_buffer;
-            sbo_info_objects.offset = m_skinning_data_padded_size;
+            sbo_info_objects.offset = 0;
             sbo_info_objects.range = m_object_data_padded_size;
             data_set.push_back({});
             VkWriteDescriptorSet& ds = data_set.back();
@@ -2073,11 +2028,14 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
             ds.pBufferInfo = &sbo_info_objects;
         }
 
-        if (sbo_buffer != VK_NULL_HANDLE)
+        VkBuffer skinning_buffer = getMasterDrawCall()->m_skinning_data ?
+            getMasterDrawCall()->m_skinning_data->getHostBuffer()[i] :
+            VK_NULL_HANDLE;
+        if (skinning_buffer != VK_NULL_HANDLE)
         {
-            sbo_info_skinning.buffer = sbo_buffer;
+            sbo_info_skinning.buffer = skinning_buffer;
             sbo_info_skinning.offset = 0;
-            sbo_info_skinning.range = m_skinning_data_padded_size;
+            sbo_info_skinning.range = VK_WHOLE_SIZE;
             data_set.push_back({});
             VkWriteDescriptorSet& ds = data_set.back();
             ds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -2111,8 +2069,7 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
         if (bind_mesh_textures && sbo_buffer != VK_NULL_HANDLE)
         {
             sbo_info_material.buffer = sbo_buffer;
-            sbo_info_material.offset = m_skinning_data_padded_size +
-                m_object_data_padded_size;
+            sbo_info_material.offset = m_object_data_padded_size;
             sbo_info_material.range = m_materials_padded_size;
             data_set.push_back({});
             VkWriteDescriptorSet& ds = data_set.back();
@@ -2637,5 +2594,38 @@ void GEVulkanDrawCall::generateDynamicSPM(GEVulkanDriver* vk)
     m_dynamic_spm_padded_size = written_size;
     assert(written_size == dspm_size / 2);
 }   // generateDynamicSPM
+
+// ----------------------------------------------------------------------------
+irr::core::matrix4* GEVulkanDrawCall::getSkinningOffset(unsigned bone_count,
+                                                        unsigned* offset)
+{
+    const size_t min_size = (m_skinning_offset + bone_count) *
+        sizeof(irr::core::matrix4);
+    if (!m_skinning_data)
+    {
+        m_skinning_data = new GEVulkanDynamicBuffer(
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, min_size,
+            GEVulkanDriver::getMaxFrameInFlight() + 1, 0);
+    }
+    m_skinning_data->resizeKeepData(min_size);
+
+    GEVulkanDriver* vk = static_cast<GEVulkanDriver*>(getDriver());
+    irr::core::matrix4* mapped_addr = (irr::core::matrix4*)
+        m_skinning_data->getMappedAddr()[vk->getCurrentBufferIdx()];
+
+    if (m_skinning_offset == 1)
+    {
+        static irr::core::matrix4 identity = irr::core::matrix4();
+        memcpy((void*)mapped_addr, identity.pointer(),
+            sizeof(irr::core::matrix4));
+        mapped_addr += 1;
+    }
+    else
+        mapped_addr += m_skinning_offset;
+
+    *offset = m_skinning_offset;
+    m_skinning_offset += bone_count;
+    return mapped_addr;
+}   // getSkinningOffset
 
 }

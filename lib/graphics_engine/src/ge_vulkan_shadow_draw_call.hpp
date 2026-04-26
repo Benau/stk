@@ -37,6 +37,8 @@ private:
     virtual bool ignoreMaterial(irr::video::E_MATERIAL_TYPE mt) const;
     // ------------------------------------------------------------------------
     virtual void generateDynamicSPM(GEVulkanDriver* vk);
+    // ------------------------------------------------------------------------
+    virtual const GEVulkanDrawCall* getMasterDrawCall() const;
 
 public:
     // ------------------------------------------------------------------------

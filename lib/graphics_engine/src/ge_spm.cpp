@@ -67,7 +67,7 @@ void GESPM::finalize()
 }   // finalize
 
 // ----------------------------------------------------------------------------
-void GESPM::getSkinningMatrices(f32 frame, std::vector<core::matrix4>& dest,
+void GESPM::getSkinningMatrices(f32 frame, core::matrix4* dest,
                     float frame_interpolating, float rate)
 {
     unsigned accumulated_joints = 0;
