@@ -377,6 +377,17 @@ public:
     // ------------------------------------------------------------------------
     irr::core::matrix4* getSkinningOffset(unsigned bone_count,
                                           unsigned* offset);
+    // ----------------------------------------------------------------------------
+    void swapDrawCallData(GEVulkanDrawCall* other)
+    {
+        std::swap(m_indirect_buffer, other->m_indirect_buffer);
+        std::swap(m_materials_data, other->m_materials_data);
+        std::swap(m_cmds, other->m_cmds);
+        std::swap(m_dynamic_spm_buffers, other->m_dynamic_spm_buffers);
+        std::swap(m_rendered_dspm, other->m_rendered_dspm);
+        std::swap(m_data_descriptor_sets, other->m_data_descriptor_sets);
+        std::swap(m_dspm_descriptor_sets, other->m_dspm_descriptor_sets);
+    }
 
 };   // GEVulkanDrawCall
 

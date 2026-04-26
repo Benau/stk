@@ -126,6 +126,7 @@ void GEVulkanLightHandler::prepare()
     *buffer = {};
     m_lights->m_data.clear();
     m_fullscreen_light_count = 0;
+    m_non_occluded_lights = 0;
     video::SColorf c = m_vk->getIrrlichtDevice()->getSceneManager()
         ->getAmbientLight();
     buffer->m_ambient_color.X = c.r * c.a;
@@ -167,11 +168,12 @@ void GEVulkanLightHandler::generate(const irr::core::vector3df& cam_pos,
     if (m_lights->m_data.empty())
         return;
 
+    bool set_occluded_light = false;
     GEVulkanFBOTexture* t =
         static_cast<GEVulkanDriver*>(getDriver())->getRTTTexture();
     if (t && t->isDeferredFBO())
     {
-        auto i = std::partition(m_lights->m_data.begin(),
+        auto i = std::stable_partition(m_lights->m_data.begin(),
             m_lights->m_data.end(), [cam_pos](const GELight& l)
         {
             float radius_2 = l.m_radius * l.m_radius;
@@ -179,6 +181,23 @@ void GEVulkanLightHandler::generate(const irr::core::vector3df& cam_pos,
             return distance_2 <= radius_2;
         });
         m_fullscreen_light_count = std::distance(m_lights->m_data.begin(), i);
+
+        // Non-occluded lights before occluded ones. Fullscreen lights
+        // (camera inside radius) are inherently non-occluded, so start the
+        // partition from the iterator just past them.
+        if (hasOcclusionCulling() &&
+            (getGEConfig()->m_shadow_type & GST_POINTLIGHT) != 0)
+        {
+            auto j = std::stable_partition(i, m_lights->m_data.end(),
+                [cam_pos](const GELight& l)
+            {
+                return !getOcclusionCulling()->isOccluded(
+                    cam_pos, l.m_position, l.m_radius);
+            });
+            m_non_occluded_lights =
+                (unsigned)std::distance(m_lights->m_data.begin(), j);
+            set_occluded_light = true;
+        }
     }
     // Deferred fbo supports light culling using depth test
     if (hasOcclusionCulling() && (!t || !t->isDeferredFBO()))
@@ -198,12 +217,16 @@ void GEVulkanLightHandler::generate(const irr::core::vector3df& cam_pos,
             rl++;
         }
         getGlobalLightPtr()->m_light_count = rl - getRenderingLightsPtr();
+        // All lights that made it into the render buffer are non-occluded.
+        m_non_occluded_lights = getLightCount();
     }
     else
     {
         memcpy((void*)getRenderingLightsPtr(), m_lights->m_data.data(),
             m_lights->m_data.size() * sizeof(GELight));
         getGlobalLightPtr()->m_light_count = m_lights->m_data.size();
+        if (!set_occluded_light)
+            m_non_occluded_lights = getLightCount();
     }
 }   // generate
 
