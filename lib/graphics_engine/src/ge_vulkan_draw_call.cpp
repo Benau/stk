@@ -1201,6 +1201,19 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         settings.m_pipeline_type);
     pipeline_info.basePipelineHandle = VK_NULL_HANDLE;
 
+    VkPipelineRenderingCreateInfo prci = {};
+    if (pipeline_info.renderPass == VK_NULL_HANDLE)
+    {
+        assert(isShadow());
+        GEVulkanShadowFBO* sfbo = getMasterDrawCall()->getShadowFBO();
+        assert(sfbo);
+        prci.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+        prci.depthAttachmentFormat = sfbo->getInternalFormat();
+        prci.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
+        pipeline_info.pColorBlendState = NULL;
+        pipeline_info.pNext = &prci;
+    }
+
     struct Constants
     {
         VkBool32 m_ibl;

@@ -35,6 +35,7 @@ bool g_supports_s3tc_bc3 = false;
 bool g_supports_bptc_bc7 = false;
 bool g_supports_astc_4x4 = false;
 bool g_supports_shader_storage_image_extended_format = false;
+bool g_supports_dynamic_rendering = false;
 }   // GEVulkanFeatures
 
 // ============================================================================
@@ -123,6 +124,9 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
             VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME) == 0 &&
             dynamic_indexing)
             g_supports_descriptor_indexing = true;
+        if (strcmp(prop.extensionName,
+            VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME) == 0)
+            g_supports_dynamic_rendering = true;
     }
 
     uint32_t queue_family_count = 0;
@@ -154,6 +158,11 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES;
     descriptor_indexing_features.pNext = &shader_draw;
 
+    VkPhysicalDeviceDynamicRenderingFeatures dynamic_rendering_features = {};
+    dynamic_rendering_features.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
+    shader_draw.pNext = &dynamic_rendering_features;
+
     PFN_vkGetPhysicalDeviceFeatures2 get_features = vkGetPhysicalDeviceFeatures2;
     if (vk->getPhysicalDeviceProperties().apiVersion < VK_API_VERSION_1_1 ||
         !get_features)
@@ -177,6 +186,15 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
         .descriptorBindingPartiallyBound == VK_TRUE);
     g_supports_shader_draw_parameters = (shader_draw
         .shaderDrawParameters == VK_TRUE);
+
+    // Dynamic rendering: promoted to core in Vulkan 1.3; also available via
+    // the KHR extension on 1.0/1.1/1.2 devices that expose it.
+    if (g_supports_dynamic_rendering ||
+        vk->getPhysicalDeviceProperties().apiVersion >= VK_MAKE_VERSION(1, 3, 0))
+    {
+        g_supports_dynamic_rendering =
+            (dynamic_rendering_features.dynamicRendering == VK_TRUE);
+    }
 
 #if defined(__APPLE__)
     bool missing_vkGetPhysicalDeviceProperties2 =
@@ -267,6 +285,9 @@ void GEVulkanFeatures::printStats()
         supportsASTC4x4() ? "true" : "false");
     os::Printer::log("Vulkan supports shader storage image extended formats",
         supportsShaderStorageImageExtendedFormats() ? "true" : "false");
+    os::Printer::log(
+        "Vulkan supports dynamic rendering (VK_KHR_dynamic_rendering)",
+        g_supports_dynamic_rendering ? "true" : "false");
     os::Printer::log(
         "Vulkan descriptor can be partially bound",
         g_supports_partially_bound ? "true" : "false");
@@ -360,5 +381,11 @@ bool GEVulkanFeatures::supportsShaderStorageImageExtendedFormats()
 {
     return g_supports_shader_storage_image_extended_format;
 }   // supportsShaderStorageImageExtendedFormats
+
+// ----------------------------------------------------------------------------
+bool GEVulkanFeatures::supportsDynamicRendering()
+{
+    return g_supports_dynamic_rendering;
+}   // supportsDynamicRendering
 
 }
