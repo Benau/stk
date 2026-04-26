@@ -6,6 +6,7 @@
 #include "ge_spm_buffer.hpp"
 #include "ge_vulkan_camera_scene_node.hpp"
 #include "ge_vulkan_driver.hpp"
+#include "ge_vulkan_features.hpp"
 #include "ge_vulkan_shadow_fbo.hpp"
 #include "ge_vulkan_skybox_renderer.hpp"
 
@@ -49,6 +50,18 @@ VkRenderPass GEVulkanShadowDrawCall::getRenderPassForPipelineCreation(
 {
     return m_sfbo->getRTTRenderPass();
 }   // getRenderPassForPipelineCreation
+
+// ----------------------------------------------------------------------------
+uint32_t GEVulkanShadowDrawCall::getSubpassForPipelineCreation(
+                                                            GEVulkanDriver* vk,
+                                                     GEVulkanPipelineType type)
+{
+    // Dynamic rendering has no subpasses; pipelines are created with
+    // subpass index 0 and a null render pass.
+    if (GEVulkanFeatures::supportsDynamicRendering())
+        return 0;
+    return (uint32_t)m_cascade;
+}   // getSubpassForPipelineCreation
 
 // ----------------------------------------------------------------------------
 bool GEVulkanShadowDrawCall::ignoreMaterial(

@@ -98,6 +98,40 @@ GEVulkanShadowFBO::~GEVulkanShadowFBO()
 // ----------------------------------------------------------------------------
 void GEVulkanShadowFBO::createRTT()
 {
+    // -------------------------------------------------------------------- //
+    // Per-layer 2-D image views for use as framebuffer attachments         //
+    // (and as VkRenderingAttachmentInfo::imageView for dynamic rendering). //
+    // The main image view covers all layers as an array.                   //
+    // -------------------------------------------------------------------- //
+    m_frame_buffer_image_views.resize(m_layer_count, VK_NULL_HANDLE);
+    for (unsigned i = 0; i < m_layer_count; i++)
+    {
+        VkImageViewCreateInfo view_info = {};
+        view_info.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        view_info.image                           = m_image;
+        view_info.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.format                          = m_internal_format;
+        view_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_DEPTH_BIT;
+        view_info.subresourceRange.baseMipLevel   = 0;
+        view_info.subresourceRange.levelCount     = getMipmapLevels();
+        view_info.subresourceRange.baseArrayLayer = i;
+        view_info.subresourceRange.layerCount     = 1;
+
+        VkResult result = vkCreateImageView(m_vulkan_device, &view_info, NULL,
+            &m_frame_buffer_image_views[i]);
+        if (result != VK_SUCCESS)
+            throw std::runtime_error("GEVulkanShadowFBO: vkCreateImageView failed for layer");
+    }
+
+    m_shadow_projection_matrices.resize(m_layer_count);
+    m_shadow_camera_ubo_data = new GEVulkanCameraUBO[m_layer_count];
+
+    // When VK_KHR_dynamic_rendering is available we skip the traditional
+    // render pass and framebuffer entirely — render() will drive individual
+    // vkCmdBeginRendering calls per layer instead.
+    if (GEVulkanFeatures::supportsDynamicRendering())
+        return;
+
     // ------------------------------------------------------------------ //
     // One VkAttachmentDescription per cascade.                           //
     // ------------------------------------------------------------------ //
@@ -181,30 +215,6 @@ void GEVulkanShadowFBO::createRTT()
         throw std::runtime_error("GEVulkanShadowFBO: vkCreateRenderPass failed");
 
     // ------------------------------------------------------------------ //
-    // Per-layer 2-D image views for use as individual framebuffer        //
-    // attachments (the main image view covers all layers as an array).   //
-    // ------------------------------------------------------------------ //
-    m_frame_buffer_image_views.resize(m_layer_count, VK_NULL_HANDLE);
-    for (unsigned i = 0; i < m_layer_count; i++)
-    {
-        VkImageViewCreateInfo view_info = {};
-        view_info.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        view_info.image                           = m_image;
-        view_info.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
-        view_info.format                          = m_internal_format;
-        view_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_DEPTH_BIT;
-        view_info.subresourceRange.baseMipLevel   = 0;
-        view_info.subresourceRange.levelCount     = getMipmapLevels();
-        view_info.subresourceRange.baseArrayLayer = i;
-        view_info.subresourceRange.layerCount     = 1;
-
-        result = vkCreateImageView(m_vulkan_device, &view_info, NULL,
-            &m_frame_buffer_image_views[i]);
-        if (result != VK_SUCCESS)
-            throw std::runtime_error("GEVulkanShadowFBO: vkCreateImageView failed for layer");
-    }
-
-    // ------------------------------------------------------------------ //
     // Single framebuffer that references all layer views.                //
     // ------------------------------------------------------------------ //
     VkFramebufferCreateInfo framebuffer_info = {};
@@ -220,9 +230,6 @@ void GEVulkanShadowFBO::createRTT()
                                  NULL, &m_rtt_frame_buffer);
     if (result != VK_SUCCESS)
         throw std::runtime_error("GEVulkanShadowFBO: vkCreateFramebuffer failed");
-
-    m_shadow_projection_matrices.resize(m_layer_count);
-    m_shadow_camera_ubo_data = new GEVulkanCameraUBO[m_layer_count];
 }   // createRTT
 
 // ----------------------------------------------------------------------------
@@ -443,25 +450,14 @@ void GEVulkanShadowFBO::uploadDynamicData(VkCommandBuffer cmd,
 void GEVulkanShadowFBO::render(VkCommandBuffer cmd,
                                GEVulkanCameraSceneNode* cam)
 {
-    std::vector<VkClearValue> shadow_clear(m_shadow_draw_calls.size());
-    for (int i = 0; i < shadow_clear.size(); i++)
-        shadow_clear[i].depthStencil = {1.0f, 0};
-
-    VkRenderPassBeginInfo shadow_pass_info = {};
-    shadow_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    shadow_pass_info.clearValueCount = shadow_clear.size();
-    shadow_pass_info.pClearValues = shadow_clear.data();
-    shadow_pass_info.renderArea.offset = {0, 0};
-    shadow_pass_info.renderPass = m_rtt_render_pass;
-    shadow_pass_info.framebuffer = m_rtt_frame_buffer;
-    shadow_pass_info.renderArea.extent = { m_size.Width, m_size.Height };
-    vkCmdBeginRenderPass(cmd, &shadow_pass_info,
-        VK_SUBPASS_CONTENTS_INLINE);
-
+    const bool vk_13 =
+        m_vk->getPhysicalDeviceProperties().apiVersion >= VK_API_VERSION_1_3;
     bool rebind_base_vertex = true;
     const bool bind_mesh_textures =
         GEVulkanFeatures::supportsBindMeshTexturesAtOnce();
 
+    // Viewport and scissor are command-buffer state; set them once here
+    // regardless of which render path we take below.
     VkViewport vp;
     vp.x = 0;
     vp.y = 0;
@@ -479,10 +475,149 @@ void GEVulkanShadowFBO::render(VkCommandBuffer cmd,
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     m_master_dc->updateDataDescriptorSets(m_vk, cam);
-    for (int i = 0; i < (int)m_shadow_draw_calls.size(); i++)
+
+    if (!GEVulkanFeatures::supportsDynamicRendering())
     {
-        if (m_shadow_draw_calls[i]->getRenderState())
+        // ---------------------------------------------------------------- //
+        // Legacy subpass render-pass path.                                 //
+        // ---------------------------------------------------------------- //
+        std::vector<VkClearValue> shadow_clear(m_shadow_draw_calls.size());
+        for (size_t i = 0; i < shadow_clear.size(); i++)
+            shadow_clear[i].depthStencil = {1.0f, 0};
+
+        VkRenderPassBeginInfo shadow_pass_info = {};
+        shadow_pass_info.sType             = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        shadow_pass_info.clearValueCount   = (uint32_t)shadow_clear.size();
+        shadow_pass_info.pClearValues      = shadow_clear.data();
+        shadow_pass_info.renderArea.offset = {0, 0};
+        shadow_pass_info.renderPass        = m_rtt_render_pass;
+        shadow_pass_info.framebuffer       = m_rtt_frame_buffer;
+        shadow_pass_info.renderArea.extent = { m_size.Width, m_size.Height };
+        vkCmdBeginRenderPass(cmd, &shadow_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+
+        for (int i = 0; i < (int)m_shadow_draw_calls.size(); i++)
         {
+            if (m_shadow_draw_calls[i]->getRenderState())
+            {
+                if (bind_mesh_textures)
+                    m_shadow_draw_calls[i]->bindAllMaterials(cmd);
+                else
+                    rebind_base_vertex = true;
+                m_shadow_draw_calls[i]->updateDataDescriptorSets(m_vk, cam);
+
+                // Determine whether this layer must borrow from a bucket owner.
+                int bucket_owner = -1;
+                if (getSharingDrawCallCount() != 0)
+                {
+                    int pointlight_layer = i - (int)getLayerOffset();
+                    bucket_owner = getLayerOwner(pointlight_layer);
+                    if (bucket_owner != -1)
+                        bucket_owner += getLayerOffset();
+                }
+                if (bucket_owner != -1 && bucket_owner != i)
+                {
+                    m_shadow_draw_calls[bucket_owner].get()
+                        ->swapDrawCallData(m_shadow_draw_calls[i].get());
+                }
+                m_shadow_draw_calls[i]->renderPipeline(m_vk, cmd, GVPT_DEPTH,
+                    rebind_base_vertex);
+                if (bucket_owner != -1 && bucket_owner != i)
+                {
+                    m_shadow_draw_calls[bucket_owner].get()
+                        ->swapDrawCallData(m_shadow_draw_calls[i].get());
+                }
+            }
+            if (i != (int)m_shadow_draw_calls.size() - 1)
+                vkCmdNextSubpass(cmd, VK_SUBPASS_CONTENTS_INLINE);
+        }
+        vkCmdEndRenderPass(cmd);
+    }
+    else
+    {
+        // ---------------------------------------------------------------- //
+        // VK_KHR_dynamic_rendering path.                                   //
+        //                                                                  //
+        // Layers with getRenderState()==false are skipped entirely — no    //
+        // vkCmdBeginRendering is issued for them.  We transition ALL       //
+        // layers up front in a single pipeline barrier so they are in a    //
+        // legal layout for both writing (rendered) and sampling (skipped). //
+        // ---------------------------------------------------------------- //
+        const uint32_t count = (uint32_t)m_shadow_draw_calls.size();
+
+        std::vector<VkImageMemoryBarrier> pre_barriers;
+        pre_barriers.reserve(count);
+        for (uint32_t i = 0; i < count; i++)
+        {
+            VkImageMemoryBarrier b = {};
+            b.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            b.srcAccessMask       = VK_ACCESS_SHADER_READ_BIT;
+            b.image               = m_image;
+            b.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_DEPTH_BIT;
+            b.subresourceRange.baseMipLevel   = 0;
+            b.subresourceRange.levelCount     = 1;
+            b.subresourceRange.baseArrayLayer = i;
+            b.subresourceRange.layerCount     = 1;
+            // UNDEFINED as old layout discards contents — safe because we
+            // either clear (rendered layers) or don't need prior data
+            // (skipped layers).
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+            if (m_shadow_draw_calls[i]->getRenderState())
+            {
+                b.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+                b.newLayout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            }
+            else
+            {
+                // Skipped layers land immediately in the sampling layout so
+                // shaders can read them (as cleared/empty shadow maps).
+                b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                b.newLayout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            }
+            pre_barriers.push_back(b);
+        }
+
+        if (!pre_barriers.empty())
+        {
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_DEPENDENCY_BY_REGION_BIT,
+                0, NULL, 0, NULL,
+                (uint32_t)pre_barriers.size(), pre_barriers.data());
+        }
+
+        for (int i = 0; i < (int)m_shadow_draw_calls.size(); i++)
+        {
+            if (!m_shadow_draw_calls[i]->getRenderState())
+                continue;
+
+            // Begin a rendering scope for this single cascade layer.
+            VkClearValue clear_val;
+            clear_val.depthStencil = {1.0f, 0};
+
+            VkRenderingAttachmentInfo depth_attachment = {};
+            depth_attachment.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            depth_attachment.imageView   = m_frame_buffer_image_views[i];
+            depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            depth_attachment.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            depth_attachment.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+            depth_attachment.clearValue  = clear_val;
+
+            VkRenderingInfo rendering_info   = {};
+            rendering_info.sType             = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            rendering_info.renderArea.offset = {0, 0};
+            rendering_info.renderArea.extent = {m_size.Width, m_size.Height};
+            rendering_info.layerCount        = 1;
+            rendering_info.pDepthAttachment  = &depth_attachment;
+
+            if (vk_13)
+                vkCmdBeginRendering(cmd, &rendering_info);
+            else
+                vkCmdBeginRenderingKHR(cmd, &rendering_info);
+
             if (bind_mesh_textures)
                 m_shadow_draw_calls[i]->bindAllMaterials(cmd);
             else
@@ -510,11 +645,33 @@ void GEVulkanShadowFBO::render(VkCommandBuffer cmd,
                 m_shadow_draw_calls[bucket_owner].get()
                     ->swapDrawCallData(m_shadow_draw_calls[i].get());
             }
+
+            if (vk_13)
+                vkCmdEndRendering(cmd);
+            else
+                vkCmdEndRenderingKHR(cmd);
+
+            // Transition this layer to the sampling layout so shadow
+            // shaders can read it after the barrier.
+            VkImageMemoryBarrier post_barrier = {};
+            post_barrier.sType                = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            post_barrier.srcAccessMask        = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            post_barrier.dstAccessMask        = VK_ACCESS_SHADER_READ_BIT;
+            post_barrier.oldLayout            = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            post_barrier.newLayout            = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            post_barrier.image                = m_image;
+            post_barrier.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_DEPTH_BIT;
+            post_barrier.subresourceRange.baseMipLevel   = 0;
+            post_barrier.subresourceRange.levelCount     = 1;
+            post_barrier.subresourceRange.baseArrayLayer = (uint32_t)i;
+            post_barrier.subresourceRange.layerCount     = 1;
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_DEPENDENCY_BY_REGION_BIT,
+                0, NULL, 0, NULL, 1, &post_barrier);
         }
-        if (i != m_shadow_draw_calls.size() - 1)
-            vkCmdNextSubpass(cmd, VK_SUBPASS_CONTENTS_INLINE);
     }
-    vkCmdEndRenderPass(cmd);
 }   // render
 
 // ----------------------------------------------------------------------------
