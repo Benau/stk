@@ -313,8 +313,9 @@ void GEVulkanDrawCall::addNode(irr::scene::ISceneNode* node)
         if (b->getVertexType() != irr::video::EVT_SKINNED_MESH)
             continue;
         GESPMBuffer* buffer = static_cast<GESPMBuffer*>(b);
-        auto mt = m_fallback_materials[node->getMaterialType(i)];
-        if (ignoreMaterial(mt))
+        irr::video::SMaterial& m = node->getMaterial(i);
+        auto mt = m_fallback_materials[m.MaterialType];
+        if (ignoreMaterial(mt, m))
             continue;
         if (m_culling_tool->isCulled(buffer, node))
             continue;
@@ -325,7 +326,6 @@ void GEVulkanDrawCall::addNode(irr::scene::ISceneNode* node)
             m_dynamic_spm_buffers[shader][buffer] = {node};
             continue;
         }
-        irr::video::SMaterial& m = node->getMaterial(i);
         std::pair<GESPMBuffer*, int> k = std::make_pair(buffer,
             node->getTextureDescriptorID(i));
         m_visible_nodes[k][(uint32_t)mt].emplace_back(node, m);
