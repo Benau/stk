@@ -488,6 +488,24 @@ bool GEVulkanTexture::createImageView(VkImageAspectFlags aspect_flags,
         view_info.components.a = VK_COMPONENT_SWIZZLE_R;
     }
 
+    VkImageViewUsageCreateInfo usage_info = {};
+    if (m_vk
+        ->getPhysicalDeviceProperties().apiVersion >= VK_API_VERSION_1_1 &&
+        aspect_flags == VK_IMAGE_ASPECT_DEPTH_BIT &&
+        m_image_view_type == VK_IMAGE_VIEW_TYPE_2D_ARRAY)
+    {
+        // This view is sampling-only (the real RTT attachments are the
+        // per-layer 2D views built in createRTT()). Declaring it SAMPLED-only
+        // keeps MoltenVK from demanding "layeredRendering" GPU support just
+        // to create the view — that feature is only needed for writing to a
+        // layered attachment, which we never do. Without this, Apple GPU
+        // Family < 5 (A11 and earlier, including the A10X) fails here with
+        // VK_ERROR_FEATURE_NOT_PRESENT.
+        usage_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
+        usage_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+        view_info.pNext = &usage_info;
+    }
+
     VkResult result = vkCreateImageView(m_vulkan_device, &view_info, NULL,
         &m_image_view);
     if (result == VK_SUCCESS)
