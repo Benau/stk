@@ -2416,10 +2416,8 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
     STKTexManager::getInstance()->unsetTextureErrorMessage();
 #ifndef SERVER_ONLY
     if (CVS->isGLSL())
-    {
         m_sky_textures.clear();
-        m_spherical_harmonics_textures.clear();
-    }
+    m_spherical_harmonics_textures.clear();
 #endif   // !SERVER_ONLY
 }   // loadTrackModel
 
