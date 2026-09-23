@@ -716,7 +716,8 @@ cleanup:
 void GEVulkanTexture::updateTexture(void* data, video::ECOLOR_FORMAT format,
                                     u32 w, u32 h, u32 x, u32 y)
 {
-    if (!waitImageView())
+    // The image is missing if createTextureImage() failed
+    if (!waitImageView() || m_image == VK_NULL_HANDLE)
         return;
 
     VkBuffer staging_buffer;
