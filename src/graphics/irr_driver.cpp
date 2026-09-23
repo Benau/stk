@@ -1110,6 +1110,7 @@ void IrrDriver::applyResolutionSettings(bool recreate_device)
     font_manager = NULL;
     GUIEngine::clear();
     GUIEngine::cleanUp();
+    m_scene_manager->getMeshCache()->clear();
 
     if (recreate_device)
     {
