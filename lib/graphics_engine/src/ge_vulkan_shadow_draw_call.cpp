@@ -65,9 +65,12 @@ uint32_t GEVulkanShadowDrawCall::getSubpassForPipelineCreation(
 
 // ----------------------------------------------------------------------------
 bool GEVulkanShadowDrawCall::ignoreMaterial(
-                                          irr::video::E_MATERIAL_TYPE mt) const
+                                          irr::video::E_MATERIAL_TYPE mt,
+                                          const irr::video::SMaterial& m) const
 {
-    return GEMaterialManager::getMaterial(mt)->isTransparent();
+    if (GEMaterialManager::getMaterial(mt)->isTransparent())
+        return true;
+    return !m.ZWriteEnable;
 }   // ignoreMaterial
 
 // ----------------------------------------------------------------------------

@@ -1010,6 +1010,9 @@ void  Material::setMaterialProperties(video::SMaterial *m, scene::IMeshBuffer* m
             if (m_vk_textures[i - 2])
                 m->setTexture(i, m_vk_textures[i - 2]);
         }
+        // Avoid occlusion in pointlight shadow
+        if (StringUtils::startsWith(m_texname, "gfxglow"))
+            m->ZWriteEnable = false;
     }
 #endif
 } // setMaterialProperties
