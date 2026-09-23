@@ -288,6 +288,11 @@ void CentralVideoSettings::init()
             hasTextureCompressionSRGB = true;
             Log::info("GLDriver", "EXT Texture Compression S3TC sRGB Present");
         }
+        if (hasGLExtension("GL_EXT_texture_filter_anisotropic"))
+        {
+            hasTextureFilterAnisotropic = true;
+            Log::info("GLDriver", "EXT Texture Filter Anisotropic Present");
+        }
 
         if (GraphicsRestrictions::isDisabled(GraphicsRestrictions::GR_VERTEX_ID_WORKING))
         {
