@@ -136,7 +136,8 @@ private:
     // ------------------------------------------------------------------------
     virtual bool useDepthClamp() const                        { return false; }
     // ------------------------------------------------------------------------
-    virtual bool ignoreMaterial(irr::video::E_MATERIAL_TYPE mt) const
+    virtual bool ignoreMaterial(irr::video::E_MATERIAL_TYPE mt,
+                                const irr::video::SMaterial& m) const
                                                               { return false; }
     // ------------------------------------------------------------------------
     size_t getDynamicSPMSize() const;
