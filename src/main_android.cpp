@@ -110,7 +110,9 @@ void override_default_params_for_mobile()
     // Set smaller texture size to avoid high RAM usage
     UserConfigParams::m_max_texture_size = 256;
     UserConfigParams::m_high_definition_textures = false;
-    
+
+    // iOS getConfigForDevice will override it later
+    UserConfigParams::m_dynamic_lights = false;
     // Enable advanced lighting only for android >= 8
 #ifdef ANDROID
     UserConfigParams::m_dynamic_lights = (SDL_GetAndroidSDKVersion() >= 26);
@@ -264,6 +266,11 @@ void getConfigForDevice(const char* dev)
         auto versions = StringUtils::splitToUInt(device, ',');
         if (versions.size() == 2)
         {
+            // A11 GPU
+            if (versions[0] >= 10)
+            {
+                UserConfigParams::m_degraded_IBL = false;
+            }
             // A12 GPU
             if (versions[0] >= 11)
             {
@@ -287,6 +294,8 @@ void getConfigForDevice(const char* dev)
             {
                 // Those phones have small screen
                 UserConfigParams::m_multitouch_scale.setDefaultValue(1.45f);
+                if (UserConfigParams::m_dynamic_lights)
+                    UserConfigParams::m_scale_rtts_factor = 0.8f;
             }
         }
     }
@@ -302,6 +311,7 @@ void getConfigForDevice(const char* dev)
         {
             if (versions[0] >= 11)
             {
+                UserConfigParams::m_degraded_IBL = false;
                 UserConfigParams::m_shadows_resolution = 512;
             }
             if (versions[0] >= 7)
@@ -326,11 +336,14 @@ void getConfigForDevice(const char* dev)
             {
                 UserConfigParams::m_dynamic_lights = true;
                 UserConfigParams::m_high_definition_textures = 1;
+                UserConfigParams::m_scale_rtts_factor = 0.8f;
             }
         }
     }
-    // TODO remove when vulkan is used as it uses less power than gles3
-    UserConfigParams::m_max_fps = 30;
+    UserConfigParams::m_render_driver = "vulkan";
+    // Texture compression is slow, and with vulkan we don't load all kart
+    // textures anyway
+    UserConfigParams::m_texture_compression = false;
 }
 
 #endif
