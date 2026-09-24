@@ -17,6 +17,9 @@ extern PFN_vkGetPhysicalDeviceMetalFeaturesMVK vkGetPhysicalDeviceMetalFeaturesM
 
 #if defined(__APPLE__)
 #include <MoltenVK/mvk_private_api.h>
+#if defined(MVK_VERSION) && MVK_VERSION >= MVK_MAKE_VERSION(1, 4, 0)
+#include <MoltenVK/mvk_deprecated_api.h>
+#endif
 #endif
 
 #endif
