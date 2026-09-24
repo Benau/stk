@@ -24,6 +24,7 @@
 
 #ifdef ANDROID
 #include "SDL_cpuinfo.h"
+#include "SDL_loadso.h"
 #include "SDL_stdinc.h"
 #include "SDL_system.h"
 #include <jni.h>
@@ -101,6 +102,9 @@ extern "C" int SDL_main(int argc, char *argv[])
 }
 #endif
 
+extern "C" void* LoadVulkanDrivers(const char *path);
+extern "C" const char* Android_Custom_Vulkan_Driver_In_Use();
+
 void override_default_params_for_mobile()
 {
     // It has an effect only on the first run, when config file is created.
@@ -116,6 +120,25 @@ void override_default_params_for_mobile()
     // Enable advanced lighting only for android >= 8
 #ifdef ANDROID
     UserConfigParams::m_dynamic_lights = (SDL_GetAndroidSDKVersion() >= 26);
+
+    // Adrenotools requires >= Android 9+ Arm64
+#if defined(__aarch64__)
+    if (SDL_GetAndroidSDKVersion() >= 28)
+    {
+        void* obj = LoadVulkanDrivers("libvulkan.so");
+        const char* driver = Android_Custom_Vulkan_Driver_In_Use();
+        if (driver != NULL)
+        {
+            Log::info("MainAndroid",
+                "Better vulkan driver %s supported.", driver);
+            UserConfigParams::m_render_driver = "vulkan";
+            UserConfigParams::m_texture_compression = false;
+        }
+        if (obj)
+            SDL_UnloadObject(obj);
+    }
+#endif
+
 #endif
 
     // Disable light scattering for better performance
