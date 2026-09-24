@@ -433,6 +433,7 @@ EOF
             sed -i 's/dep_libarchive = dependency(.*/dep_libarchive = null_dep/' src/freedreno/meson.build
             sed -i 's/dep_libxml2 = dependency(.*/dep_libxml2 = null_dep/' src/freedreno/meson.build
             sed -i 's/#elif DETECT_OS_ANDROID && !defined(__cplusplus)/#elif 0/' src/util/perf/cpu_trace.h
+            sed -i "s/cpp\.get_supported_arguments(\[/&'-Wno-everything',/" src/freedreno/vulkan/meson.build
             meson setup build --cross-file crossfile \
                 -Dbuildtype=release \
                 -Dplatforms=android \
@@ -441,8 +442,7 @@ EOF
                 -Dgallium-drivers= \
                 -Dvulkan-drivers=freedreno \
                 -Dfreedreno-kmds=kgsl \
-                -Db_lto=true \
-                -Db_lto_mode=thin \
+                -Db_lto=false \
                 -Degl=disabled \
                 -Dvalgrind=disabled \
                 -Dzstd=disabled \
