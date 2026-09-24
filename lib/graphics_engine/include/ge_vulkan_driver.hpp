@@ -480,7 +480,11 @@ namespace GE
                     vkDestroyDevice(device, NULL);
                 if (surface != VK_NULL_HANDLE)
                     vkDestroySurfaceKHR(instance, surface, NULL);
-                if (vkDestroyDebugUtilsMessengerEXT && debug != VK_NULL_HANDLE)
+                bool has_vk_destroy_dum = true;
+#ifdef GLAD_VULKAN
+                has_vk_destroy_dum = vkDestroyDebugUtilsMessengerEXT != NULL;
+#endif
+                if (has_vk_destroy_dum && debug != VK_NULL_HANDLE)
                      vkDestroyDebugUtilsMessengerEXT(instance, debug, NULL);
                 if (instance != VK_NULL_HANDLE)
                     vkDestroyInstance(instance, NULL);
