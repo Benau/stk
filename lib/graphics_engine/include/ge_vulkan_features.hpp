@@ -42,6 +42,8 @@ bool supportsASTC4x4();
 bool supportsShaderStorageImageExtendedFormats();
 // ----------------------------------------------------------------------------
 bool supportsDynamicRendering();
+// ----------------------------------------------------------------------------
+bool supportsDynamicRenderingLocalRead();
 };   // GEVulkanFeatures
 
 }
