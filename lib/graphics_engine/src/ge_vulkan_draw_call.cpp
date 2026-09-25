@@ -314,7 +314,7 @@ void GEVulkanDrawCall::addNode(irr::scene::ISceneNode* node)
             continue;
         GESPMBuffer* buffer = static_cast<GESPMBuffer*>(b);
         irr::video::SMaterial& m = node->getMaterial(i);
-        auto mt = m_fallback_materials[m.MaterialType];
+        auto mt = m_fallback_materials[node->getMaterialType(i)];
         if (ignoreMaterial(mt, m))
             continue;
         if (m_culling_tool->isCulled(buffer, node))
