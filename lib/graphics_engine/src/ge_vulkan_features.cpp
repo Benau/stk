@@ -36,6 +36,7 @@ bool g_supports_bptc_bc7 = false;
 bool g_supports_astc_4x4 = false;
 bool g_supports_shader_storage_image_extended_format = false;
 bool g_supports_dynamic_rendering = false;
+bool g_supports_dynamic_rendering_local_read = false;
 }   // GEVulkanFeatures
 
 // ============================================================================
@@ -124,9 +125,6 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
             VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME) == 0 &&
             dynamic_indexing)
             g_supports_descriptor_indexing = true;
-        if (strcmp(prop.extensionName,
-            VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME) == 0)
-            g_supports_dynamic_rendering = true;
     }
 
     uint32_t queue_family_count = 0;
@@ -163,6 +161,13 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
     shader_draw.pNext = &dynamic_rendering_features;
 
+    VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR
+        dynamic_rendering_local_read_features = {};
+    dynamic_rendering_local_read_features.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR;
+    dynamic_rendering_features.pNext =
+        &dynamic_rendering_local_read_features;
+
     PFN_vkGetPhysicalDeviceFeatures2 get_features = vkGetPhysicalDeviceFeatures2;
     if (vk->getPhysicalDeviceProperties().apiVersion < VK_API_VERSION_1_1 ||
         !get_features)
@@ -186,14 +191,26 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
         .descriptorBindingPartiallyBound == VK_TRUE);
     g_supports_shader_draw_parameters = (shader_draw
         .shaderDrawParameters == VK_TRUE);
+    g_supports_dynamic_rendering =
+        (dynamic_rendering_features.dynamicRendering == VK_TRUE);
+    g_supports_dynamic_rendering_local_read =
+        (dynamic_rendering_local_read_features.dynamicRenderingLocalRead ==
+        VK_TRUE);
 
-    // Dynamic rendering: promoted to core in Vulkan 1.3; also available via
-    // the KHR extension on 1.0/1.1/1.2 devices that expose it.
-    if (g_supports_dynamic_rendering ||
-        vk->getPhysicalDeviceProperties().apiVersion >= VK_MAKE_VERSION(1, 3, 0))
+    // Vulkan 1.4 implementations only have to support local read for storage
+    // resources and single sampled color attachments
+    if (vk->getPhysicalDeviceProperties().apiVersion >= VK_MAKE_VERSION(1, 4, 0))
     {
-        g_supports_dynamic_rendering =
-            (dynamic_rendering_features.dynamicRendering == VK_TRUE);
+        VkPhysicalDeviceProperties2 properties = {};
+        properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+
+        VkPhysicalDeviceVulkan14Properties vk_14_prop = {};
+        vk_14_prop.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_PROPERTIES;
+        properties.pNext = &vk_14_prop;
+
+        vkGetPhysicalDeviceProperties2(vk->getPhysicalDevice(), &properties);
+        g_supports_dynamic_rendering_local_read = vk_14_prop
+            .dynamicRenderingLocalReadDepthStencilAttachments == VK_TRUE;
     }
 
 #if defined(__APPLE__)
@@ -288,6 +305,9 @@ void GEVulkanFeatures::printStats()
     os::Printer::log(
         "Vulkan supports dynamic rendering (VK_KHR_dynamic_rendering)",
         g_supports_dynamic_rendering ? "true" : "false");
+    os::Printer::log(
+        "Vulkan supports dynamic rendering local read",
+        g_supports_dynamic_rendering_local_read ? "true" : "false");
     os::Printer::log(
         "Vulkan descriptor can be partially bound",
         g_supports_partially_bound ? "true" : "false");
@@ -387,5 +407,11 @@ bool GEVulkanFeatures::supportsDynamicRendering()
 {
     return g_supports_dynamic_rendering;
 }   // supportsDynamicRendering
+
+// ----------------------------------------------------------------------------
+bool GEVulkanFeatures::supportsDynamicRenderingLocalRead()
+{
+    return g_supports_dynamic_rendering_local_read;
+} // supportsDynamicRenderingLocalRead
 
 }
