@@ -236,6 +236,10 @@ extern "C" PFN_vkVoidFunction loader(void* user_ptr, const char* name)
         "vkCmdSetPerformanceOverrideINTEL",
         "vkCmdSetPerformanceStreamMarkerINTEL",
         "vkCmdSetPrimitiveTopologyEXT",
+        "vkCmdSetRenderingAttachmentLocations",
+        "vkCmdSetRenderingAttachmentLocationsKHR",
+        "vkCmdSetRenderingInputAttachmentIndices",
+        "vkCmdSetRenderingInputAttachmentIndicesKHR",
         "vkCmdSetSampleLocationsEXT",
         "vkCmdSetScissor",
         "vkCmdSetScissorWithCountEXT",
@@ -864,7 +868,7 @@ void GEVulkanDriver::createInstance(SDL_Window* window)
     {
         // From https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkApplicationInfo.html
         // Implementations that support Vulkan 1.1 or later must not return VK_ERROR_INCOMPATIBLE_DRIVER for any value of apiVersion.
-        app_info.apiVersion = VK_API_VERSION_1_3;
+        app_info.apiVersion = VK_API_VERSION_1_4;
     }
     VkInstanceCreateInfo create_info = {};
     create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -967,6 +971,13 @@ bool GEVulkanDriver::checkDeviceExtensions(VkPhysicalDevice device)
         {
             m_device_extensions.push_back(
                 VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
+        }
+        else if (properties.apiVersion < VK_API_VERSION_1_4 &&
+            strcmp(ext.extensionName,
+            VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME) == 0)
+        {
+            m_device_extensions.push_back(
+                VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME);
         }
     }
 
@@ -1108,6 +1119,14 @@ void GEVulkanDriver::createDevice()
     dynamic_rendering_features.dynamicRendering =
         GEVulkanFeatures::supportsDynamicRendering();
     shader_draw.pNext = &dynamic_rendering_features;
+
+    VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR
+        dynamic_rendering_local_read_features = {};
+    dynamic_rendering_local_read_features.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR;
+    dynamic_rendering_local_read_features.dynamicRenderingLocalRead =
+        GEVulkanFeatures::supportsDynamicRenderingLocalRead();
+    dynamic_rendering_features.pNext = &dynamic_rendering_local_read_features;
 
     if (m_features.samplerAnisotropy == VK_TRUE)
         device_features.samplerAnisotropy = VK_TRUE;
