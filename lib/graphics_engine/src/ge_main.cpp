@@ -25,6 +25,7 @@ GEConfig g_config =
     false,
     false,
     true,
+    false,
     GADT_DISABLED,
     GSSRT_DISABLED,
     false,
@@ -259,6 +260,15 @@ void setAbsoluteRotationScale(const irr::core::matrix4& model_matrix,
         // Conjugated quaternion in glsl
         rotation.W = -rotation.W;
     }
+}
+
+void refreshDeferredSplit()
+{
+    // TODO: return true depending on settings / device. Everything that
+    // depends on it (FBO class, attachment usages, SPLIT shader define) is
+    // rebuilt by the GEVulkanDriver constructor and GEVulkanDriver::
+    // updateDriver after this is called
+    g_config.m_deferred_split = false;
 }
 
 }

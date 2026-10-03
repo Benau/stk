@@ -383,6 +383,7 @@ namespace GE
         void renderDrawCalls(const std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCameraSceneNode*> >& p,
                              VkCommandBuffer cmd);
         void insertBufferBarrier(VkCommandBuffer cmd, bool has_indirect);
+        u32& getPrimitivesDrawn() { return PrimitivesDrawn; }
     private:
         struct SwapChainSupportDetails
         {

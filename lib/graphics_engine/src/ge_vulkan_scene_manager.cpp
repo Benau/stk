@@ -205,6 +205,11 @@ void GEVulkanSceneManager::drawAll(irr::u32 flags)
     zero.color = {0, 0, 0, 0};
     for (unsigned c = 0; c < count; c++)
         clear_values.push_back(zero);
+    // The output attachment which is the last one in GEVulkanDeferredFBO
+    // (render pass attachments are cleared too), same as the clear values
+    // in GEVulkanDriver::buildCommandBuffers
+    if (rtt->isDeferredFBO())
+        clear_values.push_back(zero);
 
     VkCommandBuffer cmd = GEVulkanCommandLoader::beginSingleTimeCommands();
 
@@ -224,16 +229,23 @@ void GEVulkanSceneManager::drawAll(irr::u32 flags)
     if (sfbo)
         sfbo->render(cmd, cam);
 
-    VkRenderPassBeginInfo render_pass_info = {};
-    render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    render_pass_info.renderPass = rtt->getRTTRenderPass();
-    render_pass_info.framebuffer = rtt->getRTTFramebuffer();
-    render_pass_info.renderArea.offset = {0, 0};
-    render_pass_info.renderArea.extent =
-        { rtt->getSize().Width, rtt->getSize().Height };
-    render_pass_info.clearValueCount = (uint32_t)(clear_values.size());
-    render_pass_info.pClearValues = &clear_values[0];
-    vkCmdBeginRenderPass(cmd, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+    // GEVulkanDeferredFBOSplit::render() begins all render passes by itself
+    // (and the clear colors, so clear_values is not used for it), the last
+    // one is left open for both deferred FBO classes, which is ended here
+    if (!rtt->isSplit())
+    {
+        VkRenderPassBeginInfo render_pass_info = {};
+        render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        render_pass_info.renderPass = rtt->getRTTRenderPass();
+        render_pass_info.framebuffer = rtt->getRTTFramebuffer();
+        render_pass_info.renderArea.offset = {0, 0};
+        render_pass_info.renderArea.extent =
+            { rtt->getSize().Width, rtt->getSize().Height };
+        render_pass_info.clearValueCount = (uint32_t)(clear_values.size());
+        render_pass_info.pClearValues = &clear_values[0];
+        vkCmdBeginRenderPass(cmd, &render_pass_info,
+            VK_SUBPASS_CONTENTS_INLINE);
+    }
 
     vk->renderDrawCalls({{ dc.get(), cam }}, cmd);
     vk->addRTTPolyCount(dc->getPolyCount());

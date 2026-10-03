@@ -58,6 +58,7 @@ bool m_fullscreen_desktop;
 bool m_enable_draw_call_cache;
 bool m_pbr;
 bool m_ibl;
+bool m_deferred_split;
 GEAutoDeferredType m_auto_deferred_type;
 GEScreenSpaceReflectionType m_screen_space_reflection_type;
 bool m_force_deferred;
@@ -141,6 +142,13 @@ std::array<float, 4>& getDisplaceDirection();
 void setAbsoluteRotationScale(const irr::core::matrix4& model_matrix,
                               irr::core::quaternion& rotation,
                               irr::core::vector3df& scale);
+// Decides (and stores in GEConfig::m_deferred_split) whether the deferred
+// pipeline is split into separate render passes (GEVulkanDeferredFBOSplit,
+// no input attachments, SPLIT shader define) or uses the single render pass
+// with subpasses (GEVulkanDeferredFBO). It's stored in the config because
+// the constructor of GEVulkanDeferredFBO (which GEVulkanDeferredFBOSplit
+// derives from) needs to know it too before a virtual call is possible
+void refreshDeferredSplit();
 
 }
 #endif

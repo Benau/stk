@@ -11,6 +11,7 @@
 #include "ge_vulkan_camera_scene_node.hpp"
 #include "ge_vulkan_combined_shadow_fbo.hpp"
 #include "ge_vulkan_deferred_fbo.hpp"
+#include "ge_vulkan_deferred_fbo_split.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_dynamic_buffer.hpp"
 #include "ge_vulkan_environment_map.hpp"
@@ -2412,6 +2413,12 @@ VkRenderPass GEVulkanDrawCall::getRenderPassForPipelineCreation(
     GEVulkanFBOTexture* fbo = vk->getRTTTexture();
     if (fbo)
     {
+        // Every stage of GEVulkanDeferredFBOSplit is a render pass
+        if (fbo->isSplit())
+        {
+            return static_cast<GEVulkanDeferredFBOSplit*>(fbo)
+                ->getRenderPassForPipeline(type);
+        }
         if (fbo->getRTTRenderPassCount() == 1)
             return fbo->getRTTRenderPass();
         else
@@ -2439,6 +2446,9 @@ uint32_t GEVulkanDrawCall::getSubpassForPipelineCreation(
     if (vk->getRTTTexture() && vk->getRTTTexture()->isDeferredFBO())
     {
         auto* dfbo = static_cast<GEVulkanDeferredFBO*>(vk->getRTTTexture());
+        // Single subpass in every render pass
+        if (dfbo->isSplit())
+            return 0;
         if (dfbo->getAttachment<GVDFT_DISPLACE_COLOR>())
         {
             if (type == GVPT_DISPLACE_MASK || type == GVPT_DISPLACE_COLOR)
