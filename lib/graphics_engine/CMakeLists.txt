@@ -82,6 +82,7 @@ set(GE_SOURCES
     src/ge_vulkan_combined_shadow_fbo.cpp
     src/ge_vulkan_command_loader.cpp
     src/ge_vulkan_deferred_fbo.cpp
+    src/ge_vulkan_deferred_fbo_split.cpp
     src/ge_vulkan_driver.cpp
     src/ge_vulkan_draw_call.cpp
     src/ge_vulkan_dynamic_buffer.cpp

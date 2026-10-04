@@ -12,6 +12,7 @@
 #include "ge_vulkan_camera_scene_node.hpp"
 #include "ge_vulkan_command_loader.hpp"
 #include "ge_vulkan_deferred_fbo.hpp"
+#include "ge_vulkan_deferred_fbo_split.hpp"
 #include "ge_vulkan_draw_call.hpp"
 #include "ge_vulkan_dynamic_buffer.hpp"
 #include "ge_vulkan_dynamic_spm_buffer.hpp"
@@ -623,9 +624,10 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
         throw std::runtime_error("vmaCreateAllocator failed");
     }
 
+    refreshDeferredSplit();
+    createSamplers();
     createSwapChain();
     createSyncObjects();
-    createSamplers();
     createRenderPass();
     createFramebuffers();
 
@@ -1420,16 +1422,24 @@ found_mode:
     }
 
     const float scale = getGEConfig()->m_render_scale;
-    if (scale != 1.0f || needsDeferredRendering())
+    bool auto_deferred = getGEConfig()->m_pbr &&
+        getGEConfig()->m_auto_deferred_type != GADT_DISABLED;
+    bool deferred_split = getGEConfig()->m_deferred_split;
+    bool needs_deferred = auto_deferred || deferred_split;
+    if (scale != 1.0f || needs_deferred)
     {
         core::dimension2du screen_size = ScreenSize;
         screen_size.Width *= scale;
         screen_size.Height *= scale;
-        m_rtt_texture = needsDeferredRendering() ?
+        bool swapchain_output = scale == 1.0f;
+        core::dimension2du orig_ss = core::dimension2du(
+            m_swap_chain_extent.width, m_swap_chain_extent.height);
+        m_rtt_texture = deferred_split ?
+            new GEVulkanDeferredFBOSplit(this,
+            swapchain_output ? orig_ss : screen_size, swapchain_output) :
+            auto_deferred ?
             new GEVulkanDeferredFBO(this,
-            scale == 1.0f ? core::dimension2du(
-            m_swap_chain_extent.width, m_swap_chain_extent.height) :
-            screen_size, scale == 1.0f) :
+            swapchain_output ? orig_ss : screen_size, swapchain_output) :
             new GEVulkanFBOTexture(this, screen_size);
         m_rtt_texture->createRTT();
     }
@@ -2591,8 +2601,13 @@ void GEVulkanDriver::buildCommandBuffers()
             sfbo->render(getCurrentCommandBuffer(), p.first);
     }
 
-    vkCmdBeginRenderPass(getCurrentCommandBuffer(), &render_pass_info,
-        VK_SUBPASS_CONTENTS_INLINE);
+    // GEVulkanDeferredFBOSplit::render() begins all render passes of its own,
+    // the last one is left open the same way, so the rest is the same
+    if (!m_rtt_texture || !m_rtt_texture->isSplit())
+    {
+        vkCmdBeginRenderPass(getCurrentCommandBuffer(), &render_pass_info,
+            VK_SUBPASS_CONTENTS_INLINE);
+    }
 
     std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCameraSceneNode*> > dcs;
     for (auto& p : dcp)
@@ -2630,131 +2645,11 @@ void GEVulkanDriver::renderDrawCalls(
         GEVulkanFeatures::supportsBindMeshTexturesAtOnce();
     if (m_rtt_texture && m_rtt_texture->isDeferredFBO())
     {
-        bool multiple_viewports = p.size() > 1;
-        auto* dfbo = static_cast<GEVulkanDeferredFBO*>(m_rtt_texture);
-
-        std::array<VkClearValue, GVDFT_COUNT> zeros = {};
-        VkRenderPassBeginInfo render_pass_info = {};
-        render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        render_pass_info.pClearValues = zeros.data();
-        render_pass_info.renderArea.offset = {0, 0};
-        render_pass_info.renderArea.extent = {
-            m_rtt_texture->getSize().Width, m_rtt_texture->getSize().Height };
-
-        for (auto& q : p)
-        {
-            if (bind_mesh_textures)
-                q.first->bindAllMaterials(cmd);
-            else
-                rebind_base_vertex = true;
-            q.first->updateDataDescriptorSets(this, q.second);
-            q.first->prepareViewport(this, q.second->getViewPort(), cmd);
-            if (q.first->doDepthOnlyRenderingFirst())
-            {
-                q.first->renderPipeline(this, cmd, GVPT_DEPTH,
-                    rebind_base_vertex);
-            }
-            q.first->renderPipeline(this, cmd, GVPT_SOLID, rebind_base_vertex);
-            PrimitivesDrawn += q.first->getPolyCount();
-        }
-        vkCmdNextSubpass(cmd, VK_SUBPASS_CONTENTS_INLINE);
-        for (auto& q : p)
-        {
-            if (multiple_viewports)
-                q.first->prepareViewport(this, q.second->getViewPort(), cmd);
-            q.first->renderDeferredLighting(this, cmd);
-            q.first->renderSkyBox(this, cmd);
-        }
-        vkCmdNextSubpass(cmd, VK_SUBPASS_CONTENTS_INLINE);
-        for (auto& q : p)
-        {
-            if (multiple_viewports)
-                q.first->prepareViewport(this, q.second->getViewPort(), cmd);
-            q.first->renderDeferredConvertColor(this, cmd);
-            if (bind_mesh_textures)
-                q.first->bindAllMaterials(cmd);
-            else
-                rebind_base_vertex = true;
-            q.first->renderPipeline(this, cmd, GVPT_GHOST_DEPTH,
-                rebind_base_vertex);
-            q.first->renderPipeline(this, cmd, GVPT_TRANSPARENT,
-                rebind_base_vertex);
-        }
-        if (dfbo->getAttachment<GVDFT_DISPLACE_COLOR>())
-        {
-            bool has_displace = false;
-            for (auto& q : p)
-            {
-                if (q.first->hasShaderForRendering("displace") ||
-                    q.first->hasShaderForRendering("displace_skinning"))
-                {
-                    has_displace = true;
-                    break;
-                }
-            }
-            if (has_displace)
-            {
-                vkCmdEndRenderPass(cmd);
-                for (auto& q : p)
-                {
-                    GEVulkanHiZDepth* hiz = q.first->getHiZDepth();
-                    if (hiz)
-                        hiz->generate(cmd);
-                }
-                render_pass_info.clearValueCount = m_rtt_texture
-                    ->getZeroClearCountForPass(GVDFP_DISPLACE_MASK);
-                render_pass_info.renderPass = m_rtt_texture
-                    ->getRTTRenderPass(GVDFP_DISPLACE_MASK);
-                render_pass_info.framebuffer = m_rtt_texture
-                    ->getRTTFramebuffer(GVDFP_DISPLACE_MASK);
-                vkCmdBeginRenderPass(cmd, &render_pass_info,
-                    VK_SUBPASS_CONTENTS_INLINE);
-                for (auto& q : p)
-                {
-                    if (multiple_viewports)
-                        q.first->prepareViewport(this, q.second->getViewPort(), cmd);
-                    if (bind_mesh_textures)
-                        q.first->bindAllMaterials(cmd);
-                    else
-                        rebind_base_vertex = true;
-                    q.first->renderPipeline(this, cmd, GVPT_DISPLACE_MASK,
-                        rebind_base_vertex);
-                }
-            }
-            vkCmdEndRenderPass(cmd);
-            render_pass_info.clearValueCount =
-                m_rtt_texture->getZeroClearCountForPass(GVDFP_DISPLACE_COLOR);
-            render_pass_info.renderPass =
-                m_rtt_texture->getRTTRenderPass(GVDFP_DISPLACE_COLOR);
-            if (m_rtt_texture->useSwapChainOutput())
-            {
-                render_pass_info.framebuffer =
-                    m_rtt_texture->getRTTFramebuffer(
-                    GVDFP_DISPLACE_COLOR + getCurrentImageIndex());
-            }
-            else
-            {
-                render_pass_info.framebuffer =
-                    m_rtt_texture->getRTTFramebuffer(GVDFP_DISPLACE_COLOR);
-            }
-            vkCmdBeginRenderPass(cmd, &render_pass_info,
-                VK_SUBPASS_CONTENTS_INLINE);
-            for (auto& q : p)
-            {
-                if (multiple_viewports)
-                    q.first->prepareViewport(this, q.second->getViewPort(), cmd);
-                q.first->renderDisplaceColor(this, cmd, has_displace);
-                if (has_displace)
-                {
-                    if (bind_mesh_textures)
-                        q.first->bindAllMaterials(cmd);
-                    else
-                        rebind_base_vertex = true;
-                    q.first->renderPipeline(this, cmd, GVPT_DISPLACE_COLOR,
-                        rebind_base_vertex);
-                }
-            }
-        }
+        // Virtual dispatch: GEVulkanDeferredFBO::render() is the 3 subpasses
+        // of one render pass (already begun by the caller), and
+        // GEVulkanDeferredFBOSplit::render() begins a render pass per stage
+        // by itself
+        static_cast<GEVulkanDeferredFBO*>(m_rtt_texture)->render(cmd, p);
     }
     else
     {
@@ -2812,8 +2707,16 @@ ITexture* GEVulkanDriver::addRenderTargetTexture(const core::dimension2d<u32>& s
     const io::path& name, const ECOLOR_FORMAT format,
     const bool useStencil)
 {
-    GEVulkanFBOTexture* rtt = needsDeferredRendering(false/*auto_deferred*/) ?
-        new GEVulkanDeferredFBO(this, size, false/*swapchain_output*/) :
+    // Pipelines are shared with the swapchain FBO and the HDR attachment needs
+    // alpha, see GEVulkanDeferredFBO::setCreatingOffscreenRTT (reset even if
+    // the creation throws)
+    struct OffscreenRTTScope
+    {
+        OffscreenRTTScope()  { GEVulkanDeferredFBO::setCreatingOffscreenRTT(true); }
+        ~OffscreenRTTScope() { GEVulkanDeferredFBO::setCreatingOffscreenRTT(false); }
+    } scope;
+    GEVulkanFBOTexture* rtt = getGEConfig()->m_deferred_split ?
+        new GEVulkanDeferredFBOSplit(this, size, false/*swapchain_output*/) :
         new GEVulkanFBOTexture(this, size);
     rtt->createRTT();
     return rtt;
@@ -2848,12 +2751,18 @@ void GEVulkanDriver::updateDriver(bool scale_changed, bool pbr_changed,
 {
     waitIdle();
     setDisableWaitIdle(true);
+    const bool prev_deferred_split = getGEConfig()->m_deferred_split;
+    refreshDeferredSplit();
+    // Different FBO class (and SPLIT in shaders) if changed
+    const bool deferred_split_changed =
+        prev_deferred_split != getGEConfig()->m_deferred_split;
     clearDrawCallsCache();
-    if (scale_changed || pbr_changed)
+    if (scale_changed || pbr_changed || deferred_split_changed)
         destroySwapChainRelated(false/*handle_surface*/);
+    if (pbr_changed || deferred_split_changed)
+        GEVulkanShaderManager::loadAllShaders();
     if (pbr_changed)
     {
-        GEVulkanShaderManager::loadAllShaders();
         GEVulkanSampler sampler = m_mesh_texture_descriptor->getSamplerUse();
         delete m_mesh_texture_descriptor;
         m_mesh_texture_descriptor = new GEVulkanTextureDescriptor(
@@ -2885,12 +2794,12 @@ void GEVulkanDriver::updateDriver(bool scale_changed, bool pbr_changed,
     }
     if (pbr_changed || ibl_changed)
         m_skybox_renderer->reset();
-    if (scale_changed || pbr_changed)
+    if (scale_changed || pbr_changed || deferred_split_changed)
         createSwapChainRelated(false/*handle_surface*/);
     for (auto& dc : static_cast<GEVulkanSceneManager*>(
         m_irrlicht_device->getSceneManager())->getDrawCalls())
         dc.second = std::unique_ptr<GEVulkanDrawCall>(new GEVulkanDrawCall);
-    if (scale_changed || pbr_changed)
+    if (scale_changed || pbr_changed || deferred_split_changed)
     {
         GEVulkan2dRenderer::destroy();
         GEVulkan2dRenderer::init(this);
