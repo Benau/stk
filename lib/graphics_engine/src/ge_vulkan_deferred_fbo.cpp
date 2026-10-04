@@ -2,8 +2,12 @@
 
 #include "ge_main.hpp"
 #include "ge_vulkan_attachment_texture.hpp"
+#include "ge_vulkan_camera_scene_node.hpp"
 #include "ge_vulkan_command_loader.hpp"
+#include "ge_vulkan_draw_call.hpp"
 #include "ge_vulkan_driver.hpp"
+#include "ge_vulkan_features.hpp"
+#include "ge_vulkan_hiz_depth.hpp"
 
 #include <array>
 #include <exception>
@@ -11,11 +15,13 @@
 
 namespace GE
 {
+bool GEVulkanDeferredFBO::s_creating_offscreen_rtt = false;
+// ----------------------------------------------------------------------------
 GEVulkanDeferredFBO::GEVulkanDeferredFBO(GEVulkanDriver* vk,
                                          const core::dimension2d<u32>& size,
                                          bool swapchain_output)
                    : GEVulkanFBOTexture(vk, size,
-                     !(!vk->getSeparateRTTTexture() &&
+                     /*lazy_depth*/!(getGEConfig()->m_deferred_split ||
                      getGEConfig()->m_auto_deferred_type == GADT_DISPLACE)),
                      m_swapchain_output(swapchain_output)
 {
@@ -23,12 +29,20 @@ GEVulkanDeferredFBO::GEVulkanDeferredFBO(GEVulkanDriver* vk,
     m_descriptor_layout.fill(VK_NULL_HANDLE);
     m_descriptor_pool.fill(VK_NULL_HANDLE);
     m_descriptor_set.fill(VK_NULL_HANDLE);
+    // Without split they only live inside a render pass as input attachments
+    // (transient, no memory is needed on a tiled GPU), with split they are
+    // written in one render pass and sampled by another one, so they are
+    // regular textures (sampled and transient can't be combined)
+    const bool split = getGEConfig()->m_deferred_split;
+    const VkImageUsageFlags attachment_usage = split ?
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT :
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+        VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
+        VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
     for (unsigned i = GVDFT_COLOR; i <= GVDFT_NORMAL; i++)
     {
         m_attachments[i] = new GEVulkanAttachmentTexture(vk, size,
-            VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-            VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
-            VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+            VK_FORMAT_B8G8R8A8_UNORM, attachment_usage,
             VK_IMAGE_ASPECT_COLOR_BIT);
     }
     std::vector<VkFormat> hdr_formats =
@@ -37,17 +51,17 @@ GEVulkanDeferredFBO::GEVulkanDeferredFBO(GEVulkanDriver* vk,
         VK_FORMAT_R16G16B16A16_SFLOAT,
         VK_FORMAT_B8G8R8A8_UNORM
     };
+    // An offscreen RTT is composited later, so it needs alpha in HDR to know
+    // which pixels have nothing drawn (see deferred_convert_color.frag)
+    if (s_creating_offscreen_rtt)
+        hdr_formats.erase(hdr_formats.begin());
     VkFormat hdr_format = vk->findSupportedFormat(hdr_formats,
         VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
         VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT);
     m_attachments[GVDFT_HDR] = new GEVulkanAttachmentTexture(vk, size,
-        hdr_format, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-        VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
-        VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
-        VK_IMAGE_ASPECT_COLOR_BIT);
+        hdr_format, attachment_usage, VK_IMAGE_ASPECT_COLOR_BIT);
 
-    if (!vk->getSeparateRTTTexture() &&
-        getGEConfig()->m_auto_deferred_type == GADT_DISPLACE)
+    if (getGEConfig()->m_auto_deferred_type == GADT_DISPLACE)
     {
         std::vector<VkFormat> displace_mask_formats =
         {
@@ -83,12 +97,28 @@ GEVulkanDeferredFBO::GEVulkanDeferredFBO(GEVulkanDriver* vk,
         }
         GEVulkanCommandLoader::endSingleTimeCommands(command_buffer);
 
+        // Note: if dynamic rendering is ever used (one pipeline for the
+        // tonemap pass has to be compatible with both this and the swapchain
+        // image as its output), this needs to use the swapchain format
         m_attachments[GVDFT_DISPLACE_COLOR] = new GEVulkanAttachmentTexture(vk,
             size, VK_FORMAT_B8G8R8A8_UNORM,
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
             VK_IMAGE_ASPECT_COLOR_BIT);
     }
 
+    // Split uses regular texture descriptors created by the derived class
+    if (!split)
+    {
+        initGBufferDescriptor(vk);
+        initConvertColorDescriptor(vk);
+    }
+    if (getAttachment<GVDFT_DISPLACE_COLOR>())
+        initDisplaceDescriptor(vk);
+}   // GEVulkanDeferredFBO
+
+// ----------------------------------------------------------------------------
+void GEVulkanDeferredFBO::initGBufferDescriptor(GEVulkanDriver* vk)
+{
     // m_descriptor_layout[GVDFP_HDR]
     std::array<VkDescriptorSetLayoutBinding, 3> texture_layout_binding = {};
     texture_layout_binding[0].binding = 0;
@@ -175,11 +205,7 @@ GEVulkanDeferredFBO::GEVulkanDeferredFBO(GEVulkanDriver* vk,
 
     vkUpdateDescriptorSets(vk->getDevice(), 1, &write_descriptor_set, 0,
         NULL);
-
-    initConvertColorDescriptor(vk);
-    if (getAttachment<GVDFT_DISPLACE_COLOR>())
-        initDisplaceDescriptor(vk);
-}   // GEVulkanDeferredFBO
+}   // initGBufferDescriptor
 
 // ----------------------------------------------------------------------------
 GEVulkanDeferredFBO::~GEVulkanDeferredFBO()
@@ -200,6 +226,131 @@ GEVulkanDeferredFBO::~GEVulkanDeferredFBO()
         }
     }
 }   // ~GEVulkanDeferredFBO
+
+// ----------------------------------------------------------------------------
+void GEVulkanDeferredFBO::render(VkCommandBuffer cmd,
+    const std::vector<std::pair<GEVulkanDrawCall*,
+    GEVulkanCameraSceneNode*> >& p)
+{
+    bool rebind_base_vertex = true;
+    const bool bind_mesh_textures =
+        GEVulkanFeatures::supportsBindMeshTexturesAtOnce();
+    bool multiple_viewports = p.size() > 1;
+
+    std::array<VkClearValue, GVDFT_COUNT> zeros = {};
+    VkRenderPassBeginInfo render_pass_info = {};
+    render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    render_pass_info.pClearValues = zeros.data();
+    render_pass_info.renderArea.offset = {0, 0};
+    render_pass_info.renderArea.extent = { getSize().Width, getSize().Height };
+
+    for (auto& q : p)
+    {
+        if (bind_mesh_textures)
+            q.first->bindAllMaterials(cmd);
+        else
+            rebind_base_vertex = true;
+        q.first->updateDataDescriptorSets(m_vk, q.second);
+        q.first->prepareViewport(m_vk, q.second->getViewPort(), cmd);
+        if (q.first->doDepthOnlyRenderingFirst())
+        {
+            q.first->renderPipeline(m_vk, cmd, GVPT_DEPTH,
+                rebind_base_vertex);
+        }
+        q.first->renderPipeline(m_vk, cmd, GVPT_SOLID, rebind_base_vertex);
+        m_vk->getPrimitivesDrawn() += q.first->getPolyCount();
+    }
+    vkCmdNextSubpass(cmd, VK_SUBPASS_CONTENTS_INLINE);
+    for (auto& q : p)
+    {
+        if (multiple_viewports)
+            q.first->prepareViewport(m_vk, q.second->getViewPort(), cmd);
+        q.first->renderDeferredLighting(m_vk, cmd);
+        q.first->renderSkyBox(m_vk, cmd);
+    }
+    vkCmdNextSubpass(cmd, VK_SUBPASS_CONTENTS_INLINE);
+    for (auto& q : p)
+    {
+        if (multiple_viewports)
+            q.first->prepareViewport(m_vk, q.second->getViewPort(), cmd);
+        q.first->renderDeferredConvertColor(m_vk, cmd);
+        if (bind_mesh_textures)
+            q.first->bindAllMaterials(cmd);
+        else
+            rebind_base_vertex = true;
+        q.first->renderPipeline(m_vk, cmd, GVPT_GHOST_DEPTH,
+            rebind_base_vertex);
+        q.first->renderPipeline(m_vk, cmd, GVPT_TRANSPARENT,
+            rebind_base_vertex);
+    }
+    if (!getAttachment<GVDFT_DISPLACE_COLOR>())
+        return;
+
+    bool has_displace = false;
+    for (auto& q : p)
+    {
+        if (q.first->hasShaderForRendering("displace") ||
+            q.first->hasShaderForRendering("displace_skinning"))
+        {
+            has_displace = true;
+            break;
+        }
+    }
+    if (has_displace)
+    {
+        vkCmdEndRenderPass(cmd);
+        for (auto& q : p)
+        {
+            GEVulkanHiZDepth* hiz = q.first->getHiZDepth();
+            if (hiz)
+                hiz->generate(cmd);
+        }
+        render_pass_info.clearValueCount =
+            getZeroClearCountForPass(GVDFP_DISPLACE_MASK);
+        render_pass_info.renderPass = getRTTRenderPass(GVDFP_DISPLACE_MASK);
+        render_pass_info.framebuffer = getRTTFramebuffer(GVDFP_DISPLACE_MASK);
+        vkCmdBeginRenderPass(cmd, &render_pass_info,
+            VK_SUBPASS_CONTENTS_INLINE);
+        for (auto& q : p)
+        {
+            if (multiple_viewports)
+                q.first->prepareViewport(m_vk, q.second->getViewPort(), cmd);
+            if (bind_mesh_textures)
+                q.first->bindAllMaterials(cmd);
+            else
+                rebind_base_vertex = true;
+            q.first->renderPipeline(m_vk, cmd, GVPT_DISPLACE_MASK,
+                rebind_base_vertex);
+        }
+    }
+    vkCmdEndRenderPass(cmd);
+    render_pass_info.clearValueCount =
+        getZeroClearCountForPass(GVDFP_DISPLACE_COLOR);
+    render_pass_info.renderPass = getRTTRenderPass(GVDFP_DISPLACE_COLOR);
+    if (useSwapChainOutput())
+    {
+        render_pass_info.framebuffer = getRTTFramebuffer(
+            GVDFP_DISPLACE_COLOR + m_vk->getCurrentImageIndex());
+    }
+    else
+        render_pass_info.framebuffer = getRTTFramebuffer(GVDFP_DISPLACE_COLOR);
+    vkCmdBeginRenderPass(cmd, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+    for (auto& q : p)
+    {
+        if (multiple_viewports)
+            q.first->prepareViewport(m_vk, q.second->getViewPort(), cmd);
+        q.first->renderDisplaceColor(m_vk, cmd, has_displace);
+        if (has_displace)
+        {
+            if (bind_mesh_textures)
+                q.first->bindAllMaterials(cmd);
+            else
+                rebind_base_vertex = true;
+            q.first->renderPipeline(m_vk, cmd, GVPT_DISPLACE_COLOR,
+                rebind_base_vertex);
+        }
+    }
+}   // render
 
 // ----------------------------------------------------------------------------
 void GEVulkanDeferredFBO::initConvertColorDescriptor(GEVulkanDriver* vk)
@@ -635,11 +786,12 @@ void GEVulkanDeferredFBO::createRTT()
 }   // createRTT
 
 // ----------------------------------------------------------------------------
-void GEVulkanDeferredFBO::createDisplacePasses()
+void GEVulkanDeferredFBO::createDisplacePasses(unsigned mask_pass,
+                                               unsigned color_pass)
 {
-    m_rtt_render_pass.resize(GVDFP_COUNT, VK_NULL_HANDLE);
+    m_rtt_render_pass.resize(color_pass + 1, VK_NULL_HANDLE);
 
-    // m_rtt_render_pass[GVDFP_DISPLACE_MASK]
+    // m_rtt_render_pass[mask_pass]
     {
         std::vector<VkAttachmentDescription> attachment_desc(1);
         attachment_desc[0].format = m_attachments[GVDFT_DISPLACE_MASK]->getInternalFormat();
@@ -704,11 +856,11 @@ void GEVulkanDeferredFBO::createDisplacePasses()
         render_pass_info.pDependencies = dependencies.data();
 
         if (vkCreateRenderPass(m_vk->getDevice(), &render_pass_info, NULL,
-            &m_rtt_render_pass[GVDFP_DISPLACE_MASK]) != VK_SUCCESS)
+            &m_rtt_render_pass[mask_pass]) != VK_SUCCESS)
             throw std::runtime_error("vkCreateRenderPass failed for GVDFP_DISPLACE_MASK");
     }
 
-    // m_rtt_render_pass[GVDFP_DISPLACE_COLOR]
+    // m_rtt_render_pass[color_pass]
     {
         std::array<VkAttachmentDescription, 2> attachment_desc = {};
         attachment_desc[0].format = useSwapChainOutput() ?
@@ -761,11 +913,11 @@ void GEVulkanDeferredFBO::createDisplacePasses()
         render_pass_info.pDependencies = dependencies.data();
 
         if (vkCreateRenderPass(m_vk->getDevice(), &render_pass_info, NULL,
-            &m_rtt_render_pass[GVDFP_DISPLACE_COLOR]) != VK_SUCCESS)
+            &m_rtt_render_pass[color_pass]) != VK_SUCCESS)
             throw std::runtime_error("vkCreateRenderPass failed for GVDFP_DISPLACE_COLOR");
     }
 
-    m_rtt_frame_buffer.resize(GVDFP_COUNT, VK_NULL_HANDLE);
+    m_rtt_frame_buffer.resize(color_pass + 1, VK_NULL_HANDLE);
     auto& sciv = m_vk->getSwapChainImageViews();
     if (useSwapChainOutput())
     {
@@ -773,7 +925,7 @@ void GEVulkanDeferredFBO::createDisplacePasses()
             m_rtt_frame_buffer.push_back(VK_NULL_HANDLE);
     }
 
-    // m_rtt_frame_buffer[GVDFP_DISPLACE_MASK]
+    // m_rtt_frame_buffer[mask_pass]
     {
         std::vector<VkImageView> attachments =
         {
@@ -788,7 +940,7 @@ void GEVulkanDeferredFBO::createDisplacePasses()
 
         VkFramebufferCreateInfo framebuffer_info = {};
         framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebuffer_info.renderPass = m_rtt_render_pass[GVDFP_DISPLACE_MASK];
+        framebuffer_info.renderPass = m_rtt_render_pass[mask_pass];
         framebuffer_info.attachmentCount = attachments.size();
         framebuffer_info.pAttachments = attachments.data();
         framebuffer_info.width = m_depth_texture->getSize().Width;
@@ -796,22 +948,22 @@ void GEVulkanDeferredFBO::createDisplacePasses()
         framebuffer_info.layers = 1;
 
         if (vkCreateFramebuffer(m_vk->getDevice(), &framebuffer_info, NULL,
-            &m_rtt_frame_buffer[GVDFP_DISPLACE_MASK]) != VK_SUCCESS)
+            &m_rtt_frame_buffer[mask_pass]) != VK_SUCCESS)
             throw std::runtime_error("vkCreateFramebuffer failed for GVDFP_DISPLACE_MASK");
     }
 
-    // m_rtt_frame_buffer[GVDFP_DISPLACE_COLOR]
-    for (unsigned i = GVDFP_DISPLACE_COLOR; i < m_rtt_frame_buffer.size(); i++)
+    // m_rtt_frame_buffer[color_pass]
+    for (unsigned i = color_pass; i < m_rtt_frame_buffer.size(); i++)
     {
         std::array<VkImageView, 2> attachments =
         {{
-            useSwapChainOutput() ? sciv[i - GVDFP_DISPLACE_COLOR] : (VkImageView)getTextureHandler(),
+            useSwapChainOutput() ? sciv[i - color_pass] : (VkImageView)getTextureHandler(),
             (VkImageView)m_depth_texture->getTextureHandler()
         }};
 
         VkFramebufferCreateInfo framebuffer_info = {};
         framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebuffer_info.renderPass = m_rtt_render_pass[GVDFP_DISPLACE_COLOR];
+        framebuffer_info.renderPass = m_rtt_render_pass[color_pass];
         framebuffer_info.attachmentCount = attachments.size();
         framebuffer_info.pAttachments = attachments.data();
         framebuffer_info.width = m_depth_texture->getSize().Width;

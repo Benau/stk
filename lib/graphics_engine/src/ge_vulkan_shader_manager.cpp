@@ -109,6 +109,9 @@ void GEVulkanShaderManager::loadAllShaders(const std::string& match_filename)
         oss << "#define GE_SAMPLE_TEX_INDEX int\n";
     if (GEVulkanFeatures::supportsShaderStorageImageExtendedFormats())
         oss << "#define SHADER_STORAGE_IMAGE_EXTENDED_FORMATS\n";
+    // Deferred render passes are split, no input attachments at all
+    if (getGEConfig()->m_deferred_split)
+        oss << "#define SPLIT\n";
 
 #if defined(TILED_GPU)
     oss << "#define TILED_GPU\n";

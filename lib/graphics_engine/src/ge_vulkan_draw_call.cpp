@@ -11,6 +11,7 @@
 #include "ge_vulkan_camera_scene_node.hpp"
 #include "ge_vulkan_combined_shadow_fbo.hpp"
 #include "ge_vulkan_deferred_fbo.hpp"
+#include "ge_vulkan_deferred_fbo_split.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_dynamic_buffer.hpp"
 #include "ge_vulkan_environment_map.hpp"
@@ -1214,12 +1215,13 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         pipeline_info.pNext = &prci;
     }
 
+    bool offscreen_rtt = vk->getSeparateRTTTexture() != NULL;
     struct Constants
     {
         VkBool32 m_ibl;
         float m_specular_levels_minus_one;
         VkBool32 m_deferred;
-        VkBool32 m_skybox;
+        VkBool32 m_offscreen_rtt;
         VkBool32 m_ssr;
         uint32_t m_hiz_iterations;
         uint32_t m_shadow_size;
@@ -1228,12 +1230,11 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     };
     Constants constants = {};
     constants.m_ibl = getGEConfig()->m_pbr && getGEConfig()->m_ibl &&
-        GEVulkanFeatures::supportsComputeInMainQueue() &&
-        m_skybox_renderer != NULL;
+        GEVulkanFeatures::supportsComputeInMainQueue() && !offscreen_rtt;
     float ts = GEVulkanEnvironmentMap::getSpecularEnvironmentMapSize().Width;
     constants.m_specular_levels_minus_one = std::floor(std::log2(ts));
     constants.m_deferred = !m_deferred_layouts.empty();
-    constants.m_skybox = m_skybox_renderer != NULL;
+    constants.m_offscreen_rtt = offscreen_rtt;
     constants.m_ssr = getGEConfig()->m_screen_space_reflection_type !=
         GSSRT_DISABLED;
     if (m_hiz_depth)
@@ -1269,7 +1270,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     specialization_entries[2].offset = offsetof(Constants, m_deferred);
     specialization_entries[2].size = sizeof(VkBool32);
     specialization_entries[3].constantID = 3;
-    specialization_entries[3].offset = offsetof(Constants, m_skybox);
+    specialization_entries[3].offset = offsetof(Constants, m_offscreen_rtt);
     specialization_entries[3].size = sizeof(VkBool32);
     specialization_entries[4].constantID = 4;
     specialization_entries[4].offset = offsetof(Constants, m_ssr);
@@ -2158,7 +2159,9 @@ bool GEVulkanDrawCall::renderSkyBox(GEVulkanDriver* vk, VkCommandBuffer cmd)
 void GEVulkanDrawCall::renderDeferredLighting(GEVulkanDriver* vk,
                                               VkCommandBuffer cmd)
 {
-    if (m_deferred_layouts.empty())
+    // Make draw commands during offscreen RTT causes validation errors
+    if (m_deferred_layouts.empty() ||
+        (m_visible_nodes.empty() && !m_skybox_renderer))
         return;
     auto& pl = m_graphics_pipelines.at("deferred_pbr").m_pipelines;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -2208,7 +2211,8 @@ void GEVulkanDrawCall::renderDeferredLighting(GEVulkanDriver* vk,
 void GEVulkanDrawCall::renderDeferredConvertColor(GEVulkanDriver* vk,
                                                   VkCommandBuffer cmd)
 {
-    if (m_deferred_layouts.empty())
+    if (m_deferred_layouts.empty() ||
+        (m_visible_nodes.empty() && !m_skybox_renderer))
         return;
     auto& pl = m_graphics_pipelines.at("deferred_convert_color").m_pipelines;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -2224,7 +2228,8 @@ void GEVulkanDrawCall::renderDisplaceColor(GEVulkanDriver* vk,
                                            VkCommandBuffer cmd,
                                            VkBool32 has_displace)
 {
-    if (m_deferred_layouts.empty())
+    if (m_deferred_layouts.empty() ||
+        (m_visible_nodes.empty() && !m_skybox_renderer))
         return;
     auto& pl = m_graphics_pipelines.at("displace_color").m_pipelines;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -2412,6 +2417,12 @@ VkRenderPass GEVulkanDrawCall::getRenderPassForPipelineCreation(
     GEVulkanFBOTexture* fbo = vk->getRTTTexture();
     if (fbo)
     {
+        // Every stage of GEVulkanDeferredFBOSplit is a render pass
+        if (fbo->isSplit())
+        {
+            return static_cast<GEVulkanDeferredFBOSplit*>(fbo)
+                ->getRenderPassForPipeline(type);
+        }
         if (fbo->getRTTRenderPassCount() == 1)
             return fbo->getRTTRenderPass();
         else
@@ -2439,6 +2450,9 @@ uint32_t GEVulkanDrawCall::getSubpassForPipelineCreation(
     if (vk->getRTTTexture() && vk->getRTTTexture()->isDeferredFBO())
     {
         auto* dfbo = static_cast<GEVulkanDeferredFBO*>(vk->getRTTTexture());
+        // Single subpass in every render pass
+        if (dfbo->isSplit())
+            return 0;
         if (dfbo->getAttachment<GVDFT_DISPLACE_COLOR>())
         {
             if (type == GVPT_DISPLACE_MASK || type == GVPT_DISPLACE_COLOR)

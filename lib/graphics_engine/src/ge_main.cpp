@@ -25,9 +25,9 @@ GEConfig g_config =
     false,
     false,
     true,
+    false,
     GADT_DISABLED,
     GSSRT_DISABLED,
-    false,
     {},
     1.0f,
     0,
@@ -225,11 +225,10 @@ bool hasOcclusionCulling()
     return false;
 }
 
-bool needsDeferredRendering(bool auto_deferred)
+bool needsDeferredRendering()
 {
-    return g_config.m_pbr &&
-        ((auto_deferred && g_config.m_auto_deferred_type != GADT_DISABLED) ||
-        g_config.m_force_deferred);
+    return g_config.m_deferred_split ||
+        (g_config.m_pbr && g_config.m_auto_deferred_type != GADT_DISABLED);
 }
 
 std::array<float, 4>& getDisplaceDirection()
@@ -259,6 +258,17 @@ void setAbsoluteRotationScale(const irr::core::matrix4& model_matrix,
         // Conjugated quaternion in glsl
         rotation.W = -rotation.W;
     }
+}
+
+void refreshDeferredSplit()
+{
+    g_config.m_deferred_split = false;
+    if (!g_config.m_pbr)
+        return;
+    // TODO: return true depending on settings / device. Everything that
+    // depends on it (FBO class, attachment usages, SPLIT shader define) is
+    // rebuilt by the GEVulkanDriver constructor and GEVulkanDriver::
+    // updateDriver after this is called
 }
 
 }

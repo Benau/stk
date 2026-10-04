@@ -67,6 +67,13 @@ public:
     // ------------------------------------------------------------------------
     virtual bool useSwapChainOutput() const                   { return false; }
     // ------------------------------------------------------------------------
+    // True for GEVulkanDeferredFBOSplit: the owner (the driver, or the scene
+    // manager for a separate RTT) must not begin a render pass before calling
+    // render(), which begins all of them itself. Same as GEVulkanDeferredFBO
+    // the last render pass is still left open for the owner to end (and for
+    // GEVulkan2dRenderer to draw in when rendering to the swapchain)
+    virtual bool isSplit() const                              { return false; }
+    // ------------------------------------------------------------------------
     virtual unsigned getZeroClearCountForPass(unsigned pass) const
                                                                   { return 0; }
     // ------------------------------------------------------------------------
