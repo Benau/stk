@@ -5,7 +5,7 @@ const uint GST_COMBINED = GST_SUN | GST_POINTLIGHT;
 layout (constant_id = 0) const bool u_ibl = true;
 layout (constant_id = 1) const float u_specular_levels_minus_one = 0.0;
 layout (constant_id = 2) const bool u_deferred = false;
-layout (constant_id = 3) const bool u_has_skybox = true;
+layout (constant_id = 3) const bool u_offscreen_rtt = false;
 layout (constant_id = 4) const bool u_ssr = false;
 layout (constant_id = 5) const uint u_hiz_iterations = 0;
 layout (constant_id = 6) const uint u_shadow_size = 0;

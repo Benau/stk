@@ -4,9 +4,14 @@
 #include "ge_vulkan_fbo_texture.hpp"
 
 #include <array>
+#include <utility>
+#include <vector>
 
 namespace GE
 {
+class GEVulkanDrawCall;
+class GEVulkanCameraSceneNode;
+
 enum GEVulkanDeferredFBOType : unsigned
 {
     GVDFT_COLOR = 0,
@@ -29,7 +34,7 @@ enum GEVulkanDeferredFBOPass : unsigned
 
 class GEVulkanDeferredFBO : public GEVulkanFBOTexture
 {
-private:
+protected:
     std::array<GEVulkanAttachmentTexture*, GVDFT_COUNT> m_attachments;
 
     std::array<VkDescriptorSetLayout, GVDFP_COUNT> m_descriptor_layout;
@@ -40,12 +45,37 @@ private:
 
     const bool m_swapchain_output;
     // ------------------------------------------------------------------------
+    // True while a separate offscreen RTT (not the swapchain FBO) is being
+    // created, see setCreatingOffscreenRTT
+    static bool s_creating_offscreen_rtt;
+    // ------------------------------------------------------------------------
+    // Input attachment descriptors (single render pass with subpasses), not
+    // created when GEConfig::m_deferred_split is true
+    void initGBufferDescriptor(GEVulkanDriver* vk);
+    // ------------------------------------------------------------------------
     void initConvertColorDescriptor(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
     void initDisplaceDescriptor(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
-    void createDisplacePasses();
+    // Render passes and framebuffers of displace are put at the given indices
+    // (mask_pass < color_pass, and the passes before them already created),
+    // if the output is the swapchain there is one framebuffer per swapchain
+    // image starting from color_pass for the last one
+    void createDisplacePasses(unsigned mask_pass = GVDFP_DISPLACE_MASK,
+                              unsigned color_pass = GVDFP_DISPLACE_COLOR);
 public:
+    // ------------------------------------------------------------------------
+    // Needs to be true from before the constructor until createRTT() returns
+    // for an offscreen RTT, because it shares pipelines with the swapchain
+    // FBO and it needs alpha:
+    // 1. The HDR attachment needs an alpha channel (B10G11R11 has none), so
+    //    the area without any mesh keeps the (transparent) clear color and
+    //    deferred_convert_color.frag can output it.
+    // 2. Render passes need to be compatible with the ones of the swapchain
+    //    FBO (including subpass dependencies), see
+    //    GEVulkanDeferredFBOSplit::createRTT
+    static void setCreatingOffscreenRTT(bool b)
+                                            { s_creating_offscreen_rtt = b; }
     // ------------------------------------------------------------------------
     GEVulkanDeferredFBO(GEVulkanDriver* vk, const core::dimension2d<u32>& size,
                         bool swapchain_output);
@@ -53,6 +83,14 @@ public:
     virtual ~GEVulkanDeferredFBO();
     // ------------------------------------------------------------------------
     virtual void createRTT();
+    // ------------------------------------------------------------------------
+    // Renders all deferred passes (g-buffer, lighting, tonemap and displace if
+    // there is any) of one frame for the draw calls. Here the only render pass
+    // created by createRTT() is already begun by the caller, and the last
+    // render pass is left open (also when displace needs more of them)
+    virtual void render(VkCommandBuffer cmd,
+                        const std::vector<std::pair<GEVulkanDrawCall*,
+                        GEVulkanCameraSceneNode*> >& p);
     // ------------------------------------------------------------------------
     virtual bool isDeferredFBO() const                         { return true; }
     // ------------------------------------------------------------------------
