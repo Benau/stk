@@ -1,0 +1,68 @@
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0) uniform sampler2D u_src;
+#ifdef SHADER_STORAGE_IMAGE_EXTENDED_FORMATS
+layout(binding = 1, rgb10_a2) uniform writeonly image2D u_dst;
+#else
+layout(binding = 1, rgba8) uniform writeonly image2D u_dst;
+#endif
+
+layout(push_constant) uniform PushConstants
+{
+    // x0, y0, x1, y1 (exclusive) in pixels of u_src, which is the viewport
+    // rect of one camera: samples never read outside of it
+    ivec4 m_src_rect;
+    // Pixels of u_dst to write, the same area as m_src_rect
+    ivec4 m_dst_rect;
+    // 0 = downscale (dst is half the size of src), 1 = upscale
+    uint m_upscale;
+    // Multiplies the distance of the samples (1.0 at the reference height of
+    // the viewport), so the glow has the same width relative to the viewport
+    float m_scale;
+} pc;
+
+// pos is in pixels of u_src, bilinear sampling
+vec4 sampleSrc(vec2 pos)
+{
+    // Clamped to the center of the first / last pixel of the viewport, so
+    // bilinear filtering doesn't mix with the pixels outside of it
+    vec2 lo = vec2(pc.m_src_rect.xy) + 0.5;
+    vec2 hi = max(lo, vec2(pc.m_src_rect.zw) - 0.5);
+    return textureLod(u_src, clamp(pos, lo, hi) / vec2(textureSize(u_src, 0)),
+        0.0);
+}
+
+void main()
+{
+    ivec2 dst = pc.m_dst_rect.xy + ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(dst, pc.m_dst_rect.zw)))
+        return;
+    vec2 center = vec2(dst) + 0.5;
+    vec4 sum;
+    if (pc.m_upscale == 0u)
+    {
+        // Dual filter downscale
+        vec2 p = center * 2.0;
+        sum = sampleSrc(p) * 4.0;
+        sum += sampleSrc(p + vec2(-1.0, -1.0) * pc.m_scale);
+        sum += sampleSrc(p + vec2( 1.0,  1.0) * pc.m_scale);
+        sum += sampleSrc(p + vec2( 1.0, -1.0) * pc.m_scale);
+        sum += sampleSrc(p + vec2(-1.0,  1.0) * pc.m_scale);
+        sum /= 8.0;
+    }
+    else
+    {
+        // Dual filter upscale
+        vec2 p = center * 0.5;
+        sum  = sampleSrc(p + vec2(-1.0,  0.0) * pc.m_scale);
+        sum += sampleSrc(p + vec2(-0.5,  0.5) * pc.m_scale) * 2.0;
+        sum += sampleSrc(p + vec2( 0.0,  1.0) * pc.m_scale);
+        sum += sampleSrc(p + vec2( 0.5,  0.5) * pc.m_scale) * 2.0;
+        sum += sampleSrc(p + vec2( 1.0,  0.0) * pc.m_scale);
+        sum += sampleSrc(p + vec2( 0.5, -0.5) * pc.m_scale) * 2.0;
+        sum += sampleSrc(p + vec2( 0.0, -1.0) * pc.m_scale);
+        sum += sampleSrc(p + vec2(-0.5, -0.5) * pc.m_scale) * 2.0;
+        sum /= 12.0;
+    }
+    imageStore(u_dst, dst, sum);
+}

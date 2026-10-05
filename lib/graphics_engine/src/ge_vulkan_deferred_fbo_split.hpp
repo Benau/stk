@@ -3,8 +3,12 @@
 
 #include "ge_vulkan_deferred_fbo.hpp"
 
+#include <memory>
+
 namespace GE
 {
+class GEVulkanGlowOutline;
+
 // Same output as GEVulkanDeferredFBO, but every stage is its own traditional
 // render pass (single subpass) instead of a subpass of one, so there is no
 // input attachment at all: the g-buffer (color, normal, depth) and the hdr
@@ -13,7 +17,10 @@ namespace GE
 // refreshDeferredSplit()). The pass structure is:
 //
 //   g-buffer   : color + normal + depth
-//   lighting   : (g-buffer as textures) -> hdr, skybox
+//   [glow      : meshes with glow outline color, see GEVulkanGlowOutline, it's
+//                its own render pass (and compute dispatches for the blur)
+//                only if glow outline is enabled and any mesh needs it]
+//   lighting   : (g-buffer as textures) -> hdr, skybox, [blurred glow]
 //   tonemap    : (hdr as texture) -> output, then ghost / transparent
 //   [displace mask -> displace color, only if the FBO has displace support]
 //
@@ -36,13 +43,17 @@ private:
     // ------------------------------------------------------------------------
     void beginPass(VkCommandBuffer cmd, unsigned pass, unsigned framebuffer,
                    uint32_t clear_count, const VkClearValue* clears) const;
+
+    // Only one for all the viewports (draw calls) of this FBO, NULL if glow
+    // outline is not enabled
+    std::unique_ptr<GEVulkanGlowOutline> m_glow_outline;
 public:
     // ------------------------------------------------------------------------
     GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
                              const core::dimension2d<u32>& size,
                              bool swapchain_output);
     // ------------------------------------------------------------------------
-    virtual ~GEVulkanDeferredFBOSplit() {}
+    virtual ~GEVulkanDeferredFBOSplit();
     // ------------------------------------------------------------------------
     virtual void createRTT();
     // ------------------------------------------------------------------------
@@ -51,6 +62,15 @@ public:
                         GEVulkanCameraSceneNode*> >& p);
     // ------------------------------------------------------------------------
     virtual bool isSplit() const                               { return true; }
+    // ------------------------------------------------------------------------
+    // Decided when the FBO is created, draw calls only create the glow
+    // pipelines (GVPT_GLOW_OUTLINE) if it has
+    bool hasGlowOutline() const               { return m_glow_outline != NULL; }
+    // ------------------------------------------------------------------------
+    // GVDFP_GLOW_OUTLINE is the one of GEVulkanGlowOutline
+    virtual VkDescriptorSetLayout getDescriptorSetLayout(unsigned id) const;
+    // ------------------------------------------------------------------------
+    virtual const VkDescriptorSet* getDescriptorSet(unsigned id) const;
     // ------------------------------------------------------------------------
     // pipeline_type is a GEVulkanPipelineType, the render pass which a
     // pipeline of this type is used in

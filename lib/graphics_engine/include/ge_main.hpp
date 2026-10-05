@@ -59,6 +59,7 @@ bool m_enable_draw_call_cache;
 bool m_pbr;
 bool m_ibl;
 bool m_deferred_split;
+bool m_glow_outline;
 GEAutoDeferredType m_auto_deferred_type;
 GEScreenSpaceReflectionType m_screen_space_reflection_type;
 std::unordered_set<std::string> m_ondemand_load_texture_paths;

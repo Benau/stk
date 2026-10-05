@@ -38,6 +38,8 @@ private:
 
     irr::video::SColor m_vertex_color;
 
+    irr::video::SColor m_glow_outline_color;
+
     std::shared_ptr<bool> m_transparent;
 public:
     // ------------------------------------------------------------------------
@@ -45,6 +47,7 @@ public:
     {
         m_hue = hue;
         m_vertex_color = (irr::video::SColor)-1;
+        m_glow_outline_color = (irr::video::SColor)0;
         if (transparent)
             m_transparent = std::make_shared<bool>(true);
     }
@@ -76,6 +79,8 @@ public:
            { return hasTransparencySetting() ? *m_transparent.get() : false; }
     // ------------------------------------------------------------------------
     irr::video::SColor& getVertexColor()            { return m_vertex_color; }
+    // ------------------------------------------------------------------------
+    irr::video::SColor& getGlowOutlineColor() { return m_glow_outline_color; }
 
 };   // GERenderInfo
 

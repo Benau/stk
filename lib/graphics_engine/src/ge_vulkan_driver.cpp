@@ -626,6 +626,19 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
 
     refreshDeferredSplit();
     createSamplers();
+    try
+    {
+        // For deferred split fbo, which glow outline maybe needed
+        GEVulkanCommandLoader::init(this);
+        GEVulkanShaderManager::init(this);
+    }
+    catch (std::exception& e)
+    {
+        GEVulkanShaderManager::destroy();
+        GEVulkanCommandLoader::destroy();
+        throw std::runtime_error(std::string(
+            "GEVulkanDriver constructor failed: ") + e.what());
+    }
     createSwapChain();
     createSyncObjects();
     createRenderPass();
@@ -640,10 +653,7 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
 
     try
     {
-        GEVulkanCommandLoader::init(this);
         createCommandBuffers();
-
-        GEVulkanShaderManager::init(this);
         // For GEVulkanDynamicBuffer
         GE::setVideoDriver(this);
         createUnicolorTextures();

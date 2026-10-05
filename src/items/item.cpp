@@ -39,6 +39,10 @@
 #include <IBillboardSceneNode.h>
 #include <IMeshSceneNode.h>
 #include <ISceneManager.h>
+#ifndef SERVER_ONLY
+#include <IVideoDriver.h>
+#include <ge_render_info.hpp>
+#endif
 
 const float ICON_SIZE = 0.7f;
 const int SPARK_AMOUNT = 10;
@@ -408,6 +412,13 @@ void Item::handleNewMesh(ItemType type)
         SP::SPMeshNode* spmn = dynamic_cast<SP::SPMeshNode*>(node);
         if (spmn)
             spmn->setGlowColor(ItemManager::getGlowColor(type));
+        else if (irr_driver->getVideoDriver()->getDriverType() == video::EDT_VULKAN)
+        {
+            auto ri = std::make_shared<GE::GERenderInfo>();
+            ri->getGlowOutlineColor() = ItemManager::getGlowColor(type).toSColor();
+            for (unsigned j = 0; j < node->getMaterialCount(); j++)
+                node->getMaterial(j).setRenderInfo(ri);
+        }
     }
     Vec3 hpr;
     hpr.setHPR(getOriginalRotation());

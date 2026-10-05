@@ -81,6 +81,11 @@ enum GEVulkanPipelineType : unsigned
     GVPT_SKYBOX,
     GVPT_DISPLACE_MASK,
     GVPT_DISPLACE_COLOR,
+    // Meshes with glow outline color, drawn to the render pass of
+    // GEVulkanGlowOutline (same vertex shaders as the g-buffer)
+    GVPT_GLOW_OUTLINE,
+    // Fullscreen draw in the lighting pass which adds the blurred glow
+    GVPT_GLOW_OUTLINE_COMPOSITE,
 };
 
 struct GEMaterial;
@@ -121,6 +126,20 @@ struct DynamicSPMData
     uint32_t m_dynamic_offset;
     uint32_t m_instance_count;
     VkDescriptorSet m_descriptor_set;
+};
+
+// A batch (instances of one mesh buffer with the same glow color) of the glow
+// outline of a draw call, see GEVulkanDrawCall::renderGlowOutline
+struct GlowOutlineDrawData
+{
+    GESPMBuffer* m_mb;
+    // Pipeline name, with the skinning suffix if needed
+    std::string m_shader;
+    // Dynamic offset of the first object data in m_dspm_data (aligned)
+    uint32_t m_dynamic_offset;
+    uint32_t m_instance_count;
+    // 0xRRGGBB (linear)
+    uint32_t m_color;
 };
 
 class GEVulkanHiZDepth;
@@ -171,6 +190,20 @@ protected:
     std::map<std::string,
         std::map<GESPMBuffer*, std::vector<irr::scene::ISceneNode*> > >
         m_dynamic_spm_buffers;
+
+    // Meshes with glow outline color, by color, shader (pipeline name) and
+    // mesh buffer (so it's sorted by color first, which is pushed as a
+    // constant, and each key is one draw). Filled by addNode if
+    // m_glow_outline, and written to m_dspm_data by generateDynamicSPM which
+    // makes m_glow_outline_draws, the list which GEVulkanGlowOutline renders
+    using GlowOutlineKey = std::pair<uint64_t, GESPMBuffer*>;
+    std::map<GlowOutlineKey, std::vector<irr::scene::ISceneNode*
+         > > m_glow_outline_nodes;
+
+    std::vector<GlowOutlineDrawData> m_glow_outline_draws;
+
+    // True if the current FBO has glow outline, set by prepare()
+    bool m_glow_outline;
 
     GECullingTool* m_culling_tool;
 
@@ -262,6 +295,10 @@ protected:
         return textures;
     }
     // ------------------------------------------------------------------------
+    void addGlowOutlineNode(irr::scene::ISceneNode* node, GESPMBuffer* buffer,
+                            irr::video::SMaterial& m,
+                            irr::video::E_MATERIAL_TYPE mt);
+    // ------------------------------------------------------------------------
     void bindBaseVertex(GEVulkanDriver* vk, VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
     void bindSingleMaterial(VkCommandBuffer cmd,
@@ -318,6 +355,10 @@ public:
                          const irr::core::rect<irr::s32>& viewp,
                          VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
+    // The viewport which prepareViewport sets, in pixels of the render target
+    VkViewport getRenderViewport(GEVulkanDriver* vk,
+                                 const irr::core::rect<irr::s32>& viewp) const;
+    // ------------------------------------------------------------------------
     void renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
                         GEVulkanPipelineType pt, bool& rebind_base_vertex);
     // ------------------------------------------------------------------------
@@ -329,6 +370,19 @@ public:
     // ------------------------------------------------------------------------
     void renderDisplaceColor(GEVulkanDriver* vk, VkCommandBuffer cmd,
                              VkBool32 has_displace);
+    // ------------------------------------------------------------------------
+    // True if there is any mesh with glow outline to draw (valid after
+    // generate()), each camera of splitscreen has its own list
+    bool hasGlowOutline() const         { return !m_glow_outline_draws.empty(); }
+    // ------------------------------------------------------------------------
+    // Draws the glow list in the render pass of GEVulkanGlowOutline (viewport
+    // already set), one vkCmdDrawIndexed per batch
+    void renderGlowOutline(GEVulkanDriver* vk, VkCommandBuffer cmd,
+                           bool& rebind_base_vertex);
+    // ------------------------------------------------------------------------
+    // Adds the blurred glow (without the area of meshes) to hdr, in the
+    // lighting pass
+    void renderGlowOutlineComposite(GEVulkanDriver* vk, VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
     unsigned getPolyCount() const
     {
@@ -347,6 +401,8 @@ public:
         m_rendered_dspm.clear();
         m_materials_data.clear();
         m_dynamic_spm_buffers.clear();
+        m_glow_outline_nodes.clear();
+        m_glow_outline_draws.clear();
         m_skybox_renderer = NULL;
     }
     // ------------------------------------------------------------------------

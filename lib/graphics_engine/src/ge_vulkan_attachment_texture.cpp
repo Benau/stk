@@ -28,7 +28,7 @@ GEVulkanAttachmentTexture::GEVulkanAttachmentTexture(GEVulkanDriver* vk,
     if (!createImage(iu))
         throw std::runtime_error("createImage failed for attachment texture");
 
-    if (!createImageView(ia))
+    if (!createImageView(ia, false/*create_srgb_view*/))
         throw std::runtime_error("createImageView failed for attachment texture");
 }   // GEVulkanAttachmentTexture
 

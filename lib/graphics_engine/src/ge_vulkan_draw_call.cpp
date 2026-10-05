@@ -42,6 +42,36 @@
 
 namespace GE
 {
+namespace
+{
+// ----------------------------------------------------------------------------
+uint64_t makeGlowOutlineKey(uint32_t color, irr::video::E_MATERIAL_TYPE mt,
+                            bool skinning)
+{
+    return uint64_t(color & 0x00ffffffu) |
+           (uint64_t(skinning) << 24) |
+           (uint64_t(mt) << 25);
+}   // makeGlowOutlineKey
+
+// ----------------------------------------------------------------------------
+uint32_t getGlowOutlineColor(uint64_t key)
+{
+    return uint32_t(key & 0x00ffffffu);
+}   // getGlowOutlineColor
+
+// ----------------------------------------------------------------------------
+irr::video::E_MATERIAL_TYPE getGlowOutlineMaterialType(uint64_t key)
+{
+    return irr::video::E_MATERIAL_TYPE(key >> 25);
+}   // getGlowOutlineMaterialType
+
+// ----------------------------------------------------------------------------
+bool getGlowOutlineSkinning(uint64_t key)
+{
+    return (key & (uint64_t(1) << 24)) != 0;
+}   // getGlowOutlineSkinning
+}   // anonymous namespace
+
 // ============================================================================
 static void destroyPipeline(VkPipeline* p)
 {
@@ -240,6 +270,7 @@ GEVulkanDrawCall::GEVulkanDrawCall()
     m_texture_descriptor = vk->getMeshTextureDescriptor();
     m_hiz_depth = NULL;
     m_shadow_fbo = NULL;
+    m_glow_outline = false;
     for (unsigned i = 0; i < (unsigned)video::EMT_MATERIAL_COUNT; i++)
         m_fallback_materials[i] = (video::E_MATERIAL_TYPE)i;
 }   // GEVulkanDrawCall
@@ -327,12 +358,36 @@ void GEVulkanDrawCall::addNode(irr::scene::ISceneNode* node)
             m_dynamic_spm_buffers[shader][buffer] = {node};
             continue;
         }
+        if (m_glow_outline)
+            addGlowOutlineNode(node, buffer, m, mt);
         std::pair<GESPMBuffer*, int> k = std::make_pair(buffer,
             node->getTextureDescriptorID(i));
         m_visible_nodes[k][(uint32_t)mt].emplace_back(node, m);
         m_mb_map[buffer] = mesh;
     }
 }   // addNode
+
+// ----------------------------------------------------------------------------
+void GEVulkanDrawCall::addGlowOutlineNode(irr::scene::ISceneNode* node,
+                                          GESPMBuffer* buffer,
+                                          irr::video::SMaterial& m,
+                                          irr::video::E_MATERIAL_TYPE mt)
+{
+    auto& ri = m.getRenderInfo();
+    if (!ri || ri->getGlowOutlineColor().color == 0)
+        return;
+    // Same pipeline name as generate()
+    auto* ge_material = GEMaterialManager::getMaterial(mt);
+    if (ge_material->isTransparent())
+        return;
+    const uint32_t color =
+        srgb255ToLinearFromSColor(ri->getGlowOutlineColor()).color;
+    const bool skinning =
+        buffer->hasSkinning() &&
+        node->getType() == irr::scene::ESNT_ANIMATED_MESH;
+    const uint64_t key = makeGlowOutlineKey(color, mt, skinning);
+    m_glow_outline_nodes[GlowOutlineKey(key, buffer)].push_back(node);
+}   // addGlowOutlineNode
 
 // ----------------------------------------------------------------------------
 void GEVulkanDrawCall::addBillboardNode(irr::scene::ISceneNode* node,
@@ -747,6 +802,10 @@ start:
 void GEVulkanDrawCall::prepare(GEVulkanCameraSceneNode* cam)
 {
     reset();
+    // Only the split deferred FBO has glow outline
+    GEVulkanFBOTexture* rtt = getVKDriver()->getRTTTexture();
+    m_glow_outline = !isShadow() && rtt && rtt->isSplit() &&
+        static_cast<GEVulkanDeferredFBOSplit*>(rtt)->hasGlowOutline();
     if (getGEConfig()->m_pbr && m_light_handler == NULL)
     {
         GEVulkanDriver* vk = getVKDriver();
@@ -1014,6 +1073,20 @@ void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
     settings.m_pipeline_type = GVPT_DEFERRED_CONVERT_COLOR;
     settings.m_custom_pl = m_deferred_layouts[GVDFP_CONVERT_COLOR];
     createPipeline(vk, settings, dp_cache);
+
+    // Additive fullscreen draw in the lighting pass, the pipelines of the
+    // meshes are created together with the opaque materials in createPipeline
+    if (m_deferred_layouts[GVDFP_GLOW_OUTLINE] != VK_NULL_HANDLE)
+    {
+        def_mat.m_additive = true;
+        def_mat.m_fragment_shader = "glow_outline_composite.frag";
+        settings.loadMaterial(def_mat);
+        settings.m_shader_name = "glow_outline_composite";
+        settings.m_pipeline_type = GVPT_GLOW_OUTLINE_COMPOSITE;
+        settings.m_custom_pl = m_deferred_layouts[GVDFP_GLOW_OUTLINE];
+        createPipeline(vk, settings, dp_cache);
+        def_mat.m_additive = false;
+    }
 
     if (has_displace)
     {
@@ -1398,6 +1471,74 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         }
         insert_pipeline(graphics_pipeline, settings, depth_only, true);
     }
+    // The pipelines of meshes with glow outline: the vertex shader is the one
+    // of the g-buffer (same depth, shared by all materials using it) with
+    // glow_outline.frag. The depth is only tested (equal), and it uses the
+    // default pipeline layout because there is no texture
+    if (!isShadow() && settings.m_pipeline_type == GVPT_SOLID &&
+        !m_deferred_layouts.empty() &&
+        m_deferred_layouts[GVDFP_GLOW_OUTLINE] != VK_NULL_HANDLE)
+    {
+        VkPipelineDepthStencilStateCreateInfo glow_depth_stencil = depth_stencil;
+        glow_depth_stencil.depthTestEnable = VK_TRUE;
+        glow_depth_stencil.depthWriteEnable = VK_FALSE;
+        glow_depth_stencil.depthCompareOp = VK_COMPARE_OP_EQUAL;
+
+        VkPipelineColorBlendAttachmentState glow_blend_attachment = {};
+        glow_blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
+            VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+            VK_COLOR_COMPONENT_A_BIT;
+        VkPipelineColorBlendStateCreateInfo glow_color_blending =
+            color_blending;
+        glow_color_blending.attachmentCount = 1;
+        glow_color_blending.pAttachments = &glow_blend_attachment;
+
+        std::array<VkPipelineShaderStageCreateInfo, 2> glow_stages =
+            shader_stages;
+        glow_stages[1].module =
+            GEVulkanShaderManager::getShader("glow_outline.frag");
+        glow_stages[1].pSpecializationInfo = NULL;
+
+        VkGraphicsPipelineCreateInfo glow_info = pipeline_info;
+        glow_info.pStages = glow_stages.data();
+        glow_info.pDepthStencilState = &glow_depth_stencil;
+        glow_info.pColorBlendState = &glow_color_blending;
+        glow_info.layout = m_pipeline_layout;
+        glow_info.renderPass = getRenderPassForPipelineCreation(vk,
+            GVPT_GLOW_OUTLINE);
+        glow_info.subpass = 0;
+
+        for (unsigned i = 0; i < 2; i++)
+        {
+            const bool skinning = i == 1;
+            const std::string& vs = skinning ?
+                settings.m_material->m_skinning_vertex_shader :
+                settings.m_material->m_vertex_shader;
+            if (vs.empty())
+                continue;
+            std::shared_ptr<VkPipeline> sp;
+            auto it = dp_cache.find("glow_outline:" + vs);
+            if (it != dp_cache.end())
+                sp = it->second;
+            else
+            {
+                glow_stages[0].module = GEVulkanShaderManager::getShader(vs);
+                VkPipeline glow_pipeline;
+                if (vkCreateGraphicsPipelines(vk->getDevice(), VK_NULL_HANDLE,
+                    1, &glow_info, NULL, &glow_pipeline) != VK_SUCCESS)
+                {
+                    throw std::runtime_error("vkCreateGraphicsPipelines "
+                        "failed for glow outline of " + shader_name);
+                }
+                sp = std::shared_ptr<VkPipeline>(new VkPipeline(glow_pipeline),
+                    destroyPipeline);
+                dp_cache["glow_outline:" + vs] = sp;
+            }
+            m_graphics_pipelines[skinning ? shader_name + SKINNING_PIPELINE :
+                shader_name].m_pipelines[GVPT_GLOW_OUTLINE] = sp;
+        }
+    }
+
     if (depth_only_fs.empty() || isShadow())
         return;
 
@@ -1737,9 +1878,8 @@ void GEVulkanDrawCall::bindBaseVertex(GEVulkanDriver* vk, VkCommandBuffer cmd)
 }   // bindBaseVertex
 
 // ----------------------------------------------------------------------------
-void GEVulkanDrawCall::prepareViewport(GEVulkanDriver* vk,
-                                       const irr::core::rect<irr::s32>& viewp,
-                                       VkCommandBuffer cmd)
+VkViewport GEVulkanDrawCall::getRenderViewport(GEVulkanDriver* vk,
+                                  const irr::core::rect<irr::s32>& viewp) const
 {
     VkViewport vp;
     float scale = getGEConfig()->m_render_scale;
@@ -1752,6 +1892,15 @@ void GEVulkanDrawCall::prepareViewport(GEVulkanDriver* vk,
     vp.minDepth = 0;
     vp.maxDepth = 1.0f;
     vk->getRotatedViewport(&vp, true/*handle_rtt*/);
+    return vp;
+}   // getRenderViewport
+
+// ----------------------------------------------------------------------------
+void GEVulkanDrawCall::prepareViewport(GEVulkanDriver* vk,
+                                       const irr::core::rect<irr::s32>& viewp,
+                                       VkCommandBuffer cmd)
+{
+    VkViewport vp = getRenderViewport(vk, viewp);
     vkCmdSetViewport(cmd, 0, 1, &vp);
 
     VkRect2D scissor;
@@ -2224,6 +2373,83 @@ void GEVulkanDrawCall::renderDeferredConvertColor(GEVulkanDriver* vk,
 }   // renderDeferredConvertColor
 
 // ----------------------------------------------------------------------------
+void GEVulkanDrawCall::renderGlowOutline(GEVulkanDriver* vk,
+                                         VkCommandBuffer cmd,
+                                         bool& rebind_base_vertex)
+{
+    if (m_data_layout == VK_NULL_HANDLE || m_glow_outline_draws.empty())
+        return;
+
+    // The object data of a batch is at a (aligned) dynamic offset of the
+    // dynamic SPM buffer, so every batch is a single vkCmdDrawIndexed with
+    // firstInstance = 0. Without base vertex support the vertex and index
+    // buffers of the mesh are bound for every draw, same as drawCommands
+    const int current_buffer_idx = vk->getCurrentBufferIdx();
+    const bool use_base_vertex = GEVulkanFeatures::supportsBaseVertexRendering();
+    std::vector<uint32_t> dynamic_offsets = getDefaultDynamicOffsets();
+    VkPipeline prev_pipeline = VK_NULL_HANDLE;
+    bool has_color = false;
+    uint32_t cur_color = 0;
+    for (const GlowOutlineDrawData& d : m_glow_outline_draws)
+    {
+        if (!bindPipeline(cmd, d.m_shader, &prev_pipeline, GVPT_GLOW_OUTLINE))
+            continue;
+        if (!has_color || cur_color != d.m_color)
+        {
+            has_color = true;
+            cur_color = d.m_color;
+            // After the 16 bytes which materials use (see glow_outline.frag),
+            // the draws are sorted by color so this is once per color
+            const float color[3] =
+            {
+                ((d.m_color >> 16) & 0xff) / 255.0f,
+                ((d.m_color >> 8) & 0xff) / 255.0f,
+                (d.m_color & 0xff) / 255.0f
+            };
+            vkCmdPushConstants(cmd, m_pipeline_layout,
+                VK_SHADER_STAGE_ALL_GRAPHICS, 16, sizeof(color), color);
+        }
+        dynamic_offsets[1] = d.m_dynamic_offset;
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            m_pipeline_layout, 1, 1,
+            &m_dspm_descriptor_sets[current_buffer_idx],
+            dynamic_offsets.size(), dynamic_offsets.data());
+        if (use_base_vertex)
+        {
+            if (rebind_base_vertex)
+            {
+                bindBaseVertex(vk, cmd);
+                rebind_base_vertex = false;
+            }
+        }
+        else
+        {
+            d.m_mb->bindVertexIndexBuffer(cmd);
+            rebind_base_vertex = true;
+        }
+        vkCmdDrawIndexed(cmd, d.m_mb->getIndexCount(), d.m_instance_count,
+            use_base_vertex ? d.m_mb->getIBOOffset() : 0,
+            use_base_vertex ? d.m_mb->getVBOOffset() : 0, 0);
+    }
+}   // renderGlowOutline
+
+// ----------------------------------------------------------------------------
+void GEVulkanDrawCall::renderGlowOutlineComposite(GEVulkanDriver* vk,
+                                                  VkCommandBuffer cmd)
+{
+    if (m_deferred_layouts.empty() || m_glow_outline_draws.empty() ||
+        m_deferred_layouts[GVDFP_GLOW_OUTLINE] == VK_NULL_HANDLE)
+        return;
+    auto& pl = m_graphics_pipelines.at("glow_outline_composite").m_pipelines;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        *pl[GVPT_GLOW_OUTLINE_COMPOSITE]);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_deferred_layouts[GVDFP_GLOW_OUTLINE], 0, 1,
+        vk->getRTTTexture()->getDescriptorSet(GVDFP_GLOW_OUTLINE), 0, NULL);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+}   // renderGlowOutlineComposite
+
+// ----------------------------------------------------------------------------
 void GEVulkanDrawCall::renderDisplaceColor(GEVulkanDriver* vk,
                                            VkCommandBuffer cmd,
                                            VkBool32 has_displace)
@@ -2518,6 +2744,14 @@ size_t GEVulkanDrawCall::getDynamicSPMSize() const
                 getPadding(count * sizeof(ObjectData), sbo_alignment);
         }
     }
+    // Glow outline, one object data for every node, the batches of it are
+    // padded to the alignment like above
+    for (auto& p : m_glow_outline_nodes)
+    {
+        size_t count = p.second.size();
+        size += count * sizeof(ObjectData) +
+            getPadding(count * sizeof(ObjectData), sbo_alignment);
+    }
     // Make sure dynamic offsets won't become invalid
     return size * 2;
 }   // getDynamicSPMSize
@@ -2617,6 +2851,40 @@ void GEVulkanDrawCall::generateDynamicSPM(GEVulkanDriver* vk)
                 dynamic_spm_offset, instance_count,
                 m_dspm_descriptor_sets[vk->getCurrentBufferIdx()] };
         }
+    }
+    // Glow outline: the same object data as the normal rendering but only the
+    // nodes of the batch, so the draw uses firstInstance = 0 and the dynamic
+    // offset of the batch (aligned) for both with and without base vertex
+    // support. The material id is not used (glow_outline.frag has no texture)
+    irr::video::SMaterial dummy_material;
+    for (auto& p : m_glow_outline_nodes)
+    {
+        const uint32_t dynamic_offset = written_size;
+        for (irr::scene::ISceneNode* node : p.second)
+        {
+            int skinning_offset = 0;
+            if (node->getType() == irr::scene::ESNT_ANIMATED_MESH)
+            {
+                skinning_offset = static_cast<GEVulkanAnimatedMeshSceneNode*>(
+                    node)->getSkinningOffset();
+            }
+            ObjectData* data = (ObjectData*)mapped_addr;
+            data->init(node, 0, skinning_offset, dummy_material);
+            written_size += sizeof(ObjectData);
+            mapped_addr += sizeof(ObjectData);
+        }
+        size_t padding = getPadding(written_size, sbo_alignment);
+        written_size += padding;
+        mapped_addr += padding;
+        const uint64_t key = p.first.first;
+        const uint32_t color = getGlowOutlineColor(key);
+        const irr::video::E_MATERIAL_TYPE mt = getGlowOutlineMaterialType(key);
+        const bool skinning = getGlowOutlineSkinning(key);
+        std::string shader = GEMaterialManager::getShader(mt);
+        if (skinning)
+            shader += SKINNING_PIPELINE;
+        m_glow_outline_draws.push_back({ p.first.second, shader,
+            dynamic_offset, (uint32_t)p.second.size(), color });
     }
     m_dynamic_spm_padded_size = written_size;
     assert(written_size == dspm_size / 2);
