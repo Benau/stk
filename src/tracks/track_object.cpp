@@ -40,6 +40,7 @@
 
 #include <IAnimatedMeshSceneNode.h>
 #include <ISceneManager.h>
+#include <IVideoDriver.h>
 #include <ge_render_info.hpp>
 
 /** A track object: any additional object on the track. This object implements
@@ -336,6 +337,19 @@ void TrackObject::init(const XMLNode &xml_node, scene::ISceneNode* parent,
             if (spmn)
             {
                 spmn->setGlowColor(video::SColorf(r, g, b));
+            }
+            else if (irr_driver->getVideoDriver()->getDriverType() == video::EDT_VULKAN)
+            {
+                auto ri = std::make_shared<GE::GERenderInfo>();
+                ri->getGlowOutlineColor() = glow;
+                for (unsigned j = 0; j < glownode->getMaterialCount(); j++)
+                {
+                    video::SMaterial& m = glownode->getMaterial(j);
+                    if (m.getRenderInfo())
+                        m.getRenderInfo()->getGlowOutlineColor() = glow;
+                    else
+                        m.setRenderInfo(ri);
+                }
             }
         }
 

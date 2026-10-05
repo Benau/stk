@@ -26,6 +26,7 @@ GEConfig g_config =
     false,
     true,
     false,
+    false,
     GADT_DISABLED,
     GSSRT_DISABLED,
     {},
@@ -265,10 +266,8 @@ void refreshDeferredSplit()
     g_config.m_deferred_split = false;
     if (!g_config.m_pbr)
         return;
-    // TODO: return true depending on settings / device. Everything that
-    // depends on it (FBO class, attachment usages, SPLIT shader define) is
-    // rebuilt by the GEVulkanDriver constructor and GEVulkanDriver::
-    // updateDriver after this is called
+    if (g_config.m_glow_outline)
+        g_config.m_deferred_split = true;
 }
 
 }
