@@ -6,6 +6,7 @@
 #include "ge_vulkan_draw_call.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_features.hpp"
+#include "ge_vulkan_glow_outline.hpp"
 #include "ge_vulkan_hiz_depth.hpp"
 
 #include <array>
@@ -206,7 +207,39 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
     assert(getGEConfig()->m_deferred_split);
     initSplitGBufferDescriptor(vk);
     initSplitConvertColorDescriptor(vk);
+    if (getGEConfig()->m_glow_outline &&
+        GEVulkanFeatures::supportsComputeInMainQueue())
+    {
+        m_glow_outline.reset(new GEVulkanGlowOutline(vk, getSize(),
+            m_depth_texture));
+    }
 }   // GEVulkanDeferredFBOSplit
+
+// ----------------------------------------------------------------------------
+GEVulkanDeferredFBOSplit::~GEVulkanDeferredFBOSplit()
+{
+}   // ~GEVulkanDeferredFBOSplit
+
+// ----------------------------------------------------------------------------
+VkDescriptorSetLayout GEVulkanDeferredFBOSplit::getDescriptorSetLayout(
+                                                           unsigned id) const
+{
+    if (id == GVDFP_GLOW_OUTLINE)
+    {
+        return m_glow_outline ? m_glow_outline->getDescriptorSetLayout() :
+            VK_NULL_HANDLE;
+    }
+    return GEVulkanDeferredFBO::getDescriptorSetLayout(id);
+}   // getDescriptorSetLayout
+
+// ----------------------------------------------------------------------------
+const VkDescriptorSet* GEVulkanDeferredFBOSplit::getDescriptorSet(
+                                                           unsigned id) const
+{
+    if (id == GVDFP_GLOW_OUTLINE)
+        return m_glow_outline ? m_glow_outline->getDescriptorSet() : NULL;
+    return GEVulkanDeferredFBO::getDescriptorSet(id);
+}   // getDescriptorSet
 
 // ----------------------------------------------------------------------------
 void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
@@ -521,7 +554,12 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         vkCmdEndRenderPass(cmd);
     }
 
-    // 2. lighting, the background is the clear color of hdr
+    // 2. glow outline of the meshes (a render pass with the depth of the
+    // g-buffer and the blur of it), all viewports at once
+    const bool has_glow_outline = m_glow_outline &&
+        m_glow_outline->render(cmd, p);
+
+    // 3. lighting, the background is the clear color of hdr
     {
         video::SColorf cf(m_vk->getSeparateRTTTexture() == this ?
             m_vk->getRTTClearColor() : m_vk->getClearColor());
@@ -534,11 +572,14 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
                 q.first->prepareViewport(m_vk, q.second->getViewPort(), cmd);
             q.first->renderDeferredLighting(m_vk, cmd);
             q.first->renderSkyBox(m_vk, cmd);
+            // Above everything which is lit, but not over the meshes
+            if (has_glow_outline)
+                q.first->renderGlowOutlineComposite(m_vk, cmd);
         }
         vkCmdEndRenderPass(cmd);
     }
 
-    // 3. tonemap, then ghost and transparent materials
+    // 4. tonemap, then ghost and transparent materials
     {
         VkClearValue clear = {};
         beginPass(cmd, GVDSP_TONEMAP,
@@ -564,7 +605,7 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         return;
     vkCmdEndRenderPass(cmd);
 
-    // 4. displace, the mask is skipped if no material uses it, but the color
+    // 5. displace, the mask is skipped if no material uses it, but the color
     // pass is always rendered (a copy of the tonemap output then)
     bool has_displace = false;
     for (auto& q : p)
@@ -626,8 +667,12 @@ VkRenderPass GEVulkanDeferredFBOSplit::getRenderPassForPipeline(
 {
     switch (pipeline_type)
     {
+    case GVPT_GLOW_OUTLINE:
+        return m_glow_outline ? m_glow_outline->getRenderPass() :
+            VK_NULL_HANDLE;
     case GVPT_DEFERRED_LIGHTING:
     case GVPT_SKYBOX:
+    case GVPT_GLOW_OUTLINE_COMPOSITE:
         return getRTTRenderPass(GVDSP_LIGHTING);
     case GVPT_DEFERRED_CONVERT_COLOR:
     case GVPT_GHOST_DEPTH:
