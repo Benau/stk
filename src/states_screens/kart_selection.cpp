@@ -289,9 +289,6 @@ void KartSelectionScreen::init()
     tabs->select(UserConfigParams::m_last_used_kart_group,
                  PLAYER_ID_GAME_MASTER);
 
-    Widget* placeholder = getWidget("playerskarts");
-    assert(placeholder != NULL);
-
     m_game_master_confirmed = false;
 
     tabs->setActive(true);
@@ -1146,10 +1143,10 @@ void KartSelectionScreen::onFocusChanged(GUIEngine::Widget* previous,
     {
         if (m_kart_widgets[i].getPlayerID() == playerID)
         {
-            if (!playerID == PLAYER_ID_GAME_MASTER
+            if (playerID != PLAYER_ID_GAME_MASTER
                 && GUIEngine::isFocusedForPlayer(kart_class, playerID))
             {
-                if (previous->getType() == WTYPE_RIBBON)
+                if (previous->getType() == WTYPE_RIBBON && !m_kart_widgets[i].isReady())
                     m_kart_widgets[i].getPlayerNameSpinner()->setFocusForPlayer(playerID);
                 else
                     GUIEngine::EventHandler::get()->sendNavigationEvent(NAV_DOWN, playerID);
@@ -1162,7 +1159,8 @@ void KartSelectionScreen::onFocusChanged(GUIEngine::Widget* previous,
                     (previous->getType() != WTYPE_SPINNER || previous == kart_class))
                     || (previous == back && focus == kart_class))
                 {
-                    m_kart_widgets[i].getPlayerNameSpinner()->setFocusForPlayer(playerID);
+                    if (!m_kart_widgets[i].isReady())
+                        m_kart_widgets[i].getPlayerNameSpinner()->setFocusForPlayer(playerID);
                 }
             }
             break;
