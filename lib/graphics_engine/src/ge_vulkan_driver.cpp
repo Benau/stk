@@ -546,6 +546,7 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
     m_pre_rotation_matrix = core::matrix4(core::matrix4::EM4CONST_IDENTITY);
 
     m_disable_wait_idle = false;
+    m_fog_enabled = false;
     g_schedule_pausing_rendering.store(false);
     g_paused_rendering.store(false);
     g_device_created.store(true);
@@ -631,11 +632,18 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
         // For deferred split fbo, which glow outline maybe needed
         GEVulkanCommandLoader::init(this);
         GEVulkanShaderManager::init(this);
+        // For createUnicolorTextures
+        GE::setVideoDriver(this);
+        createUnicolorTextures();
     }
     catch (std::exception& e)
     {
         GEVulkanShaderManager::destroy();
         GEVulkanCommandLoader::destroy();
+        if (m_white_texture)
+            m_white_texture->drop();
+        if (m_transparent_texture)
+            m_transparent_texture->drop();
         throw std::runtime_error(std::string(
             "GEVulkanDriver constructor failed: ") + e.what());
     }
@@ -654,9 +662,6 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
     try
     {
         createCommandBuffers();
-        // For GEVulkanDynamicBuffer
-        GE::setVideoDriver(this);
-        createUnicolorTextures();
         GEVulkan2dRenderer::init(this);
         m_skybox_renderer = new GEVulkanSkyBoxRenderer();
         m_mesh_texture_descriptor = new GEVulkanTextureDescriptor(
@@ -2912,8 +2917,10 @@ void GEVulkanDriver::insertBufferBarrier(VkCommandBuffer cmd,
 {
     // https://github.com/google/filament/pull/3814
     // Need both vertex and fragment bit
+    // The compute shader of light scattering reads the camera and light data
     VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
     if (!GEVulkanDynamicBuffer::supportsHostTransfer())
     {
         VkMemoryBarrier barrier = {};

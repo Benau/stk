@@ -218,9 +218,25 @@ namespace GE
         //! Enables or disables a texture creation flag.
         virtual void setTextureCreationFlag(E_TEXTURE_CREATION_FLAG flag, bool enabled) {}
 
-        //! Sets the fog mode.
+        //! Sets the fog mode, which also enables the fog. GE only uses the
+        //! color, start (the density of the exponential fog of the deferred
+        //! lighting and light scattering is derived from it, same as the
+        //! OpenGL renderer of STK), end (transparent materials) and density,
+        //! which is the maximum amount of fog (transparent materials) here as
+        //! the fog type is always linear. It's read every frame so it can be
+        //! changed at any time, see GEVulkanLightHandler::prepare
         virtual void setFog(SColor color, E_FOG_TYPE fogType, f32 start,
-            f32 end, f32 density, bool pixelFog, bool rangeFog) {}
+            f32 end, f32 density, bool pixelFog, bool rangeFog)
+        {
+            CNullDriver::setFog(color, fogType, start, end, density, pixelFog,
+                rangeFog);
+            m_fog_enabled = true;
+        }
+
+        //! Fog is disabled by default and until setFog is called
+        void setFogEnabled(bool val)                   { m_fog_enabled = val; }
+
+        bool isFogEnabled() const                     { return m_fog_enabled; }
 
         //! Only used by the internal engine. Used to notify the driver that
         //! the window was resized.
@@ -520,6 +536,8 @@ namespace GE
         video::ITexture* m_transparent_texture;
 
         bool m_disable_wait_idle;
+
+        bool m_fog_enabled;
 
         IrrlichtDevice* m_irrlicht_device;
         GEVulkanAttachmentTexture* m_depth_texture;

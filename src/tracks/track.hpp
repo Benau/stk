@@ -468,6 +468,7 @@ public:
     void               createPhysicsModel(unsigned int main_track_count,
                                           bool for_height_map);
     void               updateGraphics(float dt);
+    void               updateDriverFog();
     void               update(int ticks);
     void               reset();
     void               itemCommand(const XMLNode *node);

@@ -11,6 +11,9 @@ layout (constant_id = 5) const uint u_hiz_iterations = 0;
 layout (constant_id = 6) const uint u_shadow_size = 0;
 layout (constant_id = 7) const uint u_shadow_type = 0;
 layout (constant_id = 8) const uint u_point_shadow_limit = 0;
+// Of the split deferred FBO (see lighting_composite.frag)
+layout (constant_id = 9) const bool u_glow_outline = false;
+layout (constant_id = 10) const bool u_light_scatter = false;
 
 vec3 convertColor(vec3 input_color)
 {
