@@ -6,6 +6,7 @@
 #include "rect.h"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace GE
@@ -38,6 +39,8 @@ private:
 
     irr::core::recti m_hiz_size;
 
+    std::weak_ptr<bool> m_dfbo_observer;
+
     // ------------------------------------------------------------------------
     void destroy();
     // ------------------------------------------------------------------------
@@ -55,7 +58,7 @@ public:
     void generate(VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
     const VkDescriptorSet* getRenderingDescriptorSet() const
-                                        { return &m_rendering_descriptor_set; }
+     { return m_dfbo_observer.expired() ? NULL : &m_rendering_descriptor_set; }
 };
 
 }

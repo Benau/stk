@@ -154,7 +154,7 @@ irr::scene::IMeshSceneNode* GEVulkanSceneManager::addMeshSceneNode(
 }   // addMeshSceneNode
 
 // ----------------------------------------------------------------------------
-void GEVulkanSceneManager::drawAllInternal()
+bool GEVulkanSceneManager::drawAllInternal(GEVulkanDriver* vk)
 {
     static_cast<GEVulkanMeshCache*>(getMeshCache())->updateCache();
     GEVulkanCameraSceneNode* cam = NULL;
@@ -164,12 +164,15 @@ void GEVulkanSceneManager::drawAllInternal()
             GEVulkanCameraSceneNode*>(getActiveCamera());
     }
     OnAnimate(os::Timer::getTime());
+    // Mobile STK will destroy swapchain when the main thread is paused
+    if (vk->getSwapChainImageViews().empty())
+        return false;
     if (cam)
     {
         cam->render();
         auto it = m_draw_calls.find(cam);
         if (it == m_draw_calls.end())
-            return;
+            return false;
 
         std::unique_ptr<GEVulkanDrawCall>& dc = it->second;
         dc->prepare(cam);
@@ -181,13 +184,15 @@ void GEVulkanSceneManager::drawAllInternal()
         if (sfbo)
             sfbo->generate();
     }
+    return true;
 }   // drawAllInternal
 
 // ----------------------------------------------------------------------------
 void GEVulkanSceneManager::drawAll(irr::u32 flags)
 {
-    drawAllInternal();
     GEVulkanDriver* vk = static_cast<GEVulkanDriver*>(getVideoDriver());
+    if (!drawAllInternal(vk))
+        return;
     GEVulkanFBOTexture* rtt = vk->getSeparateRTTTexture();
     if (!rtt)
         return;

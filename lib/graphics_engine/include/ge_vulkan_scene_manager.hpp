@@ -9,6 +9,7 @@ namespace GE
 {
 class GEVulkanCameraSceneNode;
 class GEVulkanDrawCall;
+class GEVulkanDriver;
 enum GEAutoDeferredType : unsigned;
 
 class GEVulkanSceneManager : public irr::scene::CSceneManager
@@ -19,7 +20,7 @@ private:
     std::map<GEVulkanCameraSceneNode*, std::unique_ptr<GEVulkanDrawCall> > m_draw_calls;
 
     // ------------------------------------------------------------------------
-    void drawAllInternal();
+    bool drawAllInternal(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
     void resetDetectDeferred()
     {
