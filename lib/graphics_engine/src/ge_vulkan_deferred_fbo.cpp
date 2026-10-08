@@ -21,7 +21,7 @@ GEVulkanDeferredFBO::GEVulkanDeferredFBO(GEVulkanDriver* vk,
                                          const core::dimension2d<u32>& size,
                                          bool swapchain_output)
                    : GEVulkanFBOTexture(vk, size,
-                     /*lazy_depth*/!(getGEConfig()->m_deferred_split ||
+                     /*lazy_depth*/!(getGEConfig()->m_deferred_split != 0 ||
                      getGEConfig()->m_auto_deferred_type == GADT_DISPLACE)),
                      m_swapchain_output(swapchain_output)
 {
@@ -33,7 +33,7 @@ GEVulkanDeferredFBO::GEVulkanDeferredFBO(GEVulkanDriver* vk,
     // (transient, no memory is needed on a tiled GPU), with split they are
     // written in one render pass and sampled by another one, so they are
     // regular textures (sampled and transient can't be combined)
-    const bool split = getGEConfig()->m_deferred_split;
+    const bool split = getGEConfig()->m_deferred_split != 0;
     const VkImageUsageFlags attachment_usage = split ?
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT :
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |

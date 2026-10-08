@@ -58,7 +58,7 @@ bool m_fullscreen_desktop;
 bool m_enable_draw_call_cache;
 bool m_pbr;
 bool m_ibl;
-bool m_deferred_split;
+unsigned m_deferred_split;
 bool m_glow_outline;
 // Light scattering of point lights in fog (needs the split deferred FBO and
 // compute in the main queue, see GEVulkanLightScatter)
