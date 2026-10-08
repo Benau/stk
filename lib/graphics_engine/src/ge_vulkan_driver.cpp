@@ -706,6 +706,7 @@ GEVulkanDriver::~GEVulkanDriver()
 // ----------------------------------------------------------------------------
 void GEVulkanDriver::destroyVulkan()
 {
+    clearDrawCallsCache();
     GECompressorASTC4x4::destroy();
     if (m_depth_texture)
     {
