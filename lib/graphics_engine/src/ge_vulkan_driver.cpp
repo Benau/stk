@@ -1440,7 +1440,7 @@ found_mode:
     const float scale = getGEConfig()->m_render_scale;
     bool auto_deferred = getGEConfig()->m_pbr &&
         getGEConfig()->m_auto_deferred_type != GADT_DISABLED;
-    bool deferred_split = getGEConfig()->m_deferred_split;
+    bool deferred_split = getGEConfig()->m_deferred_split != 0;
     bool needs_deferred = auto_deferred || deferred_split;
     if (scale != 1.0f || needs_deferred)
     {
@@ -2731,7 +2731,7 @@ ITexture* GEVulkanDriver::addRenderTargetTexture(const core::dimension2d<u32>& s
         OffscreenRTTScope()  { GEVulkanDeferredFBO::setCreatingOffscreenRTT(true); }
         ~OffscreenRTTScope() { GEVulkanDeferredFBO::setCreatingOffscreenRTT(false); }
     } scope;
-    GEVulkanFBOTexture* rtt = getGEConfig()->m_deferred_split ?
+    GEVulkanFBOTexture* rtt = getGEConfig()->m_deferred_split != 0 ?
         new GEVulkanDeferredFBOSplit(this, size, false/*swapchain_output*/) :
         new GEVulkanFBOTexture(this, size);
     rtt->createRTT();
@@ -2767,7 +2767,7 @@ void GEVulkanDriver::updateDriver(bool scale_changed, bool pbr_changed,
 {
     waitIdle();
     setDisableWaitIdle(true);
-    const bool prev_deferred_split = getGEConfig()->m_deferred_split;
+    const unsigned prev_deferred_split = getGEConfig()->m_deferred_split;
     refreshDeferredSplit();
     // Different FBO class (and SPLIT in shaders) if changed
     const bool deferred_split_changed =
@@ -2775,8 +2775,11 @@ void GEVulkanDriver::updateDriver(bool scale_changed, bool pbr_changed,
     clearDrawCallsCache();
     if (scale_changed || pbr_changed || deferred_split_changed)
         destroySwapChainRelated(false/*handle_surface*/);
-    if (pbr_changed || deferred_split_changed)
-        GEVulkanShaderManager::loadAllShaders();
+    bool reload_split_shader =
+        (prev_deferred_split == 0 && getGEConfig()->m_deferred_split != 0) ||
+        (prev_deferred_split != 0 && getGEConfig()->m_deferred_split == 0);
+    if (pbr_changed || reload_split_shader)
+        GEVulkanShaderManager::reloadShaders(pbr_changed, reload_split_shader);
     if (pbr_changed)
     {
         GEVulkanSampler sampler = m_mesh_texture_descriptor->getSamplerUse();

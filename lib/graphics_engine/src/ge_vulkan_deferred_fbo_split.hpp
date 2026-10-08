@@ -39,9 +39,9 @@ class GEVulkanDeferredFBOSplit : public GEVulkanDeferredFBO
 private:
     // ------------------------------------------------------------------------
     // Replace the input attachment descriptors of GEVulkanDeferredFBO (they
-    // are not created if GEConfig::m_deferred_split is true) with combined
-    // image samplers of the same bindings, GVDFP_HDR is color + normal + depth
-    // for the lighting pass, GVDFP_CONVERT_COLOR is hdr for the tonemap pass
+    // are not created if GEConfig::m_deferred_split != 0) with combined image
+    // samplers of the same bindings, GVDFP_HDR is color + normal + depth for
+    // the lighting pass, GVDFP_CONVERT_COLOR is hdr for the tonemap pass
     void initSplitGBufferDescriptor(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
     void initSplitConvertColorDescriptor(GEVulkanDriver* vk);

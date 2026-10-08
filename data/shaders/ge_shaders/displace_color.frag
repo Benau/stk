@@ -15,7 +15,6 @@ layout(push_constant) uniform Constants
 
 void main()
 {
-#ifdef PBR_ENABLED
     ivec2 uv = ivec2(gl_FragCoord.xy);
     if (u_push_constants.m_has_displace)
     {
@@ -27,5 +26,4 @@ void main()
         }
     }
     o_color = texelFetch(u_displace_color, uv, 0);
-#endif
 }
