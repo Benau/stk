@@ -23,7 +23,7 @@ void loadAllShaders(const std::string& match_filename = "");
 // ----------------------------------------------------------------------------
 VkShaderModule getShader(const std::string& filename);
 // ----------------------------------------------------------------------------
-VkShaderModule loadShader(shaderc_shader_kind, const std::string&);
+void reloadShaders(bool pbr_changed, bool deferred_split_changed);
 // ----------------------------------------------------------------------------
 unsigned getSamplerSize();
 // ----------------------------------------------------------------------------
