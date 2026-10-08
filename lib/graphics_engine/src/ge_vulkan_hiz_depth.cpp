@@ -40,7 +40,9 @@ void GEVulkanHiZDepth::prepare(GEVulkanCameraSceneNode* cam)
         irr::core::dimension2du(
         cam->getUBOData()->m_viewport.LowerRightCorner.X,
         cam->getUBOData()->m_viewport.LowerRightCorner.Y));
-    if (m_hiz_size != hiz_size)
+    if (m_vk->getRTTTexture() == NULL || hiz_size.getArea() == 0)
+        return;
+    if (m_dfbo_observer.expired() || m_hiz_size != hiz_size)
     {
         m_hiz_size = hiz_size;
         destroy();
@@ -178,6 +180,7 @@ void GEVulkanHiZDepth::init()
 
     GEVulkanDeferredFBO* dfbo =
         static_cast<GEVulkanDeferredFBO*>(m_vk->getRTTTexture());
+    m_dfbo_observer = dfbo->getDepthTexture()->getTextureObserver();
     for (uint32_t i = 0; i < mip_levels; i++)
     {
         VkDescriptorImageInfo input_info = {};
@@ -314,6 +317,9 @@ void GEVulkanHiZDepth::destroy()
 // ----------------------------------------------------------------------------
 void GEVulkanHiZDepth::generate(VkCommandBuffer cmd)
 {
+    if (m_dfbo_observer.expired())
+        return;
+
     const uint32_t mip_levels = m_hiz_depth->getMipmapLevels();
 
     VkImageMemoryBarrier barrier = {};
