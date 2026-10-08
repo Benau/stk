@@ -8,6 +8,7 @@
 #include "ge_vulkan_omni_shadow_fbo.hpp"
 
 #include <algorithm>
+#include <array>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -22,6 +23,13 @@ namespace GE
 namespace GEVulkanShaderManager
 {
 // ============================================================================
+enum GEVulkanShaderReloadType : unsigned
+{
+    GVSRT_PBR = 0,
+    GVSRT_DEFERRED_SPLIT,
+    GVSRT_COUNT
+};
+
 GEVulkanDriver* g_vk = NULL;
 irr::io::IFileSystem* g_file_system = NULL;
 
@@ -34,6 +42,7 @@ uint32_t g_sampler_size = 512;
 struct ShaderHolder
 {
     GESpinLock m_lock;
+    std::vector<uint32_t> m_spirv;
     VkShaderModule m_shader_module;
     ShaderHolder() : m_shader_module(VK_NULL_HANDLE) {}
     ~ShaderHolder()
@@ -46,6 +55,11 @@ struct ShaderHolder
 };
 
 std::map<std::string, std::unique_ptr<ShaderHolder> > g_shaders;
+
+GESpinLock g_reload_lock;
+
+using ReloadData = std::pair<shaderc_shader_kind, std::string>;
+std::array<std::vector<ReloadData>, GVSRT_COUNT> g_shader_reload_groups;
 }   // GEVulkanShaderManager
 
 // ============================================================================
@@ -63,25 +77,11 @@ shaderc_include_result* showError(const char* message)
 #endif
 
 // ============================================================================
-void GEVulkanShaderManager::init(GEVulkanDriver* vk)
+namespace Private
 {
-    g_vk = vk;
-    g_file_system = vk->getFileSystem();
-    loadAllShaders();
-}   // init
-
-// ----------------------------------------------------------------------------
-void GEVulkanShaderManager::destroy()
+void updatePredefines()
 {
-    g_shaders.clear();
-    g_vk = NULL;
-    g_file_system = NULL;
-}   // destroy
-
-// ----------------------------------------------------------------------------
-void GEVulkanShaderManager::loadAllShaders(const std::string& match_filename)
-{
-#ifndef DISABLE_SHADERC
+    using namespace GEVulkanShaderManager;
     std::ostringstream oss;
     oss << "#version 450\n";
     if (getGEConfig()->m_pbr)
@@ -110,65 +110,22 @@ void GEVulkanShaderManager::loadAllShaders(const std::string& match_filename)
     if (GEVulkanFeatures::supportsShaderStorageImageExtendedFormats())
         oss << "#define SHADER_STORAGE_IMAGE_EXTENDED_FORMATS\n";
     // Deferred render passes are split, no input attachments at all
-    if (getGEConfig()->m_deferred_split)
+    if (getGEConfig()->m_deferred_split != 0)
         oss << "#define SPLIT\n";
 
 #if defined(TILED_GPU)
     oss << "#define TILED_GPU\n";
 #endif
     g_predefines = oss.str();
-
-    irr::io::IFileList* files = g_file_system->createFileList(
-        getShaderFolder().c_str());
-    for (unsigned i = 0; i < files->getFileCount(); i++)
-    {
-        if (files->isDirectory(i))
-            continue;
-        std::string filename = files->getFileName(i).c_str();
-        if (!match_filename.empty() &&
-            filename.find(match_filename) == std::string::npos)
-            continue;
-        std::string ext = filename.substr(filename.find_last_of(".") + 1);
-        shaderc_shader_kind kind;
-        if (ext == "vert")
-            kind = shaderc_vertex_shader;
-        else if (ext == "frag")
-            kind = shaderc_fragment_shader;
-        else if (ext == "comp")
-            kind = shaderc_compute_shader;
-        else if (ext == "tesc")
-            kind = shaderc_tess_control_shader;
-        else if (ext == "tese")
-            kind = shaderc_tess_evaluation_shader;
-        else
-            continue;
-        g_shaders[filename] = std::unique_ptr<ShaderHolder>(new ShaderHolder);
-        auto holder = g_shaders.at(filename).get();
-        holder->m_lock.lock();
-        GEVulkanCommandLoader::addMultiThreadingCommand(
-            [holder, kind, filename]()
-            {
-                try
-                {
-                    holder->m_shader_module = loadShader(kind, filename);
-                }
-                catch (std::exception& e)
-                {
-                    printf("%s", e.what());
-                }
-                holder->m_lock.unlock();
-            });
-    }
-    files->drop();
-#endif
-}   // loadAllShaders
+}   // updatePredefines
 
 // ----------------------------------------------------------------------------
-VkShaderModule GEVulkanShaderManager::loadShader(shaderc_shader_kind kind,
-                                                 const std::string& name)
+std::vector<uint32_t> compileShader(shaderc_shader_kind kind,
+                                    const std::string& name,
+                                    bool set_reload_data)
 {
 #ifdef DISABLE_SHADERC
-    return VK_NULL_HANDLE;
+    return std::vector<uint32_t>();
 #else
     std::string shader_fullpath = getShaderFolder() + name;
     irr::io::IReadFile* r = irr::io::createReadFile(shader_fullpath.c_str());
@@ -188,6 +145,21 @@ VkShaderModule GEVulkanShaderManager::loadShader(shaderc_shader_kind kind,
             std::string("File ") + name + " failed to be read");
     }
     r->drop();
+    using namespace GEVulkanShaderManager;
+    if (set_reload_data)
+    {
+        g_reload_lock.lock();
+        if (shader_data.find("subpassInput") != std::string::npos)
+        {
+            g_shader_reload_groups[GVSRT_DEFERRED_SPLIT].emplace_back(kind,
+                name);
+        }
+        else if (shader_data.find("PBR_ENABLED") != std::string::npos)
+        {
+            g_shader_reload_groups[GVSRT_PBR].emplace_back(kind, name);
+        }
+        g_reload_lock.unlock();
+    }
     shader_data = g_predefines + shader_data;
 
     struct ShadercResources
@@ -283,24 +255,82 @@ VkShaderModule GEVulkanShaderManager::loadShader(shaderc_shader_kind kind,
     if (status != shaderc_compilation_status_success)
         throw std::runtime_error(shaderc_result_get_error_message(res.result));
 
-    VkShaderModuleCreateInfo create_info = {};
-    create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    create_info.pNext = NULL;
-    uint32_t* byte_code = (uint32_t*)shaderc_result_get_bytes(res.result);
+    const uint32_t* byte_code =
+        (const uint32_t*)shaderc_result_get_bytes(res.result);
     size_t byte_code_size = shaderc_result_get_length(res.result);
-    create_info.codeSize = byte_code_size;
-    create_info.pCode = byte_code;
-
-    VkShaderModule shader_module;
-    if (vkCreateShaderModule(g_vk->getDevice(), &create_info, NULL,
-        &shader_module) != VK_SUCCESS)
-    {
-        throw std::runtime_error(
-            std::string("vkCreateShaderModule failed for ") + name);
-    }
-    return shader_module;
+    std::vector<uint32_t> spirv(
+        byte_code, byte_code + byte_code_size / sizeof(uint32_t));
+    return spirv;
 #endif
-}   // loadShader
+}   // compileShader
+}   // namespace Private
+
+// ============================================================================
+void GEVulkanShaderManager::init(GEVulkanDriver* vk)
+{
+    g_vk = vk;
+    g_file_system = vk->getFileSystem();
+    loadAllShaders();
+}   // init
+
+// ----------------------------------------------------------------------------
+void GEVulkanShaderManager::destroy()
+{
+    g_shaders.clear();
+    g_vk = NULL;
+    g_file_system = NULL;
+}   // destroy
+
+// ----------------------------------------------------------------------------
+void GEVulkanShaderManager::loadAllShaders(const std::string& match_filename)
+{
+#ifndef DISABLE_SHADERC
+    Private::updatePredefines();
+    irr::io::IFileList* files = g_file_system->createFileList(
+        getShaderFolder().c_str());
+    for (unsigned i = 0; i < files->getFileCount(); i++)
+    {
+        if (files->isDirectory(i))
+            continue;
+        std::string filename = files->getFileName(i).c_str();
+        if (!match_filename.empty() &&
+            filename.find(match_filename) == std::string::npos)
+            continue;
+        std::string ext = filename.substr(filename.find_last_of(".") + 1);
+        shaderc_shader_kind kind;
+        if (ext == "vert")
+            kind = shaderc_vertex_shader;
+        else if (ext == "frag")
+            kind = shaderc_fragment_shader;
+        else if (ext == "comp")
+            kind = shaderc_compute_shader;
+        else if (ext == "tesc")
+            kind = shaderc_tess_control_shader;
+        else if (ext == "tese")
+            kind = shaderc_tess_evaluation_shader;
+        else
+            continue;
+        g_shaders[filename] = std::unique_ptr<ShaderHolder>(new ShaderHolder);
+        auto holder = g_shaders.at(filename).get();
+        holder->m_lock.lock();
+        GEVulkanCommandLoader::addMultiThreadingCommand(
+            [holder, kind, filename]()
+            {
+                try
+                {
+                    holder->m_spirv = Private::compileShader(kind, filename,
+                        true/*set_reload_data*/);
+                }
+                catch (std::exception& e)
+                {
+                    printf("%s", e.what());
+                }
+                holder->m_lock.unlock();
+            });
+    }
+    files->drop();
+#endif
+}   // loadAllShaders
 
 // ----------------------------------------------------------------------------
 unsigned GEVulkanShaderManager::getSamplerSize()
@@ -319,15 +349,105 @@ VkShaderModule GEVulkanShaderManager::getShader(const std::string& filename)
 {
     if (g_shaders.empty())
     {
-        throw std::runtime_error("No vulkan shaders compiled, perhaps shaderc "
-            "is not enabled.");
+        throw std::runtime_error(
+            "No vulkan shaders compiled, perhaps shaderc is not enabled.");
     }
-    auto& it = g_shaders.at(filename);
-    it->m_lock.lock();
-    it->m_lock.unlock();
-    if (it->m_shader_module == VK_NULL_HANDLE)
-        throw std::runtime_error(std::string("Missing shader ") + filename);
-    return it->m_shader_module;
+
+    auto it = g_shaders.find(filename);
+    if (it == g_shaders.end())
+    {
+        throw std::runtime_error(
+            std::string("Missing shader ") + filename);
+    }
+
+    ShaderHolder* holder = it->second.get();
+    holder->m_lock.lock();
+    if (holder->m_shader_module == VK_NULL_HANDLE)
+    {
+        if (holder->m_spirv.empty())
+        {
+            holder->m_lock.unlock();
+            throw std::runtime_error(
+                std::string("Missing shader ") + filename);
+        }
+
+        VkShaderModuleCreateInfo create_info = {};
+        create_info.sType =
+            VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        create_info.pNext = NULL;
+        create_info.codeSize =
+            holder->m_spirv.size() * sizeof(uint32_t);
+        create_info.pCode = holder->m_spirv.data();
+
+        if (vkCreateShaderModule(g_vk->getDevice(), &create_info,
+            NULL, &holder->m_shader_module) != VK_SUCCESS)
+        {
+            holder->m_lock.unlock();
+
+            throw std::runtime_error(
+                std::string("vkCreateShaderModule failed for ") +
+                filename);
+        }
+
+        // The SPIR-V is no longer needed after module creation.
+        std::vector<uint32_t>().swap(holder->m_spirv);
+    }
+
+    VkShaderModule shader_module = holder->m_shader_module;
+    holder->m_lock.unlock();
+    return shader_module;
 }   // getShader
+
+// ----------------------------------------------------------------------------
+void GEVulkanShaderManager::reloadShaders(bool pbr_changed,
+                                          bool deferred_split_changed)
+{
+#ifndef DISABLE_SHADERC
+    if (!pbr_changed && !deferred_split_changed)
+        return;
+
+    Private::updatePredefines();
+    for (unsigned i = GVSRT_PBR; i < GVSRT_COUNT; i++)
+    {
+        if (i == GVSRT_PBR && !pbr_changed)
+            continue;
+        if (i == GVSRT_DEFERRED_SPLIT && !deferred_split_changed)
+            continue;
+        auto& shaders = GEVulkanShaderManager::g_shader_reload_groups[i];
+        for (auto& p : shaders)
+        {
+            const shaderc_shader_kind kind = p.first;
+            const std::string filename = p.second;
+            ShaderHolder* holder = g_shaders.at(p.second).get();
+            holder->m_lock.lock();
+            GEVulkanCommandLoader::addMultiThreadingCommand(
+                [holder, kind, filename]()
+                {
+                    try
+                    {
+                        std::vector<uint32_t> spirv = Private::compileShader(
+                                kind, filename, false/*set_reload_data*/);
+
+                        // Pipelines already created from the old module
+                        // retain their shader code, so the module itself
+                        // can be destroyed here.
+                        if (holder->m_shader_module != VK_NULL_HANDLE)
+                        {
+                            vkDestroyShaderModule(g_vk->getDevice(),
+                                holder->m_shader_module, NULL);
+                            holder->m_shader_module = VK_NULL_HANDLE;
+                        }
+                        holder->m_spirv.swap(spirv);
+                    }
+                    catch (std::exception& e)
+                    {
+                        printf("%s", e.what());
+                    }
+                    holder->m_lock.unlock();
+                });
+        }
+    }
+#endif
+}   // reloadShaders
 
 }

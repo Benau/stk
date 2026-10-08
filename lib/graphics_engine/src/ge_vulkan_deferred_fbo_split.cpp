@@ -203,9 +203,9 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
                         : GEVulkanDeferredFBO(vk, size, swapchain_output)
 {
     // GEVulkanDeferredFBO creates attachments with sampled usage and no input
-    // attachment descriptors if m_deferred_split is true, which is expected
+    // attachment descriptors if m_deferred_split != 0, which is expected
     // to be true if this class is used (see GEVulkanDriver)
-    assert(getGEConfig()->m_deferred_split);
+    assert(getGEConfig()->m_deferred_split != 0);
     initSplitGBufferDescriptor(vk);
     initSplitConvertColorDescriptor(vk);
     if (getGEConfig()->m_glow_outline &&

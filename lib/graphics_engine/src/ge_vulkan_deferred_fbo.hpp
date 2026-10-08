@@ -54,7 +54,7 @@ protected:
     static bool s_creating_offscreen_rtt;
     // ------------------------------------------------------------------------
     // Input attachment descriptors (single render pass with subpasses), not
-    // created when GEConfig::m_deferred_split is true
+    // created when GEConfig::m_deferred_split != 0
     void initGBufferDescriptor(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
     void initConvertColorDescriptor(GEVulkanDriver* vk);

@@ -25,7 +25,7 @@ GEConfig g_config =
     false,
     false,
     true,
-    false,
+    0,
     false,
     false,
     GADT_DISABLED,
@@ -229,7 +229,7 @@ bool hasOcclusionCulling()
 
 bool needsDeferredRendering()
 {
-    return g_config.m_deferred_split ||
+    return g_config.m_deferred_split != 0 ||
         (g_config.m_pbr && g_config.m_auto_deferred_type != GADT_DISABLED);
 }
 
@@ -264,11 +264,13 @@ void setAbsoluteRotationScale(const irr::core::matrix4& model_matrix,
 
 void refreshDeferredSplit()
 {
-    g_config.m_deferred_split = false;
+    g_config.m_deferred_split = 0;
     if (!g_config.m_pbr)
         return;
-    if (g_config.m_glow_outline || g_config.m_light_scatter)
-        g_config.m_deferred_split = true;
+    if (g_config.m_glow_outline)
+        g_config.m_deferred_split |= 1;
+    if (g_config.m_light_scatter)
+        g_config.m_deferred_split |= 1 << 1;
 }
 
 }
