@@ -1,0 +1,59 @@
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_src;
+#ifdef SHADER_STORAGE_IMAGE_EXTENDED_FORMATS
+layout(set = 0, binding = 1, r11f_g11f_b10f) uniform writeonly image2D u_dst;
+#else
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D u_dst;
+#endif
+
+layout(push_constant) uniform PushConstants
+{
+    // x0, y0, x1, y1 (exclusive): the area of one viewport (camera), pixels
+    // are only read and written inside of it so the scatter of a viewport
+    // never leaks into another one
+    ivec4 m_rect;
+    // (1, 0) = horizontal, (0, 1) = vertical
+    ivec2 m_direction;
+    // Multiplies the distance of the samples (1.0 at the reference height of
+    // the viewport), so the blur has the same width relative to the viewport
+    float m_scale;
+} pc;
+
+const float SIGMA = 5.0;
+const float W0 = 1.0 / (sqrt(2.0 * 3.14) * SIGMA);
+
+float weight(float i)
+{
+    return W0 * exp(-0.5 * i * i / (SIGMA * SIGMA));
+}
+
+void main()
+{
+    ivec2 dst = pc.m_rect.xy + ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(dst, pc.m_rect.zw)))
+        return;
+
+    const float w1 = weight(1.0), w2 = weight(2.0), w3 = weight(3.0),
+        w4 = weight(4.0), w5 = weight(5.0);
+    // Merged taps: the weight is the sum and the offset is in the middle
+    // weighted by them
+    const float a = w1 + w2, b = w3 + w4;
+    const float oa = (1.0 * w1 + 2.0 * w2) / a;
+    const float ob = (3.0 * w3 + 4.0 * w4) / b;
+
+    vec2 texel = 1.0 / vec2(textureSize(u_src, 0));
+    vec2 lo = vec2(pc.m_rect.xy) + 0.5;
+    vec2 hi = vec2(pc.m_rect.zw) - 0.5;
+    vec2 center = vec2(dst) + 0.5;
+    vec2 dir = vec2(pc.m_direction) * pc.m_scale;
+
+    vec4 sum = textureLod(u_src, center * texel, 0.0) * W0;
+    sum += textureLod(u_src, clamp(center - dir * oa, lo, hi) * texel, 0.0) * a;
+    sum += textureLod(u_src, clamp(center + dir * oa, lo, hi) * texel, 0.0) * a;
+    sum += textureLod(u_src, clamp(center - dir * ob, lo, hi) * texel, 0.0) * b;
+    sum += textureLod(u_src, clamp(center + dir * ob, lo, hi) * texel, 0.0) * b;
+    sum += textureLod(u_src, clamp(center - dir * 5.0, lo, hi) * texel, 0.0) * w5;
+    sum += textureLod(u_src, clamp(center + dir * 5.0, lo, hi) * texel, 0.0) * w5;
+    imageStore(u_dst, dst, sum);
+}

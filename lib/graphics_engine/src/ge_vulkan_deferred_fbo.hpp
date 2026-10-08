@@ -29,9 +29,10 @@ enum GEVulkanDeferredFBOPass : unsigned
     GVDFP_CONVERT_COLOR,
     GVDFP_DISPLACE_MASK,
     GVDFP_DISPLACE_COLOR,
-    // Only used by GEVulkanDeferredFBOSplit if glow outline is enabled: the
-    // glow color and its blurred version, sampled by the lighting pass
-    GVDFP_GLOW_OUTLINE,
+    // Only used by GEVulkanDeferredFBOSplit if glow outline or light
+    // scattering is enabled: the glow color, its blurred version and the
+    // blurred light scattering, sampled by the lighting pass
+    GVDFP_LIGHTING_COMPOSITE,
     GVDFP_COUNT,
 };
 

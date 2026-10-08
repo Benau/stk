@@ -8,6 +8,7 @@
 namespace GE
 {
 class GEVulkanGlowOutline;
+class GEVulkanLightScatter;
 
 // Same output as GEVulkanDeferredFBO, but every stage is its own traditional
 // render pass (single subpass) instead of a subpass of one, so there is no
@@ -20,7 +21,11 @@ class GEVulkanGlowOutline;
 //   [glow      : meshes with glow outline color, see GEVulkanGlowOutline, it's
 //                its own render pass (and compute dispatches for the blur)
 //                only if glow outline is enabled and any mesh needs it]
-//   lighting   : (g-buffer as textures) -> hdr, skybox, [blurred glow]
+//   [scatter   : compute shaders only, light scattering of the lights in the
+//                fog, see GEVulkanLightScatter, if it's enabled and any
+//                viewport has fog and lights]
+//   lighting   : (g-buffer as textures) -> hdr, skybox, [blurred glow and
+//                light scattering, added together]
 //   tonemap    : (hdr as texture) -> output, then ghost / transparent
 //   [displace mask -> displace color, only if the FBO has displace support]
 //
@@ -44,9 +49,17 @@ private:
     void beginPass(VkCommandBuffer cmd, unsigned pass, unsigned framebuffer,
                    uint32_t clear_count, const VkClearValue* clears) const;
 
+    // ------------------------------------------------------------------------
+    // GVDFP_LIGHTING_COMPOSITE: glow color, glow blur and light scattering
+    // (with a transparent texture for the ones which are not enabled)
+    void initLightingCompositeDescriptor(GEVulkanDriver* vk);
+
     // Only one for all the viewports (draw calls) of this FBO, NULL if glow
     // outline is not enabled
     std::unique_ptr<GEVulkanGlowOutline> m_glow_outline;
+
+    // Same, NULL if light scattering is not enabled
+    std::unique_ptr<GEVulkanLightScatter> m_light_scatter;
 public:
     // ------------------------------------------------------------------------
     GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
@@ -65,12 +78,11 @@ public:
     // ------------------------------------------------------------------------
     // Decided when the FBO is created, draw calls only create the glow
     // pipelines (GVPT_GLOW_OUTLINE) if it has
-    bool hasGlowOutline() const               { return m_glow_outline != NULL; }
+    bool hasGlowOutline() const              { return m_glow_outline != NULL; }
     // ------------------------------------------------------------------------
-    // GVDFP_GLOW_OUTLINE is the one of GEVulkanGlowOutline
-    virtual VkDescriptorSetLayout getDescriptorSetLayout(unsigned id) const;
-    // ------------------------------------------------------------------------
-    virtual const VkDescriptorSet* getDescriptorSet(unsigned id) const;
+    // Same for GVPT_LIGHTING_COMPOSITE (GVDFP_LIGHTING_COMPOSITE is the
+    // descriptor of it), which draws them both
+    bool hasLightScatter() const            { return m_light_scatter != NULL; }
     // ------------------------------------------------------------------------
     // pipeline_type is a GEVulkanPipelineType, the render pass which a
     // pipeline of this type is used in

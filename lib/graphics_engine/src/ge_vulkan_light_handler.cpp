@@ -45,10 +45,18 @@ struct GEGlobalLightBuffer
     irr::core::vector3df m_sun_color;
     irr::f32             m_sun_angle_tan_half;
     irr::core::vector3df m_sun_direction;
+    // Density of the exponential fog of solid materials and light scattering
+    // (1 / (40 * (start + 0.001)), same as the OpenGL renderer), 0 = no fog
     irr::f32             m_fog_density;
+    // rgb: raw color of the fog (not converted to linear, same as OpenGL),
+    // a: maximum amount of fog of transparent materials
     irr::video::SColorf  m_fog_color;
     irr::core::vector3df m_skytop_color;
     irr::u32             m_light_count;
+    // Start and end of the linear fog of transparent materials
+    irr::f32             m_fog_start;
+    irr::f32             m_fog_end;
+    irr::f32             m_padding[2];
     //std::array<GELight, MAX_RENDERING_LIGHT> m_rendering_lights;
 };
 
@@ -139,7 +147,33 @@ void GEVulkanLightHandler::prepare()
     buffer->m_skytop_color.X = 0.325f;
     buffer->m_skytop_color.Y = 0.35f;
     buffer->m_skytop_color.Z = 0.375f;
+
+    // The fog can change every frame (animated by scripts), the buffer is
+    // generated every frame from the driver so it's always up to date. Same
+    // values (not in linear color space) as the OpenGL renderer
+    if (m_vk->isFogEnabled())
+    {
+        video::SColor fog_color;
+        video::E_FOG_TYPE fog_type;
+        f32 start, end, max_fog;
+        bool pixel_fog, range_fog;
+        m_vk->getFog(fog_color, fog_type, start, end, max_fog, pixel_fog,
+            range_fog);
+        buffer->m_fog_density = 1.0f / (40.0f * (start + 0.001f));
+        buffer->m_fog_color.r = fog_color.getRed() / 255.0f;
+        buffer->m_fog_color.g = fog_color.getGreen() / 255.0f;
+        buffer->m_fog_color.b = fog_color.getBlue() / 255.0f;
+        buffer->m_fog_color.a = max_fog;
+        buffer->m_fog_start = start;
+        buffer->m_fog_end = end;
+    }
 }   // prepare
+
+// ----------------------------------------------------------------------------
+float GEVulkanLightHandler::getFogDensity() const
+{
+    return getGlobalLightPtr()->m_fog_density;
+}   // getFogDensity
 
 // ----------------------------------------------------------------------------
 void GEVulkanLightHandler::generate(const irr::core::vector3df& cam_pos,

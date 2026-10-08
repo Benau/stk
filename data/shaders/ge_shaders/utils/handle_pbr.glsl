@@ -49,6 +49,20 @@ vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
     return mixed_color;
 }
 
+// Exponential fog: the fog is added to the lit color (not mixed with it),
+// before tonemap
+vec3 handleFog(vec3 hdr, vec3 xpos)
+{
+    // xpos is the view space position, density is 0 if there is no fog
+    float fog_density = u_global_light.m_fog_density;
+    if (fog_density > 0.0)
+    {
+        float fog_factor = 1.0 - exp(-fog_density * length(xpos));
+        hdr += u_global_light.m_fog_color.rgb * fog_factor;
+    }
+    return hdr;
+}
+
 vec3 handlePBR(vec3 diffuse_color, vec3 pbr, vec4 world_position,
                vec3 world_normal)
 {
@@ -64,8 +78,6 @@ vec3 handlePBR(vec3 diffuse_color, vec3 pbr, vec4 world_position,
         diffuse_color, normal, xpos, eyedir, perceptual_roughness, pbr.y,
         world_position.xyz);
 
-    //Disable for deferred shading
-    //float factor = (1.0 - exp(length(xpos) * -0.0001));
-    //mixed_color = mixed_color + vec3(0.5) * factor;
+    mixed_color = handleFog(mixed_color, xpos);
     return convertColor(mixed_color);
 }

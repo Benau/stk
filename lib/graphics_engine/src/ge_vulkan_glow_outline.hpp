@@ -1,20 +1,10 @@
 #ifndef HEADER_GE_VULKAN_GLOW_OUTLINE_HPP
 #define HEADER_GE_VULKAN_GLOW_OUTLINE_HPP
 
-#include "vulkan_wrapper.h"
-
-#include "dimension2d.h"
-
-#include <array>
-#include <utility>
-#include <vector>
+#include "ge_vulkan_post_processing.hpp"
 
 namespace GE
 {
-class GEVulkanAttachmentTexture;
-class GEVulkanCameraSceneNode;
-class GEVulkanDrawCall;
-class GEVulkanDriver;
 
 // Glow outline of the meshes with GERenderInfo::getGlowOutlineColor() != 0,
 // owned by GEVulkanDeferredFBOSplit (there is only one for all the viewports
@@ -28,16 +18,13 @@ class GEVulkanDriver;
 // 2. The glow color is downscaled twice and upscaled once by a compute shader
 //    (dual filter blur) for each viewport, which never reads outside of the
 //    rect of the viewport so the glow doesn't leak into another viewport.
-// 3. The lighting pass (see GEVulkanDrawCall::renderGlowOutlineComposite)
-//    adds the blur with the area of the meshes themselves masked out, so the
-//    meshes are rendered above their glow.
-class GEVulkanGlowOutline
+// 3. The lighting pass (see GEVulkanDrawCall::renderLightingComposite, the
+//    same draw adds the light scattering) adds the blur with the area of the
+//    meshes themselves masked out, so the meshes are rendered above their
+//    glow.
+class GEVulkanGlowOutline : public GEVulkanPostProcessing
 {
 private:
-    GEVulkanDriver* m_vk;
-
-    irr::core::dimension2d<irr::u32> m_size;
-
     // Color of the glow, same size as the FBO, rgb is the color and alpha is
     // the coverage of the meshes
     GEVulkanAttachmentTexture* m_color;
@@ -53,13 +40,6 @@ private:
 
     VkFramebuffer m_framebuffer;
 
-    // Sampled by the lighting pass: 0 = m_color, 1 = m_blur[2]
-    VkDescriptorSetLayout m_lighting_layout;
-
-    VkDescriptorPool m_lighting_pool;
-
-    VkDescriptorSet m_lighting_set;
-
     VkDescriptorSetLayout m_blur_layout;
 
     VkDescriptorPool m_blur_pool;
@@ -73,8 +53,6 @@ private:
     VkPipeline m_blur_pipeline;
     // ------------------------------------------------------------------------
     void createRenderPass(GEVulkanAttachmentTexture* depth);
-    // ------------------------------------------------------------------------
-    void createLightingDescriptor();
     // ------------------------------------------------------------------------
     void createBlur();
     // ------------------------------------------------------------------------
@@ -104,18 +82,20 @@ public:
     // Renders and blurs the glow of draw calls which have any, between the
     // g-buffer and the lighting render pass (must be outside of render pass).
     // Returns false if none of them has so nothing is done, the lighting pass
-    // must skip GEVulkanDrawCall::renderGlowOutlineComposite then
-    bool render(VkCommandBuffer cmd,
-                const std::vector<std::pair<GEVulkanDrawCall*,
-                GEVulkanCameraSceneNode*> >& p);
+    // must skip GEVulkanDrawCall::renderLightingComposite then
+    virtual bool render(VkCommandBuffer cmd,
+                        const std::vector<std::pair<GEVulkanDrawCall*,
+                        GEVulkanCameraSceneNode*> >& p);
     // ------------------------------------------------------------------------
     VkRenderPass getRenderPass() const                { return m_render_pass; }
     // ------------------------------------------------------------------------
-    VkDescriptorSetLayout getDescriptorSetLayout() const
-                                                  { return m_lighting_layout; }
+    // Sampled by the lighting pass (see GEVulkanDrawCall::
+    // renderLightingComposite): the color in shader read only layout and the
+    // blur in general layout
+    VkImageView getColorImageView() const;
     // ------------------------------------------------------------------------
-    const VkDescriptorSet* getDescriptorSet() const
-                                                    { return &m_lighting_set; }
+    VkImageView getBlurImageView() const;
+
 };   // GEVulkanGlowOutline
 
 }

@@ -85,7 +85,7 @@ enum GEVulkanPipelineType : unsigned
     // GEVulkanGlowOutline (same vertex shaders as the g-buffer)
     GVPT_GLOW_OUTLINE,
     // Fullscreen draw in the lighting pass which adds the blurred glow
-    GVPT_GLOW_OUTLINE_COMPOSITE,
+    GVPT_LIGHTING_COMPOSITE,
 };
 
 struct GEMaterial;
@@ -204,6 +204,9 @@ protected:
 
     // True if the current FBO has glow outline, set by prepare()
     bool m_glow_outline;
+
+    // Same, the FBO has light scattering (GEVulkanLightScatter)
+    bool m_light_scatter;
 
     GECullingTool* m_culling_tool;
 
@@ -375,6 +378,23 @@ public:
     // generate()), each camera of splitscreen has its own list
     bool hasGlowOutline() const         { return !m_glow_outline_draws.empty(); }
     // ------------------------------------------------------------------------
+    // True if the FBO has light scattering and this camera has fog and lights
+    // this frame (known after generate), see GEVulkanLightScatter
+    bool hasLightScatter() const;
+    // ------------------------------------------------------------------------
+    // Creates a layout of the data descriptor set (camera, lights), all of
+    // them are defined the same so the sets of any draw call are compatible
+    // with a pipeline layout created from any of them. The caller owns it, so
+    // it can outlive the draw calls (a pipeline layout can't be used after the
+    // layout it was created with is destroyed, see GEVulkanLightScatter)
+    static VkDescriptorSetLayout createDataLayout(GEVulkanDriver* vk);
+    // ------------------------------------------------------------------------
+    // Binds the data descriptor set (camera, lights) to a pipeline layout
+    // whose set at the index is the data layout
+    void bindDataDescriptorSet(GEVulkanDriver* vk, VkCommandBuffer cmd,
+                               VkPipelineBindPoint bind_point,
+                               VkPipelineLayout layout, uint32_t set) const;
+    // ------------------------------------------------------------------------
     // Draws the glow list in the render pass of GEVulkanGlowOutline (viewport
     // already set), one vkCmdDrawIndexed per batch
     void renderGlowOutline(GEVulkanDriver* vk, VkCommandBuffer cmd,
@@ -382,7 +402,10 @@ public:
     // ------------------------------------------------------------------------
     // Adds the blurred glow (without the area of meshes) to hdr, in the
     // lighting pass
-    void renderGlowOutlineComposite(GEVulkanDriver* vk, VkCommandBuffer cmd);
+    // Adds the glow outline and the light scattering (the ones which were
+    // rendered this frame and this draw call has) to hdr
+    void renderLightingComposite(GEVulkanDriver* vk, VkCommandBuffer cmd,
+                                 bool glow_outline, bool light_scatter);
     // ------------------------------------------------------------------------
     unsigned getPolyCount() const
     {

@@ -8,6 +8,7 @@
 #include "ge_vulkan_features.hpp"
 #include "ge_vulkan_glow_outline.hpp"
 #include "ge_vulkan_hiz_depth.hpp"
+#include "ge_vulkan_light_scatter.hpp"
 
 #include <array>
 #include <cassert>
@@ -213,6 +214,14 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
         m_glow_outline.reset(new GEVulkanGlowOutline(vk, getSize(),
             m_depth_texture));
     }
+    if (getGEConfig()->m_light_scatter &&
+        GEVulkanFeatures::supportsComputeInMainQueue())
+    {
+        m_light_scatter.reset(new GEVulkanLightScatter(vk, getSize(),
+            m_depth_texture));
+    }
+    if (m_glow_outline || m_light_scatter)
+        initLightingCompositeDescriptor(vk);
 }   // GEVulkanDeferredFBOSplit
 
 // ----------------------------------------------------------------------------
@@ -221,25 +230,41 @@ GEVulkanDeferredFBOSplit::~GEVulkanDeferredFBOSplit()
 }   // ~GEVulkanDeferredFBOSplit
 
 // ----------------------------------------------------------------------------
-VkDescriptorSetLayout GEVulkanDeferredFBOSplit::getDescriptorSetLayout(
-                                                           unsigned id) const
+void GEVulkanDeferredFBOSplit::initLightingCompositeDescriptor(
+                                                            GEVulkanDriver* vk)
 {
-    if (id == GVDFP_GLOW_OUTLINE)
+    // The ones which don't exist are still bound with a transparent texture,
+    // they are not used (specialization constants of lighting_composite.frag)
+    // but a descriptor which was never written is a validation error
+    VkImageView unused = VK_NULL_HANDLE;
+    if (vk->getTransparentTexture())
+        unused = (VkImageView)vk->getTransparentTexture()->getTextureHandler();
+    std::array<VkDescriptorImageInfo, 3> image_infos = {};
+    for (VkDescriptorImageInfo& info : image_infos)
     {
-        return m_glow_outline ? m_glow_outline->getDescriptorSetLayout() :
-            VK_NULL_HANDLE;
+        info.sampler = vk->getSampler(GVS_SKYBOX);
+        info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        info.imageView = unused;
     }
-    return GEVulkanDeferredFBO::getDescriptorSetLayout(id);
-}   // getDescriptorSetLayout
-
-// ----------------------------------------------------------------------------
-const VkDescriptorSet* GEVulkanDeferredFBOSplit::getDescriptorSet(
-                                                           unsigned id) const
-{
-    if (id == GVDFP_GLOW_OUTLINE)
-        return m_glow_outline ? m_glow_outline->getDescriptorSet() : NULL;
-    return GEVulkanDeferredFBO::getDescriptorSet(id);
-}   // getDescriptorSet
+    // Original glow color is fetched
+    image_infos[0].sampler = vk->getSampler(GVS_NEAREST);
+    if (m_glow_outline)
+    {
+        image_infos[0].imageView = m_glow_outline->getColorImageView();
+        image_infos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[1].imageView = m_glow_outline->getBlurImageView();
+    }
+    if (m_light_scatter)
+    {
+        image_infos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[2].imageView = m_light_scatter->getImageView();
+    }
+    createSamplerDescriptor(vk, image_infos.size(),
+        &m_descriptor_layout[GVDFP_LIGHTING_COMPOSITE],
+        &m_descriptor_pool[GVDFP_LIGHTING_COMPOSITE],
+        &m_descriptor_set[GVDFP_LIGHTING_COMPOSITE],
+        image_infos.data(), "GVDFP_LIGHTING_COMPOSITE");
+}   // initLightingCompositeDescriptor
 
 // ----------------------------------------------------------------------------
 void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
@@ -558,6 +583,9 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
     // g-buffer and the blur of it), all viewports at once
     const bool has_glow_outline = m_glow_outline &&
         m_glow_outline->render(cmd, p);
+    // And light scattering of the lights in the fog (compute shaders only)
+    const bool has_light_scatter = m_light_scatter &&
+        m_light_scatter->render(cmd, p);
 
     // 3. lighting, the background is the clear color of hdr
     {
@@ -572,9 +600,13 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
                 q.first->prepareViewport(m_vk, q.second->getViewPort(), cmd);
             q.first->renderDeferredLighting(m_vk, cmd);
             q.first->renderSkyBox(m_vk, cmd);
-            // Above everything which is lit, but not over the meshes
-            if (has_glow_outline)
-                q.first->renderGlowOutlineComposite(m_vk, cmd);
+            // Above everything which is lit, the glow outline is not over the
+            // meshes
+            if (has_glow_outline || has_light_scatter)
+            {
+                q.first->renderLightingComposite(m_vk, cmd, has_glow_outline,
+                    has_light_scatter);
+            }
         }
         vkCmdEndRenderPass(cmd);
     }
@@ -672,7 +704,7 @@ VkRenderPass GEVulkanDeferredFBOSplit::getRenderPassForPipeline(
             VK_NULL_HANDLE;
     case GVPT_DEFERRED_LIGHTING:
     case GVPT_SKYBOX:
-    case GVPT_GLOW_OUTLINE_COMPOSITE:
+    case GVPT_LIGHTING_COMPOSITE:
         return getRTTRenderPass(GVDSP_LIGHTING);
     case GVPT_DEFERRED_CONVERT_COLOR:
     case GVPT_GHOST_DEPTH:

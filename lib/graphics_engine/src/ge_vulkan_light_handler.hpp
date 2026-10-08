@@ -71,6 +71,9 @@ public:
     // ------------------------------------------------------------------------
     unsigned getLightCount() const;
     // ------------------------------------------------------------------------
+    // 0 if there is no fog, which is also when there is no light scattering
+    float getFogDensity() const;
+    // ------------------------------------------------------------------------
     unsigned getFullscreenLightCount() const
                                            { return m_fullscreen_light_count; }
     // ------------------------------------------------------------------------

@@ -106,6 +106,7 @@
 #include <ge_main.hpp>
 #include <ge_occlusion_culling.hpp>
 #include <ge_texture.hpp>
+#include <ge_vulkan_driver.hpp>
 #endif
 
 using namespace irr;
@@ -322,6 +323,12 @@ void Track::reset()
 void Track::cleanup()
 {
     irr_driver->resetSceneComplexity();
+#ifndef SERVER_ONLY
+    // The menus after the race have no fog
+    if (!GUIEngine::isNoGraphics() && !CVS->isGLSL() &&
+        irr_driver->getVideoDriver()->getDriverType() == video::EDT_VULKAN)
+        GE::getVKDriver()->setFogEnabled(false);
+#endif
     m_physical_object_uid = 0;
 #ifdef USE_RESIZE_CACHE
     if (!UserConfigParams::m_high_definition_textures)
@@ -1715,6 +1722,10 @@ void Track::handleAnimatedTextures(scene::ISceneNode *node, const XMLNode &xml)
  */
 void Track::updateGraphics(float dt)
 {
+#ifndef SERVER_ONLY
+    // The fog can be animated by scripts
+    updateDriverFog();
+#endif
     m_track_object_manager->updateGraphics(dt);
 
     for (unsigned int i = 0; i<m_animated_textures.size(); i++)
@@ -1724,6 +1735,34 @@ void Track::updateGraphics(float dt)
     m_item_manager->updateGraphics(dt);
 
 }   // updateGraphics
+
+// ----------------------------------------------------------------------------
+/** Sets the fog of the driver which doesn't use the shaders of the OpenGL
+ *  renderer (the fixed function pipeline of legacy OpenGL and Vulkan), it's
+ *  called every frame because the values are read by the driver every frame.
+ */
+void Track::updateDriverFog()
+{
+#ifndef SERVER_ONLY
+    if (GUIEngine::isNoGraphics() || CVS->isGLSL())
+        return;
+    video::IVideoDriver* driver = irr_driver->getVideoDriver();
+    const bool fog = m_use_fog && !m_force_disable_fog &&
+        Camera::getDefaultCameraType() != Camera::CM_TYPE_DEBUG;
+    if (fog)
+    {
+        /* NOTE: if LINEAR type, density does not matter, if EXP or EXP2, start
+           and end do not matter. The Vulkan driver uses the start for the
+           exponential fog of solid materials and light scattering (same as the
+           OpenGL renderer), and the end and density (the maximum amount of
+           fog) for the linear fog of transparent materials */
+        driver->setFog(m_fog_color, video::EFT_FOG_LINEAR, m_fog_start,
+            m_fog_end, m_fog_max);
+    }
+    if (driver->getDriverType() == video::EDT_VULKAN)
+        GE::getVKDriver()->setFogEnabled(fog);
+#endif
+}   // updateDriverFog
 
 // ----------------------------------------------------------------------------
 /** Update, called once per physics time step.
@@ -2214,16 +2253,7 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
     // otherwise the skycube node could be modified to have fog enabled, which
     // we don't want
 #ifndef SERVER_ONLY
-    if (m_use_fog && Camera::getDefaultCameraType()!=Camera::CM_TYPE_DEBUG &&
-        !CVS->isGLSL())
-    {
-        /* NOTE: if LINEAR type, density does not matter, if EXP or EXP2, start
-           and end do not matter */
-        irr_driver->getVideoDriver()->setFog(m_fog_color,
-                                             video::EFT_FOG_LINEAR,
-                                             m_fog_start, m_fog_end,
-                                             1.0f);
-    }
+    updateDriverFog();
 #endif
 
     // Sky dome and boxes support
