@@ -41,5 +41,6 @@ void main()
     hdr += accumulateLights(u_push_constants.m_fullscreen_light_count,
         diffuse_color, normal, xpos, eyedir, 1.0 - pbr.x, pbr.y,
         world_position.xyz);
+    hdr = handleFog(hdr, xpos);
     o_color = vec4(hdr, 1.0);
 }

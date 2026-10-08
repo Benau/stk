@@ -93,9 +93,11 @@ set(GE_SOURCES
     src/ge_vulkan_glow_outline.cpp
     src/ge_vulkan_hiz_depth.cpp
     src/ge_vulkan_light_handler.cpp
+    src/ge_vulkan_light_scatter.cpp
     src/ge_vulkan_mesh_cache.cpp
     src/ge_vulkan_mesh_scene_node.cpp
     src/ge_vulkan_omni_shadow_fbo.cpp
+    src/ge_vulkan_post_processing.cpp
     src/ge_vulkan_scene_manager.cpp
     src/ge_vulkan_shader_manager.cpp
     src/ge_vulkan_shadow_draw_call.cpp
