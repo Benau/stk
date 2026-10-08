@@ -2,7 +2,6 @@
 
 #include "ge_vulkan_attachment_texture.hpp"
 #include "ge_vulkan_camera_scene_node.hpp"
-#include "ge_vulkan_command_loader.hpp"
 #include "ge_vulkan_draw_call.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_features.hpp"
@@ -17,10 +16,6 @@ namespace GE
 namespace
 {
 // ----------------------------------------------------------------------------
-// The width of the glow is this at the reference height of the viewport
-// (blur sample distances are 1.0 there), and scales with the height
-const float REFERENCE_HEIGHT = 1080.0f;
-// ----------------------------------------------------------------------------
 struct BlurPushConstants
 {
     // x0, y0, x1, y1 (exclusive) in pixels, source samples are clamped inside
@@ -31,30 +26,15 @@ struct BlurPushConstants
     // Multiplies the distance of the samples
     float m_scale;
 };
-// ----------------------------------------------------------------------------
-irr::core::dimension2d<irr::u32> halfSize(
-                                const irr::core::dimension2d<irr::u32>& size)
-{
-    return irr::core::dimension2d<irr::u32>(std::max(1u, (size.Width + 1) / 2),
-        std::max(1u, (size.Height + 1) / 2));
-}   // halfSize
-// ----------------------------------------------------------------------------
-std::array<int32_t, 4> halfRect(const std::array<int32_t, 4>& r)
-{
-    // Covers all pixels of the rect: floor of the start, ceil of the end
-    return {{ r[0] >> 1, r[1] >> 1, (r[2] + 1) >> 1, (r[3] + 1) >> 1 }};
-}   // halfRect
 }   // anonymous namespace
 
 // ----------------------------------------------------------------------------
 GEVulkanGlowOutline::GEVulkanGlowOutline(GEVulkanDriver* vk,
                               const irr::core::dimension2d<irr::u32>& size,
                               GEVulkanAttachmentTexture* depth)
-                   : m_vk(vk), m_size(size), m_render_pass(VK_NULL_HANDLE),
+                   : GEVulkanPostProcessing(vk, size),
+                     m_render_pass(VK_NULL_HANDLE),
                      m_framebuffer(VK_NULL_HANDLE),
-                     m_lighting_layout(VK_NULL_HANDLE),
-                     m_lighting_pool(VK_NULL_HANDLE),
-                     m_lighting_set(VK_NULL_HANDLE),
                      m_blur_layout(VK_NULL_HANDLE),
                      m_blur_pool(VK_NULL_HANDLE),
                      m_blur_pipeline_layout(VK_NULL_HANDLE),
@@ -85,33 +65,9 @@ GEVulkanGlowOutline::GEVulkanGlowOutline(GEVulkanDriver* vk,
         blur_format, blur_usage, VK_IMAGE_ASPECT_COLOR_BIT);
 
     // The blurred images stay in general layout forever
-    VkCommandBuffer command_buffer =
-        GEVulkanCommandLoader::beginSingleTimeCommands();
-    for (GEVulkanAttachmentTexture* t : m_blur)
-    {
-        VkImageMemoryBarrier barrier = {};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.srcAccessMask = 0;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
-            VK_ACCESS_SHADER_WRITE_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = t->getImage();
-        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        barrier.subresourceRange.levelCount = 1;
-        barrier.subresourceRange.layerCount = 1;
-        vkCmdPipelineBarrier(command_buffer,
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1,
-            &barrier);
-    }
-    GEVulkanCommandLoader::endSingleTimeCommands(command_buffer);
+    initializeGeneralImages(m_blur.data(), m_blur.size());
 
     createRenderPass(depth);
-    createLightingDescriptor();
     createBlur();
 }   // GEVulkanGlowOutline
 
@@ -128,10 +84,6 @@ GEVulkanGlowOutline::~GEVulkanGlowOutline()
         vkDestroyDescriptorPool(device, m_blur_pool, NULL);
     if (m_blur_layout != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(device, m_blur_layout, NULL);
-    if (m_lighting_pool != VK_NULL_HANDLE)
-        vkDestroyDescriptorPool(device, m_lighting_pool, NULL);
-    if (m_lighting_layout != VK_NULL_HANDLE)
-        vkDestroyDescriptorSetLayout(device, m_lighting_layout, NULL);
     if (m_framebuffer != VK_NULL_HANDLE)
         vkDestroyFramebuffer(device, m_framebuffer, NULL);
     if (m_render_pass != VK_NULL_HANDLE)
@@ -236,95 +188,26 @@ void GEVulkanGlowOutline::createRenderPass(GEVulkanAttachmentTexture* depth)
 }   // createRenderPass
 
 // ----------------------------------------------------------------------------
-void GEVulkanGlowOutline::createLightingDescriptor()
+VkImageView GEVulkanGlowOutline::getColorImageView() const
 {
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings = {};
-    for (unsigned i = 0; i < bindings.size(); i++)
-    {
-        bindings[i].binding = i;
-        bindings[i].descriptorCount = 1;
-        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    }
-    VkDescriptorSetLayoutCreateInfo layout_info = {};
-    layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layout_info.bindingCount = bindings.size();
-    layout_info.pBindings = bindings.data();
-    VkDevice device = m_vk->getDevice();
-    if (vkCreateDescriptorSetLayout(device, &layout_info, NULL,
-        &m_lighting_layout) != VK_SUCCESS)
-    {
-        throw std::runtime_error("vkCreateDescriptorSetLayout failed for "
-            "lighting in GEVulkanGlowOutline");
-    }
+    return (VkImageView)m_color->getTextureHandler();
+}   // getColorImageView
 
-    VkDescriptorPoolSize pool_size = {};
-    pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    pool_size.descriptorCount = bindings.size();
-    VkDescriptorPoolCreateInfo pool_info = {};
-    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pool_info.maxSets = 1;
-    pool_info.poolSizeCount = 1;
-    pool_info.pPoolSizes = &pool_size;
-    if (vkCreateDescriptorPool(device, &pool_info, NULL,
-        &m_lighting_pool) != VK_SUCCESS)
-    {
-        throw std::runtime_error("vkCreateDescriptorPool failed for "
-            "lighting in GEVulkanGlowOutline");
-    }
-
-    VkDescriptorSetAllocateInfo alloc_info = {};
-    alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    alloc_info.descriptorPool = m_lighting_pool;
-    alloc_info.descriptorSetCount = 1;
-    alloc_info.pSetLayouts = &m_lighting_layout;
-    if (vkAllocateDescriptorSets(device, &alloc_info, &m_lighting_set) !=
-        VK_SUCCESS)
-    {
-        throw std::runtime_error("vkAllocateDescriptorSets failed for "
-            "lighting in GEVulkanGlowOutline");
-    }
-
-    std::array<VkDescriptorImageInfo, 2> image_infos = {};
-    image_infos[0].sampler = m_vk->getSampler(GVS_NEAREST);
-    image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    image_infos[0].imageView = (VkImageView)m_color->getTextureHandler();
-    image_infos[1].sampler = m_vk->getSampler(GVS_SKYBOX);
-    image_infos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    image_infos[1].imageView = (VkImageView)m_blur[2]->getTextureHandler();
-    VkWriteDescriptorSet write = {};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = m_lighting_set;
-    write.dstBinding = 0;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.descriptorCount = image_infos.size();
-    write.pImageInfo = image_infos.data();
-    vkUpdateDescriptorSets(device, 1, &write, 0, NULL);
-}   // createLightingDescriptor
+// ----------------------------------------------------------------------------
+VkImageView GEVulkanGlowOutline::getBlurImageView() const
+{
+    return (VkImageView)m_blur[2]->getTextureHandler();
+}   // getBlurImageView
 
 // ----------------------------------------------------------------------------
 void GEVulkanGlowOutline::createBlur()
 {
     VkDevice device = m_vk->getDevice();
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings = {};
-    bindings[0].binding = 0;
-    bindings[0].descriptorCount = 1;
-    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    bindings[1].binding = 1;
-    bindings[1].descriptorCount = 1;
-    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    VkDescriptorSetLayoutCreateInfo layout_info = {};
-    layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layout_info.bindingCount = bindings.size();
-    layout_info.pBindings = bindings.data();
-    if (vkCreateDescriptorSetLayout(device, &layout_info, NULL,
-        &m_blur_layout) != VK_SUCCESS)
-    {
-        throw std::runtime_error("vkCreateDescriptorSetLayout failed for "
-            "blur in GEVulkanGlowOutline");
-    }
+    createImageDescriptorSetLayout(&m_blur_layout);
+    createImageDescriptorPool(m_blur_sets.size(), &m_blur_pool);
+    allocateImageDescriptorSets(
+        m_blur_pool, m_blur_layout, m_blur_sets.size(),
+        m_blur_sets.data());
 
     VkPushConstantRange push_constant = {};
     push_constant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -359,67 +242,32 @@ void GEVulkanGlowOutline::createBlur()
             "GEVulkanGlowOutline");
     }
 
-    std::array<VkDescriptorPoolSize, 2> pool_sizes = {};
-    pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    pool_sizes[0].descriptorCount = m_blur_sets.size();
-    pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    pool_sizes[1].descriptorCount = m_blur_sets.size();
-    VkDescriptorPoolCreateInfo pool_info = {};
-    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pool_info.maxSets = m_blur_sets.size();
-    pool_info.poolSizeCount = pool_sizes.size();
-    pool_info.pPoolSizes = pool_sizes.data();
-    if (vkCreateDescriptorPool(device, &pool_info, NULL, &m_blur_pool) !=
-        VK_SUCCESS)
-    {
-        throw std::runtime_error("vkCreateDescriptorPool failed for blur in "
-            "GEVulkanGlowOutline");
-    }
-
-    std::array<VkDescriptorSetLayout, 5> layouts;
-    layouts.fill(m_blur_layout);
-    VkDescriptorSetAllocateInfo alloc_info = {};
-    alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    alloc_info.descriptorPool = m_blur_pool;
-    alloc_info.descriptorSetCount = m_blur_sets.size();
-    alloc_info.pSetLayouts = layouts.data();
-    if (vkAllocateDescriptorSets(device, &alloc_info, m_blur_sets.data()) !=
-        VK_SUCCESS)
-    {
-        throw std::runtime_error("vkAllocateDescriptorSets failed for blur in "
-            "GEVulkanGlowOutline");
-    }
-
     // Index of m_blur, -1 is m_color
     const int inputs[5] = { -1, 0, 1, 1, 3 };
     const int outputs[5] = { 0, 1, 2, 3, 1 };
     for (unsigned i = 0; i < m_blur_sets.size(); i++)
     {
-        VkDescriptorImageInfo input = {};
-        input.sampler = m_vk->getSampler(GVS_SKYBOX);
-        input.imageLayout = i == 0 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL :
-            VK_IMAGE_LAYOUT_GENERAL;
-        input.imageView = inputs[i] < 0 ?
-            (VkImageView)m_color->getTextureHandler() :
-            (VkImageView)m_blur[inputs[i]]->getTextureHandler();
-        VkDescriptorImageInfo output = {};
-        output.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        output.imageView = (VkImageView)m_blur[outputs[i]]->getTextureHandler();
+        VkImageView input_view;
+        VkImageLayout input_layout;
 
-        std::array<VkWriteDescriptorSet, 2> writes = {};
-        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet = m_blur_sets[i];
-        writes[0].dstBinding = 0;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[0].descriptorCount = 1;
-        writes[0].pImageInfo = &input;
-        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet = m_blur_sets[i];
-        writes[1].dstBinding = 1;
-        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        writes[1].descriptorCount = 1;
-        writes[1].pImageInfo = &output;
-        vkUpdateDescriptorSets(device, writes.size(), writes.data(), 0, NULL);
+        if (inputs[i] < 0)
+        {
+            input_view =
+                (VkImageView)m_color->getTextureHandler();
+            input_layout =
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+        else
+        {
+            input_view =
+                (VkImageView)m_blur[inputs[i]]->getTextureHandler();
+            input_layout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+
+        writeImageDescriptorSet(m_blur_sets[i], input_view,
+            m_vk->getSampler(GVS_SKYBOX), input_layout,
+            (VkImageView)m_blur[outputs[i]]->getTextureHandler(),
+            VK_IMAGE_LAYOUT_GENERAL);
     }
 }   // createBlur
 

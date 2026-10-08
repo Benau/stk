@@ -555,6 +555,8 @@ begin:
             GE::getGEConfig()->m_ibl =
                 !UserConfigParams::m_degraded_IBL;
             GE::getGEConfig()->m_glow_outline = UserConfigParams::m_glow;
+            GE::getGEConfig()->m_light_scatter =
+                UserConfigParams::m_light_scatter;
             GE::getGEConfig()->m_shadow_size = UserConfigParams::m_shadows_resolution;
             GE::getGEConfig()->m_shadow_type =
                 UserConfigParams::m_pointlight_shadows ? GE::GST_COMBINED : GE::GST_SUN;
