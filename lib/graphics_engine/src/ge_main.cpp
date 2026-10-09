@@ -28,6 +28,8 @@ GEConfig g_config =
     0,
     false,
     false,
+    false,
+    "",
     GADT_DISABLED,
     GSSRT_DISABLED,
     {},
@@ -271,6 +273,8 @@ void refreshDeferredSplit()
         g_config.m_deferred_split |= 1;
     if (g_config.m_light_scatter)
         g_config.m_deferred_split |= 1 << 1;
+    if (g_config.m_bloom)
+        g_config.m_deferred_split |= 1 << 2;
 }
 
 }

@@ -13,21 +13,6 @@
 
 namespace GE
 {
-namespace
-{
-// ----------------------------------------------------------------------------
-struct BlurPushConstants
-{
-    // x0, y0, x1, y1 (exclusive) in pixels, source samples are clamped inside
-    int32_t m_src_rect[4];
-    // Pixels written
-    int32_t m_dst_rect[4];
-    uint32_t m_upscale;
-    // Multiplies the distance of the samples
-    float m_scale;
-};
-}   // anonymous namespace
-
 // ----------------------------------------------------------------------------
 GEVulkanGlowOutline::GEVulkanGlowOutline(GEVulkanDriver* vk,
                               const irr::core::dimension2d<irr::u32>& size,
@@ -202,45 +187,14 @@ VkImageView GEVulkanGlowOutline::getBlurImageView() const
 // ----------------------------------------------------------------------------
 void GEVulkanGlowOutline::createBlur()
 {
-    VkDevice device = m_vk->getDevice();
     createImageDescriptorSetLayout(&m_blur_layout);
     createImageDescriptorPool(m_blur_sets.size(), &m_blur_pool);
     allocateImageDescriptorSets(
         m_blur_pool, m_blur_layout, m_blur_sets.size(),
         m_blur_sets.data());
 
-    VkPushConstantRange push_constant = {};
-    push_constant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    push_constant.offset = 0;
-    push_constant.size = sizeof(BlurPushConstants);
-    VkPipelineLayoutCreateInfo pipeline_layout_info = {};
-    pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipeline_layout_info.setLayoutCount = 1;
-    pipeline_layout_info.pSetLayouts = &m_blur_layout;
-    pipeline_layout_info.pushConstantRangeCount = 1;
-    pipeline_layout_info.pPushConstantRanges = &push_constant;
-    if (vkCreatePipelineLayout(device, &pipeline_layout_info, NULL,
-        &m_blur_pipeline_layout) != VK_SUCCESS)
-    {
-        throw std::runtime_error("vkCreatePipelineLayout failed for blur in "
-            "GEVulkanGlowOutline");
-    }
-
-    VkComputePipelineCreateInfo pipeline_info = {};
-    pipeline_info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipeline_info.stage.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    pipeline_info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    pipeline_info.stage.module =
-        GEVulkanShaderManager::getShader("glow_outline_blur.comp");
-    pipeline_info.stage.pName = "main";
-    pipeline_info.layout = m_blur_pipeline_layout;
-    if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeline_info,
-        NULL, &m_blur_pipeline) != VK_SUCCESS)
-    {
-        throw std::runtime_error("vkCreateComputePipelines failed for blur in "
-            "GEVulkanGlowOutline");
-    }
+    createBlurPipeline("blur_unorm.comp", m_blur_layout,
+        &m_blur_pipeline_layout, &m_blur_pipeline);
 
     // Index of m_blur, -1 is m_color
     const int inputs[5] = { -1, 0, 1, 1, 3 };
@@ -273,7 +227,7 @@ void GEVulkanGlowOutline::createBlur()
 
 // ----------------------------------------------------------------------------
 void GEVulkanGlowOutline::blur(VkCommandBuffer cmd,
-                               const std::vector<BlurViewport>& viewports)
+                               const std::vector<Viewport>& viewports)
 {
     // Size level of the input and output of every set (0 = full size, 1 =
     // half, 2 = quarter, 3 = eighth)
@@ -292,7 +246,7 @@ void GEVulkanGlowOutline::blur(VkCommandBuffer cmd,
     // pixels left by the last frame), the images are shared. The barriers are
     // between all dispatches so it also avoids writing the shared border
     // pixels of two viewports at the same time
-    for (const BlurViewport& vp : viewports)
+    for (const Viewport& vp : viewports)
     {
         std::array<std::array<int32_t, 4>, 4> rects;
         rects[0] = vp.m_rect;
@@ -308,23 +262,9 @@ void GEVulkanGlowOutline::blur(VkCommandBuffer cmd,
         for (unsigned j = 0; j < count; j++)
         {
             const unsigned set = sequence[j];
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                m_blur_pipeline_layout, 0, 1, &m_blur_sets[set], 0, NULL);
-            const std::array<int32_t, 4>& src = rects[src_level[set]];
-            const std::array<int32_t, 4>& dst = rects[dst_level[set]];
-            BlurPushConstants pc = {};
-            for (unsigned i = 0; i < 4; i++)
-            {
-                pc.m_src_rect[i] = src[i];
-                pc.m_dst_rect[i] = dst[i];
-            }
-            pc.m_upscale = upscale[set];
-            pc.m_scale = scale;
-            vkCmdPushConstants(cmd, m_blur_pipeline_layout,
-                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-            const uint32_t w = (uint32_t)(dst[2] - dst[0]);
-            const uint32_t h = (uint32_t)(dst[3] - dst[1]);
-            vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
+            dispatchBlur(cmd, m_blur_pipeline_layout, m_blur_sets[set],
+                upscale[set] ? BM_UP : BM_DOWN, rects[src_level[set]],
+                rects[dst_level[set]], scale);
 
             // The next dispatch reads what was written, the last one of a
             // viewport is sampled by the lighting pass. Writing it again next
@@ -370,29 +310,15 @@ bool GEVulkanGlowOutline::render(VkCommandBuffer cmd,
 
     // Another pass could have bound other buffers
     bool rebind_base_vertex = true;
-    std::vector<BlurViewport> viewports;
-    // Same as GEVulkanDrawCall::getRenderViewport, before rotation
-    const float scale = m_vk->getSeparateRTTTexture() ? 1.0f :
-        getGEConfig()->m_render_scale;
+    std::vector<Viewport> viewports;
     for (auto& q : glow)
     {
         q.first->prepareViewport(m_vk, q.second->getViewPort(), cmd);
         q.first->renderGlowOutline(m_vk, cmd, rebind_base_vertex);
 
-        // The same viewport as prepareViewport, in pixels of the FBO
-        const VkViewport vp = q.first->getRenderViewport(m_vk,
-            q.second->getViewPort());
-        const int32_t x0 = std::max(0, (int32_t)vp.x);
-        const int32_t y0 = std::max(0, (int32_t)vp.y);
-        const int32_t x1 = std::min((int32_t)m_size.Width,
-            (int32_t)vp.x + (int32_t)vp.width);
-        const int32_t y1 = std::min((int32_t)m_size.Height,
-            (int32_t)vp.y + (int32_t)vp.height);
-        if (x1 > x0 && y1 > y0)
-        {
-            viewports.push_back({ {{ x0, y0, x1, y1 }},
-                q.second->getViewPort().getHeight() * scale });
-        }
+        Viewport vp;
+        if (getViewport(q.first, q.second, &vp))
+            viewports.push_back(vp);
     }
     vkCmdEndRenderPass(cmd);
 

@@ -557,6 +557,12 @@ begin:
             GE::getGEConfig()->m_glow_outline = UserConfigParams::m_glow;
             GE::getGEConfig()->m_light_scatter =
                 UserConfigParams::m_light_scatter;
+            GE::getGEConfig()->m_bloom = UserConfigParams::m_bloom;
+            // Same lens dust as the OpenGL bloom (bloomblend.frag)
+            GE::getGEConfig()->m_bloom_blend_texture =
+                file_manager->getFileSystem()->getAbsolutePath(
+                file_manager->getAsset(FileManager::TEXTURE,
+                "gfx_lensDust_a.png").c_str()).c_str();
             GE::getGEConfig()->m_shadow_size = UserConfigParams::m_shadows_resolution;
             GE::getGEConfig()->m_shadow_type =
                 UserConfigParams::m_pointlight_shadows ? GE::GST_COMBINED : GE::GST_SUN;

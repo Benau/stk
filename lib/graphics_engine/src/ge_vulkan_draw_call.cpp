@@ -8,6 +8,7 @@
 #include "ge_spm_buffer.hpp"
 #include "ge_vulkan_animated_mesh_scene_node.hpp"
 #include "ge_vulkan_billboard_buffer.hpp"
+#include "ge_vulkan_bloom.hpp"
 #include "ge_vulkan_camera_scene_node.hpp"
 #include "ge_vulkan_combined_shadow_fbo.hpp"
 #include "ge_vulkan_deferred_fbo.hpp"
@@ -1305,6 +1306,8 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         uint32_t m_point_shadow_limit;
         VkBool32 m_glow_outline;
         VkBool32 m_light_scatter;
+        VkBool32 m_bloom;
+        VkBool32 m_bloom_blend;
     };
     Constants constants = {};
     constants.m_ibl = getGEConfig()->m_pbr && getGEConfig()->m_ibl &&
@@ -1313,7 +1316,8 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     constants.m_specular_levels_minus_one = std::floor(std::log2(ts));
     constants.m_deferred = !m_deferred_layouts.empty();
     {
-        // Of lighting_composite.frag, decided when the FBO is created
+        // Of lighting_composite.frag and deferred_convert_color.frag, decided when
+        // the FBO is created
         GEVulkanFBOTexture* rtt = vk->getRTTTexture();
         if (!isShadow() && rtt && rtt->isSplit())
         {
@@ -1321,6 +1325,8 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
                 static_cast<GEVulkanDeferredFBOSplit*>(rtt);
             constants.m_glow_outline = split->hasGlowOutline();
             constants.m_light_scatter = split->hasLightScatter();
+            constants.m_bloom = split->hasBloom();
+            constants.m_bloom_blend = split->hasBloomBlend();
         }
     }
     constants.m_offscreen_rtt = offscreen_rtt;
@@ -1347,7 +1353,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         constants.m_shadow_type = getGEConfig()->m_shadow_type;
         constants.m_point_shadow_limit = getGEConfig()->m_point_shadow_limit;
     }
-    std::array<VkSpecializationMapEntry, 11> specialization_entries = {};
+    std::array<VkSpecializationMapEntry, 13> specialization_entries = {};
     specialization_entries[0].constantID = 0;
     specialization_entries[0].offset = offsetof(Constants, m_ibl);
     specialization_entries[0].size = sizeof(VkBool32);
@@ -1383,6 +1389,12 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     specialization_entries[10].constantID = 10;
     specialization_entries[10].offset = offsetof(Constants, m_light_scatter);
     specialization_entries[10].size = sizeof(VkBool32);
+    specialization_entries[11].constantID = 11;
+    specialization_entries[11].offset = offsetof(Constants, m_bloom);
+    specialization_entries[11].size = sizeof(VkBool32);
+    specialization_entries[12].constantID = 12;
+    specialization_entries[12].offset = offsetof(Constants, m_bloom_blend);
+    specialization_entries[12].size = sizeof(VkBool32);
     VkSpecializationInfo specialization_info = {};
     specialization_info.mapEntryCount = specialization_entries.size();
     specialization_info.pMapEntries = specialization_entries.data();
@@ -2392,10 +2404,10 @@ void GEVulkanDrawCall::renderDeferredLighting(GEVulkanDriver* vk,
 
 // ----------------------------------------------------------------------------
 void GEVulkanDrawCall::renderDeferredConvertColor(GEVulkanDriver* vk,
-                                                  VkCommandBuffer cmd)
+                                    VkCommandBuffer cmd,
+                                    const GEVulkanBloomRects* bloom_rects)
 {
-    if (m_deferred_layouts.empty() ||
-        (m_visible_nodes.empty() && !m_skybox_renderer))
+    if (!hasDeferredOutput())
         return;
     auto& pl = m_graphics_pipelines.at("deferred_convert_color").m_pipelines;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -2403,6 +2415,18 @@ void GEVulkanDrawCall::renderDeferredConvertColor(GEVulkanDriver* vk,
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
         m_deferred_layouts[GVDFP_CONVERT_COLOR], 0, 1,
         vk->getRTTTexture()->getDescriptorSet(GVDFP_CONVERT_COLOR), 0, NULL);
+    GEVulkanFBOTexture* rtt = vk->getRTTTexture();
+    if (rtt->isSplit() &&
+        static_cast<GEVulkanDeferredFBOSplit*>(rtt)->hasBloom())
+    {
+        // Empty if this draw call has no valid bloom (see
+        // deferred_convert_color.frag)
+        GEVulkanBloomRects rects = {};
+        if (bloom_rects)
+            rects = *bloom_rects;
+        vkCmdPushConstants(cmd, m_deferred_layouts[GVDFP_CONVERT_COLOR],
+            VK_SHADER_STAGE_ALL_GRAPHICS, 0, sizeof(rects), &rects);
+    }
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }   // renderDeferredConvertColor
 

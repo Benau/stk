@@ -16,8 +16,9 @@ namespace GE
 // 1. For each viewport (draw call) at half the size of it, light_scatter.comp
 //    marches the ray of every pixel in the fog lit by the lights, using the
 //    camera and light data of the draw call and the depth of the g-buffer.
-// 2. light_scatter_blur.comp blurs it horizontally and then vertically, never
-//    reading outside of the rect of the viewport.
+// 2. blur_hdr.comp (the gaussian mode of utils/blur.glsl) blurs it
+//    horizontally and then vertically, never reading outside of the rect of
+//    the viewport.
 // 3. The lighting pass adds it to hdr together with the glow outline (see
 //    lighting_composite.frag and GEVulkanDrawCall::renderLightingComposite),
 //    so it's above the fog of the lit geometry and the sky

@@ -31,6 +31,7 @@ namespace irr
 namespace GE
 {
 class GECullingTool;
+struct GEVulkanBloomRects;
 class GESPMBuffer;
 class GEVulkanCameraSceneNode;
 class GEVulkanDriver;
@@ -369,7 +370,20 @@ public:
     // ------------------------------------------------------------------------
     void renderDeferredLighting(GEVulkanDriver* vk, VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
-    void renderDeferredConvertColor(GEVulkanDriver* vk, VkCommandBuffer cmd);
+    // bloom_rects are the areas of the bloom images (see
+    // GEVulkanBloom::getRects) of this draw call, NULL if there is none (only
+    // used if the FBO has bloom, the tonemap shader adds it to hdr)
+    void renderDeferredConvertColor(GEVulkanDriver* vk, VkCommandBuffer cmd,
+                                    const GEVulkanBloomRects* bloom_rects);
+    // ------------------------------------------------------------------------
+    // True if renderDeferredLighting and renderDeferredConvertColor draw
+    // anything of this draw call (the deferred FBO is used, and any mesh or
+    // sky is visible)
+    bool hasDeferredOutput() const
+    {
+        return !m_deferred_layouts.empty() &&
+            (!m_visible_nodes.empty() || m_skybox_renderer);
+    }
     // ------------------------------------------------------------------------
     void renderDisplaceColor(GEVulkanDriver* vk, VkCommandBuffer cmd,
                              VkBool32 has_displace);

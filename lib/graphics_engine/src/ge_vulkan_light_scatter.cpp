@@ -13,20 +13,6 @@
 
 namespace GE
 {
-namespace
-{
-// ----------------------------------------------------------------------------
-struct BlurPushConstants
-{
-    // x0, y0, x1, y1 (exclusive) in pixels of the scatter image
-    int32_t m_rect[4];
-    // (1, 0) = horizontal, (0, 1) = vertical
-    int32_t m_direction[2];
-    // Multiplies the distance of the samples
-    float m_scale;
-};
-}   // anonymous namespace
-
 // ----------------------------------------------------------------------------
 GEVulkanLightScatter::GEVulkanLightScatter(GEVulkanDriver* vk,
                               const irr::core::dimension2d<irr::u32>& size,
@@ -135,39 +121,8 @@ void GEVulkanLightScatter::createDescriptors(GEVulkanAttachmentTexture* depth)
 // ----------------------------------------------------------------------------
 void GEVulkanLightScatter::createBlurPipeline()
 {
-    VkDevice device = m_vk->getDevice();
-    VkPushConstantRange push_constant = {};
-    push_constant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    push_constant.offset = 0;
-    push_constant.size = sizeof(BlurPushConstants);
-    VkPipelineLayoutCreateInfo pipeline_layout_info = {};
-    pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipeline_layout_info.setLayoutCount = 1;
-    pipeline_layout_info.pSetLayouts = &m_layout;
-    pipeline_layout_info.pushConstantRangeCount = 1;
-    pipeline_layout_info.pPushConstantRanges = &push_constant;
-    if (vkCreatePipelineLayout(device, &pipeline_layout_info, NULL,
-        &m_blur_pipeline_layout) != VK_SUCCESS)
-    {
-        throw std::runtime_error("vkCreatePipelineLayout failed for blur in "
-            "GEVulkanLightScatter");
-    }
-
-    VkComputePipelineCreateInfo pipeline_info = {};
-    pipeline_info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipeline_info.stage.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    pipeline_info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    pipeline_info.stage.module =
-        GEVulkanShaderManager::getShader("light_scatter_blur.comp");
-    pipeline_info.stage.pName = "main";
-    pipeline_info.layout = m_blur_pipeline_layout;
-    if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeline_info,
-        NULL, &m_blur_pipeline) != VK_SUCCESS)
-    {
-        throw std::runtime_error("vkCreateComputePipelines failed for blur in "
-            "GEVulkanLightScatter");
-    }
+    GEVulkanPostProcessing::createBlurPipeline("blur_hdr.comp", m_layout,
+        &m_blur_pipeline_layout, &m_blur_pipeline);
 }   // createBlurPipeline
 
 // ----------------------------------------------------------------------------
@@ -247,43 +202,15 @@ bool GEVulkanLightScatter::render(VkCommandBuffer cmd,
             NULL);
     }
 
-    struct Viewport
-    {
-        // x0, y0, x1, y1 in pixels of the FBO
-        std::array<int32_t, 4> m_rect;
-        // Height of the viewport in pixels of the FBO, without rotation
-        float m_height;
-    };
     std::vector<Viewport> viewports;
-    std::vector<GEVulkanDrawCall*> draw_calls;
-    // Same as GEVulkanDrawCall::getRenderViewport, before rotation
-    const float scale = m_vk->getSeparateRTTTexture() ? 1.0f :
-        getGEConfig()->m_render_scale;
     for (auto& q : list)
     {
-        // The same viewport as prepareViewport, in pixels of the FBO
-        const VkViewport vp = q.first->getRenderViewport(m_vk,
-            q.second->getViewPort());
-        const int32_t x0 = std::max(0, (int32_t)vp.x);
-        const int32_t y0 = std::max(0, (int32_t)vp.y);
-        const int32_t x1 = std::min((int32_t)m_size.Width,
-            (int32_t)vp.x + (int32_t)vp.width);
-        const int32_t y1 = std::min((int32_t)m_size.Height,
-            (int32_t)vp.y + (int32_t)vp.height);
-        if (x1 > x0 && y1 > y0)
-        {
-            viewports.push_back({ {{ x0, y0, x1, y1 }},
-                q.second->getViewPort().getHeight() * scale });
-            draw_calls.push_back(q.first);
-        }
+        Viewport vp;
+        if (getViewport(q.first, q.second, &vp))
+            viewports.push_back(vp);
     }
     if (viewports.empty())
         return false;
-
-    VkMemoryBarrier compute_barrier = {};
-    compute_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    compute_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    compute_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
     // 1. Every viewport marches its rays, with its own camera and lights
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
@@ -291,7 +218,7 @@ bool GEVulkanLightScatter::render(VkCommandBuffer cmd,
         m_pipeline_layout, 0, 1, &m_sets[0], 0, NULL);
     for (unsigned i = 0; i < viewports.size(); i++)
     {
-        draw_calls[i]->bindDataDescriptorSet(m_vk, cmd,
+        viewports[i].m_draw_call->bindDataDescriptorSet(m_vk, cmd,
             VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline_layout, 1);
         const std::array<int32_t, 4>& r = viewports[i].m_rect;
         int32_t rect[4] = { r[0], r[1], r[2], r[3] };
@@ -302,41 +229,26 @@ bool GEVulkanLightScatter::render(VkCommandBuffer cmd,
         const uint32_t h = (uint32_t)(((r[3] + 1) >> 1) - (r[1] >> 1));
         vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
     }
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &compute_barrier, 0, NULL,
-        0, NULL);
+    computeToComputeBarrier(cmd, 0);
 
-    // 2. Horizontal and then vertical blur, one dispatch per viewport. The
-    // barriers are between all of them so it also avoids writing the shared
-    // border pixels of two viewports at the same time
+    // 2. Horizontal and then vertical blur, one dispatch per viewport, which
+    // only reads inside of its own rect (a pixel at an odd border can be
+    // written by two viewports, each with only its own pixels)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_blur_pipeline);
     for (unsigned pass = 0; pass < 2; pass++)
     {
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-            m_blur_pipeline_layout, 0, 1, &m_sets[pass + 1], 0, NULL);
         for (const Viewport& vp : viewports)
         {
-            BlurPushConstants pc = {};
-            pc.m_rect[0] = vp.m_rect[0] >> 1;
-            pc.m_rect[1] = vp.m_rect[1] >> 1;
-            pc.m_rect[2] = (vp.m_rect[2] + 1) >> 1;
-            pc.m_rect[3] = (vp.m_rect[3] + 1) >> 1;
-            pc.m_direction[0] = pass == 0 ? 1 : 0;
-            pc.m_direction[1] = pass == 0 ? 0 : 1;
-            pc.m_scale = std::min(std::max(vp.m_height / REFERENCE_HEIGHT,
-                0.25f), 2.5f);
-            vkCmdPushConstants(cmd, m_blur_pipeline_layout,
-                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-            const uint32_t w = (uint32_t)(pc.m_rect[2] - pc.m_rect[0]);
-            const uint32_t h = (uint32_t)(pc.m_rect[3] - pc.m_rect[1]);
-            vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
+            // Covers all the pixels of the rect, in the half size image
+            const std::array<int32_t, 4> rect = halfRect(vp.m_rect);
+            const float scale = std::min(std::max(vp.m_height /
+                REFERENCE_HEIGHT, 0.25f), 2.5f);
+            dispatchBlur(cmd, m_blur_pipeline_layout, m_sets[pass + 1],
+                BM_GAUSSIAN, rect, rect, scale, 0.0f,
+                pass == 0 ? 1 : 0, pass == 0 ? 0 : 1);
         }
         if (pass == 0)
-        {
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &compute_barrier,
-                0, NULL, 0, NULL);
-        }
+            computeToComputeBarrier(cmd, 0);
     }
 
     // 3. Sampled by the lighting pass

@@ -1,0 +1,14 @@
+// Blur of hdr colors (light scattering and bloom), see utils/blur.glsl. Alpha
+// is not needed and the values are never negative, B10G11R11 has the range and
+// half of the memory of RGBA16F (storage image support of it is optional)
+#ifdef SHADER_STORAGE_IMAGE_EXTENDED_FORMATS
+#define BLUR_FORMAT r11f_g11f_b10f
+#else
+#define BLUR_FORMAT rgba16f
+#endif
+#include "utils/blur.glsl"
+
+void main()
+{
+    blurMain();
+}

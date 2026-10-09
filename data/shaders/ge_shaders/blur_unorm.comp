@@ -1,0 +1,13 @@
+// Blur of colors in [0, 1] (glow outline), see utils/blur.glsl. A2B10G10R10
+// has better precision than 8-bit RGBA, alpha is not needed
+#ifdef SHADER_STORAGE_IMAGE_EXTENDED_FORMATS
+#define BLUR_FORMAT rgb10_a2
+#else
+#define BLUR_FORMAT rgba8
+#endif
+#include "utils/blur.glsl"
+
+void main()
+{
+    blurMain();
+}
