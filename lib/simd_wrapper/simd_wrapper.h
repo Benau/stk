@@ -101,6 +101,8 @@
 #define _MM_ROUND_DOWN SIMDE_MM_ROUND_DOWN
 #endif
 
+#include <stdlib.h>
+
 // Utilities for aligned allocation
 inline void* simd_aligned_alloc(size_t alignment, size_t bytes)
 {

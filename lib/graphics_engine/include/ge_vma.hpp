@@ -11,8 +11,7 @@
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
 
 #elif defined(IOS_STK)
-// MoltenVK doesn't provide full 1.3 support, which will lead to linking errors
-#define VMA_VULKAN_VERSION 1002000
+#define VMA_VULKAN_VERSION 1003000
 
 #endif
 #include "vk_mem_alloc.h"
