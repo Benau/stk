@@ -109,6 +109,8 @@ private:
     std::vector<std::pair<const GEVulkanDrawCall*, GEVulkanBloomRects> >
         m_active;
     // ------------------------------------------------------------------------
+    void destroy();
+    // ------------------------------------------------------------------------
     void createDescriptors(GEVulkanAttachmentTexture* hdr);
 public:
     // ------------------------------------------------------------------------

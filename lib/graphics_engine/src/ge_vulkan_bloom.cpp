@@ -47,43 +47,58 @@ GEVulkanBloom::GEVulkanBloom(GEVulkanDriver* vk,
                m_pipeline(VK_NULL_HANDLE)
 {
     m_sets.fill(VK_NULL_HANDLE);
+    m_levels.fill(NULL);
     m_streak.fill(NULL);
     m_streak_sets.fill(VK_NULL_HANDLE);
-    // Same as the light scattering: no alpha is needed and the values are
-    // never negative
-    VkFormat format = VK_FORMAT_R16G16B16A16_SFLOAT;
-    if (GEVulkanFeatures::supportsShaderStorageImageExtendedFormats())
-        format = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
-    const VkImageUsageFlags usage =
-        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    irr::core::dimension2d<irr::u32> level_size = size;
-    for (GEVulkanAttachmentTexture*& t : m_levels)
+    try
     {
-        level_size = halfSize(level_size);
-        t = new GEVulkanAttachmentTexture(vk, level_size, format, usage,
-            VK_IMAGE_ASPECT_COLOR_BIT);
-    }
-
-    // The images stay in general layout forever
-    initializeGeneralImages(m_levels.data(), m_levels.size());
-    if (STREAK_MIX > 0.0f)
-    {
-        for (unsigned i = 0; i < STREAK_LEVELS; i++)
+        // Same as the light scattering: no alpha is needed and the values are
+        // never negative
+        VkFormat format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        if (GEVulkanFeatures::supportsShaderStorageImageExtendedFormats())
+            format = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+        const VkImageUsageFlags usage =
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        irr::core::dimension2d<irr::u32> level_size = size;
+        for (GEVulkanAttachmentTexture*& t : m_levels)
         {
-            m_streak[i] = new GEVulkanAttachmentTexture(vk,
-                m_levels[i + 1]->getSize(), format, usage,
+            level_size = halfSize(level_size);
+            t = new GEVulkanAttachmentTexture(vk, level_size, format, usage,
                 VK_IMAGE_ASPECT_COLOR_BIT);
         }
-        initializeGeneralImages(m_streak.data(), m_streak.size());
-    }
 
-    createDescriptors(hdr);
-    createBlurPipeline("blur_hdr.comp", m_layout, &m_pipeline_layout,
-        &m_pipeline);
+        // The images stay in general layout forever
+        initializeGeneralImages(m_levels.data(), m_levels.size());
+        if (STREAK_MIX > 0.0f)
+        {
+            for (unsigned i = 0; i < STREAK_LEVELS; i++)
+            {
+                m_streak[i] = new GEVulkanAttachmentTexture(vk,
+                    m_levels[i + 1]->getSize(), format, usage,
+                    VK_IMAGE_ASPECT_COLOR_BIT);
+            }
+            initializeGeneralImages(m_streak.data(), m_streak.size());
+        }
+
+        createDescriptors(hdr);
+        createBlurPipeline("blur_hdr.comp", m_layout, &m_pipeline_layout,
+            &m_pipeline);
+    }
+    catch (...)
+    {
+        destroy();
+        throw;
+    }
 }   // GEVulkanBloom
 
 // ----------------------------------------------------------------------------
 GEVulkanBloom::~GEVulkanBloom()
+{
+    destroy();
+}   // ~GEVulkanBloom
+
+// ----------------------------------------------------------------------------
+void GEVulkanBloom::destroy()
 {
     VkDevice device = m_vk->getDevice();
     if (m_pipeline != VK_NULL_HANDLE)
@@ -99,7 +114,7 @@ GEVulkanBloom::~GEVulkanBloom()
         delete t;
     for (GEVulkanAttachmentTexture* t : m_streak)
         delete t;
-}   // ~GEVulkanBloom
+}   // destroy
 
 // ----------------------------------------------------------------------------
 VkImageView GEVulkanBloom::getImageView() const

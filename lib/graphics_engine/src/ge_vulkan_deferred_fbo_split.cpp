@@ -210,23 +210,45 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
     // to be true if this class is used (see GEVulkanDriver)
     assert(getGEConfig()->m_deferred_split != 0);
     initSplitGBufferDescriptor(vk);
-    if (getGEConfig()->m_glow_outline &&
-        GEVulkanFeatures::supportsComputeInMainQueue())
+    bool supports_compute = GEVulkanFeatures::supportsComputeInMainQueue();
+    if (supports_compute && getGEConfig()->m_glow_outline)
     {
-        m_glow_outline.reset(new GEVulkanGlowOutline(vk, getSize(),
-            m_depth_texture));
+        try
+        {
+            m_glow_outline.reset(new GEVulkanGlowOutline(vk, getSize(),
+                m_depth_texture));
+        }
+        catch (const std::exception& e)
+        {
+            printf("Failed to initialize glow outline: %s\n", e.what());
+            m_glow_outline.reset();
+        }
     }
-    if (getGEConfig()->m_light_scatter &&
-        GEVulkanFeatures::supportsComputeInMainQueue())
+    if (supports_compute && getGEConfig()->m_light_scatter)
     {
-        m_light_scatter.reset(new GEVulkanLightScatter(vk, getSize(),
-            m_depth_texture));
+        try
+        {
+            m_light_scatter.reset(new GEVulkanLightScatter(vk, getSize(),
+                m_depth_texture));
+        }
+        catch (const std::exception& e)
+        {
+            printf("Failed to initialize light scattering: %s\n", e.what());
+            m_light_scatter.reset();
+        }
     }
-    if (getGEConfig()->m_bloom &&
-        GEVulkanFeatures::supportsComputeInMainQueue())
+    if (supports_compute && getGEConfig()->m_bloom)
     {
-        m_bloom.reset(new GEVulkanBloom(vk, getSize(),
-            m_attachments[GVDFT_HDR]));
+        try
+        {
+            m_bloom.reset(new GEVulkanBloom(vk, getSize(),
+                m_attachments[GVDFT_HDR]));
+        }
+        catch (const std::exception& e)
+        {
+            printf("Failed to initialize bloom: %s\n", e.what());
+            m_bloom.reset();
+        }
     }
     if (m_glow_outline || m_light_scatter)
         initLightingCompositeDescriptor(vk);
