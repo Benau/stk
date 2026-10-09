@@ -2,10 +2,12 @@
 
 #include "ge_main.hpp"
 #include "ge_vulkan_attachment_texture.hpp"
+#include "ge_vulkan_bloom.hpp"
 #include "ge_vulkan_camera_scene_node.hpp"
 #include "ge_vulkan_draw_call.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_features.hpp"
+#include "ge_vulkan_texture.hpp"
 #include "ge_vulkan_glow_outline.hpp"
 #include "ge_vulkan_hiz_depth.hpp"
 #include "ge_vulkan_light_scatter.hpp"
@@ -200,14 +202,14 @@ void createSamplerDescriptor(GEVulkanDriver* vk, unsigned count,
 GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
                                           const core::dimension2d<u32>& size,
                                           bool swapchain_output)
-                        : GEVulkanDeferredFBO(vk, size, swapchain_output)
+                        : GEVulkanDeferredFBO(vk, size, swapchain_output),
+                          m_bloom_blend_texture(NULL)
 {
     // GEVulkanDeferredFBO creates attachments with sampled usage and no input
     // attachment descriptors if m_deferred_split != 0, which is expected
     // to be true if this class is used (see GEVulkanDriver)
     assert(getGEConfig()->m_deferred_split != 0);
     initSplitGBufferDescriptor(vk);
-    initSplitConvertColorDescriptor(vk);
     if (getGEConfig()->m_glow_outline &&
         GEVulkanFeatures::supportsComputeInMainQueue())
     {
@@ -220,13 +222,23 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
         m_light_scatter.reset(new GEVulkanLightScatter(vk, getSize(),
             m_depth_texture));
     }
+    if (getGEConfig()->m_bloom &&
+        GEVulkanFeatures::supportsComputeInMainQueue())
+    {
+        m_bloom.reset(new GEVulkanBloom(vk, getSize(),
+            m_attachments[GVDFT_HDR]));
+    }
     if (m_glow_outline || m_light_scatter)
         initLightingCompositeDescriptor(vk);
+    // After the bloom, which is in it
+    initSplitConvertColorDescriptor(vk);
 }   // GEVulkanDeferredFBOSplit
 
 // ----------------------------------------------------------------------------
 GEVulkanDeferredFBOSplit::~GEVulkanDeferredFBOSplit()
 {
+    if (m_bloom_blend_texture)
+        m_bloom_blend_texture->drop();
 }   // ~GEVulkanDeferredFBOSplit
 
 // ----------------------------------------------------------------------------
@@ -295,11 +307,66 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
 void GEVulkanDeferredFBOSplit::initSplitConvertColorDescriptor(
                                                             GEVulkanDriver* vk)
 {
-    std::array<VkDescriptorImageInfo, 1> image_infos = {};
+    std::array<VkDescriptorImageInfo, 4> image_infos = {};
     image_infos[0].sampler = vk->getSampler(GVS_NEAREST);
     image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     image_infos[0].imageView =
         (VkImageView)m_attachments[GVDFT_HDR]->getTextureHandler();
+    // Linear for the upscale of the bloom. Without bloom it's a transparent
+    // texture, which is not used (specialization constant of
+    // deferred_convert_color.frag) but a descriptor which was never written is
+    // a validation error
+    image_infos[1].sampler = vk->getSampler(GVS_SKYBOX);
+    if (m_bloom)
+    {
+        image_infos[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[1].imageView = m_bloom->getImageView();
+    }
+    else
+    {
+        image_infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        if (vk->getTransparentTexture())
+        {
+            image_infos[1].imageView =
+                (VkImageView)vk->getTransparentTexture()->getTextureHandler();
+        }
+    }
+    // The widest level of the bloom, and the blend texture which is multiplied
+    // by it (both transparent if they are not used, same as above)
+    VkImageView unused = VK_NULL_HANDLE;
+    if (vk->getTransparentTexture())
+        unused = (VkImageView)vk->getTransparentTexture()->getTextureHandler();
+    for (unsigned i = 2; i < image_infos.size(); i++)
+    {
+        image_infos[i].sampler = vk->getSampler(GVS_SKYBOX);
+        image_infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        image_infos[i].imageView = unused;
+    }
+    if (m_bloom)
+    {
+        image_infos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[2].imageView = m_bloom->getWideImageView();
+        const std::string& path = getGEConfig()->m_bloom_blend_texture;
+        if (!path.empty())
+        {
+            m_bloom_blend_texture = new GEVulkanTexture(path);
+            if (m_bloom_blend_texture &&
+                m_bloom_blend_texture->loadingFailed())
+            {
+                m_bloom_blend_texture->drop();
+                m_bloom_blend_texture = NULL;
+            }
+        }
+        if (m_bloom_blend_texture)
+        {
+            // The transparent one is returned if it's not loaded, so it's not
+            // used then
+            VkImageView view =
+                (VkImageView)m_bloom_blend_texture->getTextureHandler();
+            if (view != unused)
+                image_infos[3].imageView = view;
+        }
+    }
     createSamplerDescriptor(vk, image_infos.size(),
         &m_descriptor_layout[GVDFP_CONVERT_COLOR],
         &m_descriptor_pool[GVDFP_CONVERT_COLOR],
@@ -611,7 +678,11 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         vkCmdEndRenderPass(cmd);
     }
 
-    // 4. tonemap, then ghost and transparent materials
+    // 4. bloom of the finished hdr (compute shaders only)
+    const bool has_bloom = m_bloom && m_bloom->render(cmd, p);
+
+    // 5. tonemap (and the bloom is added to hdr), then ghost and transparent
+    // materials
     {
         VkClearValue clear = {};
         beginPass(cmd, GVDSP_TONEMAP,
@@ -621,7 +692,10 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         {
             if (multiple_viewports)
                 q.first->prepareViewport(m_vk, q.second->getViewPort(), cmd);
-            q.first->renderDeferredConvertColor(m_vk, cmd);
+            GEVulkanBloomRects bloom_rects;
+            q.first->renderDeferredConvertColor(m_vk, cmd,
+                has_bloom && m_bloom->getRects(q.first, &bloom_rects) ?
+                &bloom_rects : NULL);
             if (bind_mesh_textures)
                 q.first->bindAllMaterials(cmd);
             else
@@ -637,7 +711,7 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         return;
     vkCmdEndRenderPass(cmd);
 
-    // 5. displace, the mask is skipped if no material uses it, but the color
+    // 6. displace, the mask is skipped if no material uses it, but the color
     // pass is always rendered (a copy of the tonemap output then)
     bool has_displace = false;
     for (auto& q : p)

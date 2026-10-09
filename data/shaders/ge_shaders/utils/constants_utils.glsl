@@ -14,6 +14,10 @@ layout (constant_id = 8) const uint u_point_shadow_limit = 0;
 // Of the split deferred FBO (see lighting_composite.frag)
 layout (constant_id = 9) const bool u_glow_outline = false;
 layout (constant_id = 10) const bool u_light_scatter = false;
+// Of deferred_convert_color.frag, bloom is added to hdr before tonemap
+layout (constant_id = 11) const bool u_bloom = false;
+// The blend texture (lens dust) of the bloom is also added (needs u_bloom)
+layout (constant_id = 12) const bool u_bloom_blend = false;
 
 vec3 convertColor(vec3 input_color)
 {

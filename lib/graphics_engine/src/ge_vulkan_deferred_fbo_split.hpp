@@ -7,6 +7,7 @@
 
 namespace GE
 {
+class GEVulkanBloom;
 class GEVulkanGlowOutline;
 class GEVulkanLightScatter;
 
@@ -26,7 +27,11 @@ class GEVulkanLightScatter;
 //                viewport has fog and lights]
 //   lighting   : (g-buffer as textures) -> hdr, skybox, [blurred glow and
 //                light scattering, added together]
-//   tonemap    : (hdr as texture) -> output, then ghost / transparent
+//   [bloom     : compute shaders only, bloom of the finished hdr, see
+//                GEVulkanBloom, if it's enabled and any viewport has anything
+//                to draw]
+//   tonemap    : (hdr as texture, and the bloom is added to it in the same
+//                pass) -> output, then ghost / transparent
 //   [displace mask -> displace color, only if the FBO has displace support]
 //
 // The output of the tonemap pass is the swapchain image when there is no
@@ -60,6 +65,13 @@ private:
 
     // Same, NULL if light scattering is not enabled
     std::unique_ptr<GEVulkanLightScatter> m_light_scatter;
+
+    // Same, NULL if bloom is not enabled
+    std::unique_ptr<GEVulkanBloom> m_bloom;
+
+    // GEConfig::m_bloom_blend_texture, loaded by this FBO (NULL if there is
+    // none or it failed to load)
+    irr::video::ITexture* m_bloom_blend_texture;
 public:
     // ------------------------------------------------------------------------
     GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
@@ -83,6 +95,14 @@ public:
     // Same for GVPT_LIGHTING_COMPOSITE (GVDFP_LIGHTING_COMPOSITE is the
     // descriptor of it), which draws them both
     bool hasLightScatter() const            { return m_light_scatter != NULL; }
+    // ------------------------------------------------------------------------
+    // Same for the bloom which deferred_convert_color.frag adds to hdr
+    // (the second binding of GVDFP_CONVERT_COLOR, the widest level of it and
+    // the blend texture are the third and fourth)
+    bool hasBloom() const                           { return m_bloom != NULL; }
+    // ------------------------------------------------------------------------
+    // Same for the blend texture (lens dust) of the bloom
+    bool hasBloomBlend() const        { return m_bloom_blend_texture != NULL; }
     // ------------------------------------------------------------------------
     // pipeline_type is a GEVulkanPipelineType, the render pass which a
     // pipeline of this type is used in
