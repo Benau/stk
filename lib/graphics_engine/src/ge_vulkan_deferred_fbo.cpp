@@ -273,7 +273,7 @@ void GEVulkanDeferredFBO::render(VkCommandBuffer cmd,
     {
         if (multiple_viewports)
             q.first->prepareViewport(m_vk, q.second->getViewPort(), cmd);
-        q.first->renderDeferredConvertColor(m_vk, cmd);
+        q.first->renderDeferredConvertColor(m_vk, cmd, NULL);
         if (bind_mesh_textures)
             q.first->bindAllMaterials(cmd);
         else

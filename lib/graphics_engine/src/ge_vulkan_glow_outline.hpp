@@ -16,7 +16,7 @@ namespace GE
 //    depth attachment and depth test equal, so only the visible part of the
 //    meshes is drawn, as the color of the glow.
 // 2. The glow color is downscaled twice and upscaled once by a compute shader
-//    (dual filter blur) for each viewport, which never reads outside of the
+//    (dual filter blur, blur_unorm.comp) for each viewport, which never reads outside of the
 //    rect of the viewport so the glow doesn't leak into another viewport.
 // 3. The lighting pass (see GEVulkanDrawCall::renderLightingComposite, the
 //    same draw adds the light scattering) adds the blur with the area of the
@@ -56,19 +56,10 @@ private:
     // ------------------------------------------------------------------------
     void createBlur();
     // ------------------------------------------------------------------------
-    struct BlurViewport
-    {
-        // x0, y0, x1, y1 in pixels of the FBO
-        std::array<int32_t, 4> m_rect;
-        // Height of the viewport in pixels of the FBO, without rotation
-        float m_height;
-    };
-    // ------------------------------------------------------------------------
     // The width of the glow is a fixed fraction of the height of each
     // viewport (the look at 1080 pixels high is the reference), so it doesn't
     // depend on the resolution, render scale or splitscreen
-    void blur(VkCommandBuffer cmd,
-              const std::vector<BlurViewport>& viewports);
+    void blur(VkCommandBuffer cmd, const std::vector<Viewport>& viewports);
 public:
     // ------------------------------------------------------------------------
     // The depth is the one of the g-buffer, which is in read only depth layout

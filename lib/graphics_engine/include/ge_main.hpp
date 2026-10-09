@@ -63,6 +63,14 @@ bool m_glow_outline;
 // Light scattering of point lights in fog (needs the split deferred FBO and
 // compute in the main queue, see GEVulkanLightScatter)
 bool m_light_scatter;
+// Bloom of the finished hdr color (needs the split deferred FBO and compute in
+// the main queue, see GEVulkanBloom)
+bool m_bloom;
+// Full path of an optional texture (lens dust for example) which the widest
+// blur of the bloom is multiplied by and added to it, mapped on the whole
+// viewport. Empty if there is none. It's loaded (and owned) by the deferred FBO
+// so it must be set before the driver (or updateDriver) creates it
+std::string m_bloom_blend_texture;
 GEAutoDeferredType m_auto_deferred_type;
 GEScreenSpaceReflectionType m_screen_space_reflection_type;
 std::unordered_set<std::string> m_ondemand_load_texture_paths;
