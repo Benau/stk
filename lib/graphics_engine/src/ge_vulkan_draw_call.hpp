@@ -277,6 +277,8 @@ protected:
     std::array<irr::video::E_MATERIAL_TYPE,
         irr::video::EMT_MATERIAL_COUNT> m_fallback_materials;
 
+    irr::scene::IMesh* m_lightning_mesh;
+
     // ------------------------------------------------------------------------
     void initNonPBRFallbackMaterials();
     // ------------------------------------------------------------------------
@@ -447,7 +449,9 @@ public:
     // ------------------------------------------------------------------------
     void addLightNode(irr::scene::ILightSceneNode* node);
     // ------------------------------------------------------------------------
-    bool hasShaderForRendering(const std::string& shader)
+    bool hasDisplaceMaterial() const;
+    // ------------------------------------------------------------------------
+    bool hasShaderForRendering(const std::string& shader) const
     {
         return m_materials_data.find(shader) != m_materials_data.end();
     }
