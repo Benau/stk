@@ -17,7 +17,7 @@ namespace GE
 GEVulkanGlowOutline::GEVulkanGlowOutline(GEVulkanDriver* vk,
                               const irr::core::dimension2d<irr::u32>& size,
                               GEVulkanAttachmentTexture* depth)
-                   : GEVulkanPostProcessing(vk, size),
+                   : GEVulkanPostProcessing(vk, size), m_color(NULL),
                      m_render_pass(VK_NULL_HANDLE),
                      m_framebuffer(VK_NULL_HANDLE),
                      m_blur_layout(VK_NULL_HANDLE),
@@ -29,35 +29,49 @@ GEVulkanGlowOutline::GEVulkanGlowOutline(GEVulkanDriver* vk,
     m_blur_sets.fill(VK_NULL_HANDLE);
     const irr::core::dimension2d<irr::u32> half = halfSize(size);
     const irr::core::dimension2d<irr::u32> quarter = halfSize(half);
+    try
+    {
+        m_color = new GEVulkanAttachmentTexture(vk, size,
+            VK_FORMAT_B8G8R8A8_UNORM,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT);
+        // Use A2B10G10R10 for blur targets since alpha is not needed and the
+        // 10-bit channels provide better precision than 8-bit RGBA.
+        VkFormat blur_format = VK_FORMAT_R8G8B8A8_UNORM;
+        if (GEVulkanFeatures::supportsShaderStorageImageExtendedFormats())
+            blur_format = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+        const VkImageUsageFlags blur_usage =
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        m_blur[0] = new GEVulkanAttachmentTexture(vk, half, blur_format,
+            blur_usage, VK_IMAGE_ASPECT_COLOR_BIT);
+        m_blur[1] = new GEVulkanAttachmentTexture(vk, quarter, blur_format,
+            blur_usage, VK_IMAGE_ASPECT_COLOR_BIT);
+        m_blur[2] = new GEVulkanAttachmentTexture(vk, half, blur_format,
+            blur_usage, VK_IMAGE_ASPECT_COLOR_BIT);
+        m_blur[3] = new GEVulkanAttachmentTexture(vk, halfSize(quarter),
+            blur_format, blur_usage, VK_IMAGE_ASPECT_COLOR_BIT);
 
-    m_color = new GEVulkanAttachmentTexture(vk, size, VK_FORMAT_B8G8R8A8_UNORM,
-        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        VK_IMAGE_ASPECT_COLOR_BIT);
-    // Use A2B10G10R10 for blur targets since alpha is not needed and the
-    // 10-bit channels provide better precision than 8-bit RGBA.
-    VkFormat blur_format = VK_FORMAT_R8G8B8A8_UNORM;
-    if (GEVulkanFeatures::supportsShaderStorageImageExtendedFormats())
-        blur_format = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
-    const VkImageUsageFlags blur_usage =
-        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    m_blur[0] = new GEVulkanAttachmentTexture(vk, half, blur_format,
-        blur_usage, VK_IMAGE_ASPECT_COLOR_BIT);
-    m_blur[1] = new GEVulkanAttachmentTexture(vk, quarter, blur_format,
-        blur_usage, VK_IMAGE_ASPECT_COLOR_BIT);
-    m_blur[2] = new GEVulkanAttachmentTexture(vk, half, blur_format,
-        blur_usage, VK_IMAGE_ASPECT_COLOR_BIT);
-    m_blur[3] = new GEVulkanAttachmentTexture(vk, halfSize(quarter),
-        blur_format, blur_usage, VK_IMAGE_ASPECT_COLOR_BIT);
+        // The blurred images stay in general layout forever
+        initializeGeneralImages(m_blur.data(), m_blur.size());
 
-    // The blurred images stay in general layout forever
-    initializeGeneralImages(m_blur.data(), m_blur.size());
-
-    createRenderPass(depth);
-    createBlur();
+        createRenderPass(depth);
+        createBlur();
+    }
+    catch (...)
+    {
+        destroy();
+        throw;
+    }
 }   // GEVulkanGlowOutline
 
 // ----------------------------------------------------------------------------
 GEVulkanGlowOutline::~GEVulkanGlowOutline()
+{
+    destroy();
+}   // ~GEVulkanGlowOutline
+
+// ----------------------------------------------------------------------------
+void GEVulkanGlowOutline::destroy()
 {
     VkDevice device = m_vk->getDevice();
     if (m_blur_pipeline != VK_NULL_HANDLE)
@@ -76,7 +90,7 @@ GEVulkanGlowOutline::~GEVulkanGlowOutline()
     for (GEVulkanAttachmentTexture* t : m_blur)
         delete t;
     delete m_color;
-}   // ~GEVulkanGlowOutline
+}   // destroy
 
 // ----------------------------------------------------------------------------
 void GEVulkanGlowOutline::createRenderPass(GEVulkanAttachmentTexture* depth)

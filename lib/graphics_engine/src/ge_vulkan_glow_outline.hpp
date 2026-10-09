@@ -56,6 +56,8 @@ private:
     // ------------------------------------------------------------------------
     void createBlur();
     // ------------------------------------------------------------------------
+    void destroy();
+    // ------------------------------------------------------------------------
     // The width of the glow is a fixed fraction of the height of each
     // viewport (the look at 1080 pixels high is the reference), so it doesn't
     // depend on the resolution, render scale or splitscreen
