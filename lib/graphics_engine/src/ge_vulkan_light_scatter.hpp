@@ -58,6 +58,8 @@ private:
     void createBlurPipeline();
     // ------------------------------------------------------------------------
     void createPipeline();
+    // ------------------------------------------------------------------------
+    void destroy();
 public:
     // ------------------------------------------------------------------------
     // The depth is the one of the g-buffer, which is in read only depth layout

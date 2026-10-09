@@ -25,6 +25,7 @@ GEVulkanLightScatter::GEVulkanLightScatter(GEVulkanDriver* vk,
                       m_pipeline_layout(VK_NULL_HANDLE),
                       m_pipeline(VK_NULL_HANDLE)
 {
+    m_scatter.fill(NULL);
     m_sets.fill(VK_NULL_HANDLE);
     // No alpha is needed and the values are never negative, B10G11R11 has the
     // range and half of the memory of RGBA16F (storage image support of it
@@ -32,25 +33,39 @@ GEVulkanLightScatter::GEVulkanLightScatter(GEVulkanDriver* vk,
     VkFormat format = VK_FORMAT_R16G16B16A16_SFLOAT;
     if (GEVulkanFeatures::supportsShaderStorageImageExtendedFormats())
         format = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
-    const irr::core::dimension2d<irr::u32> half = halfSize(size);
-    const VkImageUsageFlags usage =
-        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    for (GEVulkanAttachmentTexture*& t : m_scatter)
+    try
     {
-        t = new GEVulkanAttachmentTexture(vk, half, format, usage,
-            VK_IMAGE_ASPECT_COLOR_BIT);
+        const irr::core::dimension2d<irr::u32> half = halfSize(size);
+        const VkImageUsageFlags usage =
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        for (GEVulkanAttachmentTexture*& t : m_scatter)
+        {
+            t = new GEVulkanAttachmentTexture(vk, half, format, usage,
+                VK_IMAGE_ASPECT_COLOR_BIT);
+        }
+
+        // The images stay in general layout forever
+        initializeGeneralImages(m_scatter.data(), m_scatter.size());
+
+        createDescriptors(depth);
+        createBlurPipeline();
+        createPipeline();
     }
-
-    // The images stay in general layout forever
-    initializeGeneralImages(m_scatter.data(), m_scatter.size());
-
-    createDescriptors(depth);
-    createBlurPipeline();
-    createPipeline();
+    catch (...)
+    {
+        destroy();
+        throw;
+    }
 }   // GEVulkanLightScatter
 
 // ----------------------------------------------------------------------------
 GEVulkanLightScatter::~GEVulkanLightScatter()
+{
+    destroy();
+}   // ~GEVulkanLightScatter
+
+// ----------------------------------------------------------------------------
+void GEVulkanLightScatter::destroy()
 {
     VkDevice device = m_vk->getDevice();
     if (m_pipeline != VK_NULL_HANDLE)
@@ -70,7 +85,7 @@ GEVulkanLightScatter::~GEVulkanLightScatter()
         vkDestroyDescriptorSetLayout(device, m_layout, NULL);
     for (GEVulkanAttachmentTexture* t : m_scatter)
         delete t;
-}   // ~GEVulkanLightScatter
+}   // destroy
 
 // ----------------------------------------------------------------------------
 VkImageView GEVulkanLightScatter::getImageView() const
