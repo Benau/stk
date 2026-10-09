@@ -215,6 +215,7 @@ LOCAL_CFLAGS       := -DENABLE_LIBASTCENC                 \
                       -I../lib/irrlicht/include/          \
                       -I../lib/shaderc/libshaderc/include \
                       -I../lib/libsquish                  \
+                      -I../lib/simd_wrapper               \
                       -Ideps-$(TARGET_ARCH_ABI)/astc-encoder/Source
 #ifeq ($(TARGET_ARCH_ABI), armeabi-v7a)
 #LOCAL_ARM_NEON     := false
