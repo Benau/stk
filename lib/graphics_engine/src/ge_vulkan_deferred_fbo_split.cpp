@@ -738,8 +738,7 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
     bool has_displace = false;
     for (auto& q : p)
     {
-        if (q.first->hasShaderForRendering("displace") ||
-            q.first->hasShaderForRendering("displace_skinning"))
+        if (q.first->hasDisplaceMaterial())
         {
             has_displace = true;
             break;

@@ -160,6 +160,7 @@ void setAbsoluteRotationScale(const irr::core::matrix4& model_matrix,
 // the constructor of GEVulkanDeferredFBO (which GEVulkanDeferredFBOSplit
 // derives from) needs to know it too before a virtual call is possible
 void refreshDeferredSplit();
+inline const char* getLightningIdent() { return "lightning_ident"; }
 
 }
 #endif

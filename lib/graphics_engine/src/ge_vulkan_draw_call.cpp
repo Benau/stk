@@ -275,6 +275,7 @@ GEVulkanDrawCall::GEVulkanDrawCall()
     m_light_scatter = false;
     for (unsigned i = 0; i < (unsigned)video::EMT_MATERIAL_COUNT; i++)
         m_fallback_materials[i] = (video::E_MATERIAL_TYPE)i;
+    m_lightning_mesh = NULL;
 }   // GEVulkanDrawCall
 
 // ----------------------------------------------------------------------------
@@ -364,7 +365,10 @@ void GEVulkanDrawCall::addNode(irr::scene::ISceneNode* node)
             addGlowOutlineNode(node, buffer, m, mt);
         std::pair<GESPMBuffer*, int> k = std::make_pair(buffer,
             node->getTextureDescriptorID(i));
-        m_visible_nodes[k][(uint32_t)mt].emplace_back(node, m);
+        if (mesh == m_lightning_mesh)
+            m_visible_nodes[k][(uint32_t)-1].emplace_back(node, m);
+        else
+            m_visible_nodes[k][(uint32_t)mt].emplace_back(node, m);
         m_mb_map[buffer] = mesh;
     }
 }   // addNode
@@ -443,8 +447,14 @@ void GEVulkanDrawCall::generate(GEVulkanDriver* vk)
             else
                 continue;
 
-            std::string shader = GEMaterialManager::getShader(
-                (video::E_MATERIAL_TYPE)q.first);
+            std::string shader;
+            if (q.first == (unsigned)-1)
+                shader = getLightningIdent();
+            else
+            {
+                shader = GEMaterialManager::getShader((video::E_MATERIAL_TYPE)
+                    q.first);
+            }
             int material_id = p.first.second;
             bool skinning = p.first.first->hasSkinning();
             if (skinning)
@@ -1018,6 +1028,15 @@ void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
         if (is_displace)
             settings.m_pipeline_type = GVPT_DISPLACE_COLOR;
         createPipeline(vk, settings, dp_cache);
+        if (is_displace && m_lightning_mesh != NULL)
+        {
+            settings.m_shader_name = getLightningIdent();
+            settings.m_drawing_priority = (char)drawing_order;
+            GEMaterial additive_mat = *GEMaterialManager::getMaterial(
+                video::EMT_TRANSPARENT_ADD_COLOR);
+            settings.loadMaterial(additive_mat);
+            createPipeline(vk, settings, dp_cache);
+        }
     }
 
     if (has_displace)
@@ -1821,6 +1840,13 @@ void GEVulkanDrawCall::createVulkanData()
             throw std::runtime_error(
                 "vkCreatePipelineLayout failed for m_deferred_layouts");
         }
+    }
+    if (!m_deferred_layouts.empty() &&
+        m_deferred_layouts[GVDFP_DISPLACE_COLOR] != VK_NULL_HANDLE)
+    {
+        // Draw lightning mesh in displace color pass
+        GEVulkanMeshCache* mc = vk->getVulkanMeshCache();
+        m_lightning_mesh = mc->getMeshByName(getLightningIdent());
     }
     createAllPipelines(vk);
 
@@ -3022,5 +3048,13 @@ irr::core::matrix4* GEVulkanDrawCall::getSkinningOffset(unsigned bone_count,
     m_skinning_offset += bone_count;
     return mapped_addr;
 }   // getSkinningOffset
+
+// ----------------------------------------------------------------------------
+bool GEVulkanDrawCall::hasDisplaceMaterial() const
+{
+    return hasShaderForRendering("displace") ||
+        hasShaderForRendering("displace_skinning") ||
+        hasShaderForRendering(getLightningIdent());
+}   // hasDisplaceMaterial
 
 }
