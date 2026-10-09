@@ -22,7 +22,7 @@ layout(push_constant) uniform PushConstants
 // Light scattering of the point lights in the fog: every pixel marches in 16
 // steps from the farthest point of its ray inside the sphere of the light (or
 // the geometry, whichever is closer) back to the camera. The result is blurred
-// (light_scatter_blur.comp) and added to hdr (lighting_composite.frag).
+// (the gaussian mode of blur_hdr.comp) and added to hdr (lighting_composite.frag).
 //
 // Here every tile of 16x16 pixels first collects the lights which touch its
 // view frustum (like the billboards do, but with the exact sphere), so most of

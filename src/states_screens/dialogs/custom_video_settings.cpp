@@ -245,8 +245,15 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
             }
             UserConfigParams::m_glow = glow;
 
-            UserConfigParams::m_bloom =
-                advanced_pipeline && getWidget<CheckBoxWidget>("bloom")->getState();
+            bool bloom_changed = false;
+            bool bloom = advanced_pipeline &&
+                getWidget<CheckBoxWidget>("bloom")->getState();
+            if (UserConfigParams::m_bloom != bloom)
+            {
+                bloom_changed = true;
+                GE::getGEConfig()->m_bloom = bloom;
+            }
+            UserConfigParams::m_bloom = bloom;
 
             bool light_scatter_changed = false;
             bool light_scatter = advanced_pipeline &&
@@ -295,7 +302,7 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
             {
                 bool need_recreate_swapchain = GE::getGEConfig()->m_screen_space_reflection_type != prev_gssrt;
                 if (need_recreate_swapchain || pbr_changed || ibl_changed ||
-                    glow_changed || light_scatter_changed ||
+                    glow_changed || light_scatter_changed || bloom_changed ||
                     prev_shadow_size != GE::getGEConfig()->m_shadow_size ||
                     prev_shadow_type != GE::getGEConfig()->m_shadow_type)
                     GE::getVKDriver()->updateDriver(need_recreate_swapchain, pbr_changed, ibl_changed);
@@ -374,7 +381,7 @@ void CustomVideoSettingsDialog::updateActivation()
     getWidget<CheckBoxWidget>("lightshaft")->setActive(light);
     getWidget<CheckBoxWidget>("ibl")->setActive(light || (vk && real_light));
     getWidget<CheckBoxWidget>("glow")->setActive(light || (vk && real_light));
-    getWidget<CheckBoxWidget>("bloom")->setActive(light);
+    getWidget<CheckBoxWidget>("bloom")->setActive(light || (vk && real_light));
     getWidget<CheckBoxWidget>("lightscattering")->setActive(light || (vk && real_light));
     getWidget<CheckBoxWidget>("pointlight_shadows")->setActive(vk && real_light &&
         getWidget<SpinnerWidget>("shadows")->getValue() != 0);
