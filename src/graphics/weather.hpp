@@ -22,7 +22,14 @@
 #include "utils/singleton.hpp"
 #include <vector3d.h>
 
+class Camera;
 class SFXBase;
+
+namespace irr
+{
+    namespace scene { class ISceneNode; }
+    namespace video { class ITexture; }
+}
 
 class Weather : public AbstractSingleton<Weather>
 {
@@ -31,6 +38,15 @@ class Weather : public AbstractSingleton<Weather>
 
     SFXBase* m_thunder_sound;
     SFXBase* m_weather_sound;
+
+    // Lightning for the non-GLSL renderers (GEVulkanDriver and the legacy
+    // fixed pipeline): a quad right in front of a camera, shared mesh,
+    // additive material and the intensity as the vertex color of the render
+    // info of its node. The GLSL renderer does it in PostProcessing.
+    irr::scene::ISceneNode* m_lightning_node;
+    irr::video::ITexture* m_lightning_texture;
+
+    void createLightningQuad();
 
 public:
              Weather();
@@ -44,6 +60,11 @@ public:
     bool shouldLightning() { return m_lightning > 0.0f; }
     
     irr::core::vector3df getIntensity();
+    /** Called before the scene is drawn for this camera, shows the quad of
+     *  this camera only (if there is a lightning now). */
+    void prepareLightning(Camera* camera);
+    /** Called after the scene is drawn for the camera, hides the quad. */
+    void finishLightning();
 };
 
 #endif

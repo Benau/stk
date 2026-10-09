@@ -20,6 +20,7 @@
 #include "config/user_config.hpp"
 #include "graphics/camera/camera.hpp"
 #include "graphics/irr_driver.hpp"
+#include "graphics/weather.hpp"
 #include "graphics/render_target.hpp"
 #include "modes/world.hpp"
 #include "physics/physics.hpp"
@@ -63,7 +64,15 @@ void FixedPipelineRenderer::render(float dt, bool is_loading)
         camera->activate();
         rg->preRenderCallback(camera);   // adjusts start referee
 
+        // Lightning quad of this camera only (GLSL renderer doesn't use this)
+        Weather* weather = Weather::getInstance();
+        if (weather)
+            weather->prepareLightning(camera);
+
         irr_driver->getSceneManager()->drawAll();
+
+        if (weather)
+            weather->finishLightning();
 
         PROFILER_POP_CPU_MARKER();
 
