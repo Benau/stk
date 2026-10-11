@@ -33,6 +33,13 @@ enum GEVulkanDeferredFBOPass : unsigned
     // scattering is enabled: the glow color, its blurred version and the
     // blurred light scattering, sampled by the lighting pass
     GVDFP_LIGHTING_COMPOSITE,
+    // Only used by GEVulkanDeferredFBOSplit if solid screen space reflection
+    // is enabled (GEVulkanDrawCall::renderSolidSSR), it has no descriptor set
+    // layout of its own: set 0 uses the layout of GVDFP_DISPLACE_COLOR (the
+    // output of the tonemap pass of the previous frame, the depth and the
+    // HiZ depth, see GEVulkanHiZDepth::getRenderingDescriptorSet, or
+    // GVDFP_DISPLACE_MASK if there is no HiZ) and set 2 is GVDFP_HDR
+    GVDFP_SOLID_SSR,
     GVDFP_COUNT,
 };
 
@@ -81,8 +88,13 @@ public:
     static void setCreatingOffscreenRTT(bool b)
                                             { s_creating_offscreen_rtt = b; }
     // ------------------------------------------------------------------------
+    // output_attachment: the tonemap pass never renders to the swapchain
+    // image directly, it renders to GVDFT_DISPLACE_COLOR (like if there is
+    // displace) even if there is no displace support, so the output of the
+    // previous frame can be sampled by the next one (it is decided by
+    // GEVulkanDeferredFBOSplit if solid screen space reflection is enabled)
     GEVulkanDeferredFBO(GEVulkanDriver* vk, const core::dimension2d<u32>& size,
-                        bool swapchain_output);
+                        bool swapchain_output, bool output_attachment = false);
     // ------------------------------------------------------------------------
     virtual ~GEVulkanDeferredFBO();
     // ------------------------------------------------------------------------
@@ -131,6 +143,14 @@ public:
     // ------------------------------------------------------------------------
     virtual const VkDescriptorSet* getDescriptorSet(unsigned id) const
                                            { return &m_descriptor_set.at(id); }
+    // ------------------------------------------------------------------------
+    // True if displace materials can be rendered (the mask exists), the
+    // GVDFT_DISPLACE_COLOR attachment can exist without it (see the
+    // constructor), then the last render pass only copies it
+    bool hasDisplace() const
+    {
+        return getAttachment<GVDFT_DISPLACE_MASK>() != NULL;
+    }
     // ------------------------------------------------------------------------
     template<unsigned AttachmentType>
     GEVulkanAttachmentTexture* getAttachment() const

@@ -87,6 +87,9 @@ enum GEVulkanPipelineType : unsigned
     GVPT_GLOW_OUTLINE,
     // Fullscreen draw in the lighting pass which adds the blurred glow
     GVPT_LIGHTING_COMPOSITE,
+    // Fullscreen draw in the lighting pass which blends the reflection of the
+    // solid materials over them, see solid_ssr.frag
+    GVPT_SOLID_SSR,
 };
 
 struct GEMaterial;
@@ -423,6 +426,12 @@ public:
     void renderLightingComposite(GEVulkanDriver* vk, VkCommandBuffer cmd,
                                  bool glow_outline, bool light_scatter);
     // ------------------------------------------------------------------------
+    // Blends the reflection of the glossy solid materials (traced over the
+    // depth, or the HiZ depth, the color is the output of the previous frame)
+    // over the lit hdr, in the lighting pass, only if the FBO has it
+    // (GEVulkanDeferredFBOSplit::hasSolidSSR)
+    void renderSolidSSR(GEVulkanDriver* vk, VkCommandBuffer cmd);
+    // ------------------------------------------------------------------------
     unsigned getPolyCount() const
     {
         unsigned result = 0;
@@ -456,7 +465,9 @@ public:
         return m_materials_data.find(shader) != m_materials_data.end();
     }
     // ------------------------------------------------------------------------
-    GEVulkanHiZDepth* getHiZDepth() const               { return m_hiz_depth; }
+    // The HiZ depth of this viewport, owned by the split deferred FBO which
+    // sets it (or NULL if there is none) every frame before it's used
+    void setHiZDepth(GEVulkanHiZDepth* hiz)                { m_hiz_depth = hiz; }
     // ------------------------------------------------------------------------
     virtual const VkDescriptorSet* getEnvDescriptorSet(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------

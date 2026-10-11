@@ -32,3 +32,23 @@ vec3 convertColor(vec3 input_color)
             (input_color * (5.0 * input_color + 1.75) + 0.05);
     }
 }
+
+// Inverse of convertColor (for each channel y = x * (a * x + b) /
+// (x * (5 * x + 1.75) + 0.05), so (5 * y - a) * x^2 + (1.75 * y - b) * x +
+// 0.05 * y = 0, which has a single positive root), used to read hdr back from
+// a tonemapped color. The curve is clamped by an 8 bit unorm output (1.0 is
+// reached with x = 0.55 or 0.90 if u_ibl), anything brighter is lost, it needs
+// a float output to reach the asymptote of the curve (a / 5)
+vec3 inverseConvertColor(vec3 y)
+{
+    float a = u_ibl ? 6.5 : 7.0;
+    float b = u_ibl ? 0.45 : 0.75;
+    // The asymptote can't be reached, this keeps the result finite (about
+    // 1000 at most) if the output has a higher range than unorm
+    y = clamp(y, vec3(0.0), vec3(a * 0.2 - 0.0004));
+    vec3 qa = 5.0 * y - a;
+    vec3 qb = 1.75 * y - b;
+    vec3 qc = 0.05 * y;
+    vec3 d = sqrt(max(qb * qb - 4.0 * qa * qc, vec3(0.0)));
+    return (2.0 * qc) / max(d - qb, vec3(1e-20));
+}

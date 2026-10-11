@@ -275,6 +275,11 @@ void refreshDeferredSplit()
         g_config.m_deferred_split |= 1 << 1;
     if (g_config.m_bloom)
         g_config.m_deferred_split |= 1 << 2;
+    // The solid materials reflect the output of the tonemap pass of the
+    // previous frame (the OpenGL renderer also needs the passes to be
+    // separated), and the HiZ depth is generated after the g-buffer
+    if (g_config.m_screen_space_reflection_type != GSSRT_DISABLED)
+        g_config.m_deferred_split |= 1 << 3;
 }
 
 }

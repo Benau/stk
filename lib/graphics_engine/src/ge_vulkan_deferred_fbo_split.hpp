@@ -9,6 +9,7 @@ namespace GE
 {
 class GEVulkanBloom;
 class GEVulkanGlowOutline;
+class GEVulkanHiZDepth;
 class GEVulkanLightScatter;
 
 // Same output as GEVulkanDeferredFBO, but every stage is its own traditional
@@ -34,10 +35,23 @@ class GEVulkanLightScatter;
 //                pass) -> output, then ghost / transparent
 //   [displace mask -> displace color, only if the FBO has displace support]
 //
+// If screen space reflection is enabled (GEConfig::m_screen_space_reflection_
+// type, needsSolidSSR()), there is also:
+//
+//   [hiz       : compute shaders only, the max depth mip chain of the depth of
+//                every viewport (if it's the type of the reflection), see
+//                GEVulkanHiZDepth, generated right after the g-buffer pass,
+//                used by the lighting and displace pass]
+//   lighting   : the solid materials reflect the output of the tonemap pass
+//                of the previous frame (converted back to hdr), see
+//                GEVulkanDrawCall::renderSolidSSR and solid_ssr.frag, which
+//                needs the output to be a texture
+//
 // The output of the tonemap pass is the swapchain image when there is no
-// displace support, so it has the same format as the swapchain, otherwise it
-// is the displace color texture, and the last displace color pass writes to
-// the swapchain image. Like GEVulkanDeferredFBO the last render pass is left
+// displace support (and no screen space reflection), so it has the same
+// format as the swapchain, otherwise it is the displace color texture, and the
+// last displace color pass writes to the swapchain image (it only copies it if
+// there is no displace). Like GEVulkanDeferredFBO the last render pass is left
 // open by render().
 class GEVulkanDeferredFBOSplit : public GEVulkanDeferredFBO
 {
@@ -72,7 +86,27 @@ private:
     // GEConfig::m_bloom_blend_texture, loaded by this FBO (NULL if there is
     // none or it failed to load)
     irr::video::ITexture* m_bloom_blend_texture;
+
+    // One for each viewport (draw call) of the last frame, created when they
+    // are needed (GEVulkanHiZDepth::isEnabled())
+    std::vector<std::unique_ptr<GEVulkanHiZDepth> > m_hiz_depth;
+
+    // Decided when the FBO is created, see needsSolidSSR()
+    bool m_solid_ssr;
+
+    // The output of the tonemap pass (the reflection of the next frame) has
+    // anything to sample from the second frame
+    bool m_solid_ssr_ready;
+    // ------------------------------------------------------------------------
+    void generateHiZ(VkCommandBuffer cmd,
+                     const std::vector<std::pair<GEVulkanDrawCall*,
+                     GEVulkanCameraSceneNode*> >& p);
 public:
+    // ------------------------------------------------------------------------
+    // True if the solid materials reflect the previous frame, the tonemap pass
+    // doesn't render to the swapchain image directly then (see the
+    // constructor of GEVulkanDeferredFBO, not decided by GEVulkanDriver)
+    static bool needsSolidSSR();
     // ------------------------------------------------------------------------
     GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
                              const core::dimension2d<u32>& size,
@@ -103,6 +137,28 @@ public:
     // ------------------------------------------------------------------------
     // Same for the blend texture (lens dust) of the bloom
     bool hasBloomBlend() const        { return m_bloom_blend_texture != NULL; }
+    // ------------------------------------------------------------------------
+    // Same for GVPT_SOLID_SSR (GVDFP_SOLID_SSR is the layout of it)
+    bool hasSolidSSR() const                           { return m_solid_ssr; }
+    // ------------------------------------------------------------------------
+    // GVDFP_SOLID_SSR uses the layout and the set (the one without HiZ depth)
+    // of the displace pass, see GVDFP_SOLID_SSR
+    virtual VkDescriptorSetLayout getDescriptorSetLayout(unsigned id) const
+    {
+        if (id == GVDFP_SOLID_SSR)
+        {
+            return m_solid_ssr ? m_descriptor_layout[GVDFP_DISPLACE_COLOR] :
+                VK_NULL_HANDLE;
+        }
+        return GEVulkanDeferredFBO::getDescriptorSetLayout(id);
+    }
+    // ------------------------------------------------------------------------
+    virtual const VkDescriptorSet* getDescriptorSet(unsigned id) const
+    {
+        if (id == GVDFP_SOLID_SSR)
+            return &m_descriptor_set[GVDFP_DISPLACE_MASK];
+        return GEVulkanDeferredFBO::getDescriptorSet(id);
+    }
     // ------------------------------------------------------------------------
     // pipeline_type is a GEVulkanPipelineType, the render pass which a
     // pipeline of this type is used in

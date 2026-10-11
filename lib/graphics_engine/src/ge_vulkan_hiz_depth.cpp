@@ -6,6 +6,7 @@
 #include "ge_vulkan_camera_scene_node.hpp"
 #include "ge_vulkan_deferred_fbo.hpp"
 #include "ge_vulkan_driver.hpp"
+#include "ge_vulkan_features.hpp"
 #include "ge_vulkan_shader_manager.hpp"
 
 #include <algorithm>
@@ -14,8 +15,16 @@
 namespace GE
 {
 // ----------------------------------------------------------------------------
-GEVulkanHiZDepth::GEVulkanHiZDepth(GEVulkanDriver* vk)
-                : m_vk(vk), m_hiz_depth(NULL),
+bool GEVulkanHiZDepth::isEnabled()
+{
+    return getGEConfig()->m_screen_space_reflection_type >= GSSRT_HIZ &&
+        GEVulkanFeatures::supportsComputeInMainQueue();
+}   // isEnabled
+
+// ----------------------------------------------------------------------------
+GEVulkanHiZDepth::GEVulkanHiZDepth(GEVulkanDriver* vk,
+                                   GEVulkanDeferredFBO* dfbo)
+                : m_vk(vk), m_dfbo(dfbo), m_hiz_depth(NULL),
                   m_descriptor_layout(VK_NULL_HANDLE),
                   m_pipeline_layout(VK_NULL_HANDLE),
                   m_pipeline(VK_NULL_HANDLE),
@@ -40,9 +49,9 @@ void GEVulkanHiZDepth::prepare(GEVulkanCameraSceneNode* cam)
         irr::core::dimension2du(
         cam->getUBOData()->m_viewport.LowerRightCorner.X,
         cam->getUBOData()->m_viewport.LowerRightCorner.Y));
-    if (m_vk->getRTTTexture() == NULL || hiz_size.getArea() == 0)
+    if (hiz_size.getArea() == 0)
         return;
-    if (m_dfbo_observer.expired() || m_hiz_size != hiz_size)
+    if (m_hiz_depth == NULL || m_hiz_size != hiz_size)
     {
         m_hiz_size = hiz_size;
         destroy();
@@ -178,9 +187,7 @@ void GEVulkanHiZDepth::init()
         }
     }
 
-    GEVulkanDeferredFBO* dfbo =
-        static_cast<GEVulkanDeferredFBO*>(m_vk->getRTTTexture());
-    m_dfbo_observer = dfbo->getDepthTexture()->getTextureObserver();
+    GEVulkanDeferredFBO* dfbo = m_dfbo;
     for (uint32_t i = 0; i < mip_levels; i++)
     {
         VkDescriptorImageInfo input_info = {};
@@ -238,8 +245,7 @@ void GEVulkanHiZDepth::loadRenderingDescriptor()
             "m_rendering_descriptor_pool in GEVulkanHiZDepth");
     }
 
-    GEVulkanDeferredFBO* dfbo =
-        static_cast<GEVulkanDeferredFBO*>(m_vk->getRTTTexture());
+    GEVulkanDeferredFBO* dfbo = m_dfbo;
     std::vector<VkDescriptorSetLayout> layouts(1,
         dfbo->getDescriptorSetLayout(GVDFP_DISPLACE_COLOR));
 
@@ -317,7 +323,7 @@ void GEVulkanHiZDepth::destroy()
 // ----------------------------------------------------------------------------
 void GEVulkanHiZDepth::generate(VkCommandBuffer cmd)
 {
-    if (m_dfbo_observer.expired())
+    if (m_hiz_depth == NULL)
         return;
 
     const uint32_t mip_levels = m_hiz_depth->getMipmapLevels();

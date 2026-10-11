@@ -20,7 +20,7 @@ out vec4 Spec;
 #stk_include "utils/getPosFromUVDepth.frag"
 #stk_include "utils/DiffuseIBL.frag"
 #stk_include "utils/SpecularIBL.frag"
-#stk_include "utils/screen_space_reflection.frag"
+#stk_include "utils/ssr.glsl"
 
 vec3 gtaoMultiBounce(float visibility, vec3 albedo)
 {
@@ -77,7 +77,7 @@ void main(void)
 
     // Only calculate reflections if the reflectivity value is high enough,
     // otherwise just use specular IBL
-    if (specval < 0.5 || cosine > 0.2) {
+    if (!SSRIsReflective(specval, cosine)) {
         outColor = fallback;
     } else {
         vec2 viewport_scale = vec2(1.0);
@@ -91,15 +91,11 @@ void main(void)
             // Disable raycasts onto another reflective surface
             float mirror = texture(ntex, coords).z;
             
-            outColor = textureLod(albedo, coords, 0.f).rgb;
-            outColor = mix(fallback, outColor, GetEdgeFade(coords,
-                viewport_scale, viewport_offset));
-            outColor = mix(fallback, outColor, 1. - max(cosine * 5., 0.));
-            outColor = mix(fallback, outColor, 4. - max(mirror * 4., 3.));
             // TODO temporary measure the lack of mipmapping for RTT albedo
             // Implement it in proper way
-            // Use (specval - 0.5) * 2.0 to bring specval from 0.5-1.0 range to 0.0-1.0 range
-            outColor = mix(fallback, outColor, (specval - 0.5) * 2.0);
+            outColor = mix(fallback, textureLod(albedo, coords, 0.f).rgb,
+                SSRBlendWeight(GetEdgeFade(coords, viewport_scale,
+                viewport_offset), cosine, mirror, specval));
         }
     }
 

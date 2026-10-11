@@ -199,11 +199,21 @@ void createSamplerDescriptor(GEVulkanDriver* vk, unsigned count,
 }   // anonymous namespace
 
 // ----------------------------------------------------------------------------
+bool GEVulkanDeferredFBOSplit::needsSolidSSR()
+{
+    return getGEConfig()->m_pbr &&
+        getGEConfig()->m_screen_space_reflection_type != GSSRT_DISABLED;
+}   // needsSolidSSR
+
+// ----------------------------------------------------------------------------
 GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
                                           const core::dimension2d<u32>& size,
                                           bool swapchain_output)
-                        : GEVulkanDeferredFBO(vk, size, swapchain_output),
-                          m_bloom_blend_texture(NULL)
+                        : GEVulkanDeferredFBO(vk, size, swapchain_output,
+                          needsSolidSSR()),
+                          m_bloom_blend_texture(NULL),
+                          m_solid_ssr(needsSolidSSR()),
+                          m_solid_ssr_ready(false)
 {
     // GEVulkanDeferredFBO creates attachments with sampled usage and no input
     // attachment descriptors if m_deferred_split != 0, which is expected
@@ -259,6 +269,8 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
 // ----------------------------------------------------------------------------
 GEVulkanDeferredFBOSplit::~GEVulkanDeferredFBOSplit()
 {
+    // They have descriptor sets with the images of this FBO
+    m_hiz_depth.clear();
     if (m_bloom_blend_texture)
         m_bloom_blend_texture->drop();
 }   // ~GEVulkanDeferredFBOSplit
@@ -549,10 +561,13 @@ void GEVulkanDeferredFBOSplit::createRTT()
         subpass.pDepthStencilAttachment = &depth_reference;
 
         // hdr written -> sampled, the depth was only read by lighting
+        // The output was sampled by the lighting pass (the reflection of the
+        // previous frame) before it's rendered again
         std::vector<VkSubpassDependency> deps =
         {
             makeExternalDependency(
-                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+                (m_solid_ssr ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : 0),
                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
@@ -667,6 +682,11 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         }
         vkCmdEndRenderPass(cmd);
     }
+    // The depth is complete, the lighting and displace pass trace it
+    generateHiZ(cmd, p);
+    // Nothing is traced in the first frame, there is no output of the
+    // previous one
+    const bool solid_ssr = m_solid_ssr && m_solid_ssr_ready;
 
     // 2. glow outline of the meshes (a render pass with the depth of the
     // g-buffer and the blur of it), all viewports at once
@@ -689,6 +709,10 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
                 q.first->prepareViewport(m_vk, q.second->getViewPort(), cmd);
             q.first->renderDeferredLighting(m_vk, cmd);
             q.first->renderSkyBox(m_vk, cmd);
+            // After everything which is lit (it's blended over it), but the
+            // glow outline is above it
+            if (solid_ssr)
+                q.first->renderSolidSSR(m_vk, cmd);
             // Above everything which is lit, the glow outline is not over the
             // meshes
             if (has_glow_outline || has_light_scatter)
@@ -728,6 +752,9 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
                 rebind_base_vertex);
         }
     }
+    // The pass leaves the output in shader read only layout, the lighting pass
+    // of the next frame samples it
+    m_solid_ssr_ready = m_solid_ssr;
     // The last pass is left open
     if (!has_displace_fbo)
         return;
@@ -747,12 +774,6 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
     std::array<VkClearValue, GVDFT_COUNT> zeros = {};
     if (has_displace)
     {
-        for (auto& q : p)
-        {
-            GEVulkanHiZDepth* hiz = q.first->getHiZDepth();
-            if (hiz)
-                hiz->generate(cmd);
-        }
         beginPass(cmd, GVDSP_DISPLACE_MASK, GVDSP_DISPLACE_MASK,
             getZeroClearCountForPass(GVDFP_DISPLACE_MASK), zeros.data());
         for (auto& q : p)
@@ -789,6 +810,48 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
 }   // render
 
 // ----------------------------------------------------------------------------
+void GEVulkanDeferredFBOSplit::generateHiZ(VkCommandBuffer cmd,
+    const std::vector<std::pair<GEVulkanDrawCall*,
+    GEVulkanCameraSceneNode*> >& p)
+{
+    if (!GEVulkanHiZDepth::isEnabled())
+    {
+        for (auto& q : p)
+            q.first->setHiZDepth(NULL);
+        return;
+    }
+    // The g-buffer pass only makes its attachments visible for the depth
+    // test of the next passes, and compute shaders read the depth
+    VkMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, NULL, 0,
+        NULL);
+
+    if (m_hiz_depth.size() < p.size())
+        m_hiz_depth.resize(p.size());
+    for (unsigned i = 0; i < p.size(); i++)
+    {
+        if (!m_hiz_depth[i])
+            m_hiz_depth[i].reset(new GEVulkanHiZDepth(m_vk, this));
+        GEVulkanHiZDepth* hiz = m_hiz_depth[i].get();
+        hiz->prepare(p[i].second);
+        if (hiz->isReady())
+        {
+            hiz->generate(cmd);
+            p[i].first->setHiZDepth(hiz);
+        }
+        else
+            p[i].first->setHiZDepth(NULL);
+    }
+}   // generateHiZ
+
+// ----------------------------------------------------------------------------
 VkRenderPass GEVulkanDeferredFBOSplit::getRenderPassForPipeline(
                                                unsigned pipeline_type) const
 {
@@ -799,6 +862,7 @@ VkRenderPass GEVulkanDeferredFBOSplit::getRenderPassForPipeline(
             VK_NULL_HANDLE;
     case GVPT_DEFERRED_LIGHTING:
     case GVPT_SKYBOX:
+    case GVPT_SOLID_SSR:
     case GVPT_LIGHTING_COMPOSITE:
         return getRTTRenderPass(GVDSP_LIGHTING);
     case GVPT_DEFERRED_CONVERT_COLOR:

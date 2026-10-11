@@ -19,7 +19,8 @@ bool GEVulkanDeferredFBO::s_creating_offscreen_rtt = false;
 // ----------------------------------------------------------------------------
 GEVulkanDeferredFBO::GEVulkanDeferredFBO(GEVulkanDriver* vk,
                                          const core::dimension2d<u32>& size,
-                                         bool swapchain_output)
+                                         bool swapchain_output,
+                                         bool output_attachment)
                    : GEVulkanFBOTexture(vk, size,
                      /*lazy_depth*/!(getGEConfig()->m_deferred_split != 0 ||
                      getGEConfig()->m_auto_deferred_type == GADT_DISPLACE)),
@@ -61,7 +62,8 @@ GEVulkanDeferredFBO::GEVulkanDeferredFBO(GEVulkanDriver* vk,
     m_attachments[GVDFT_HDR] = new GEVulkanAttachmentTexture(vk, size,
         hdr_format, attachment_usage, VK_IMAGE_ASPECT_COLOR_BIT);
 
-    if (getGEConfig()->m_auto_deferred_type == GADT_DISPLACE)
+    const bool displace = getGEConfig()->m_auto_deferred_type == GADT_DISPLACE;
+    if (displace)
     {
         std::vector<VkFormat> displace_mask_formats =
         {
@@ -96,7 +98,9 @@ GEVulkanDeferredFBO::GEVulkanDeferredFBO(GEVulkanDriver* vk,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
         GEVulkanCommandLoader::endSingleTimeCommands(command_buffer);
-
+    }
+    if (displace || output_attachment)
+    {
         // Note: if dynamic rendering is ever used (one pipeline for the
         // tonemap pass has to be compatible with both this and the swapchain
         // image as its output), this needs to use the swapchain format
@@ -298,12 +302,6 @@ void GEVulkanDeferredFBO::render(VkCommandBuffer cmd,
     if (has_displace)
     {
         vkCmdEndRenderPass(cmd);
-        for (auto& q : p)
-        {
-            GEVulkanHiZDepth* hiz = q.first->getHiZDepth();
-            if (hiz)
-                hiz->generate(cmd);
-        }
         render_pass_info.clearValueCount =
             getZeroClearCountForPass(GVDFP_DISPLACE_MASK);
         render_pass_info.renderPass = getRTTRenderPass(GVDFP_DISPLACE_MASK);
@@ -460,8 +458,9 @@ void GEVulkanDeferredFBO::initDisplaceDescriptor(GEVulkanDriver* vk)
             "GVDFP_DISPLACE_COLOR in GEVulkanDeferredFBO");
     }
 
-    int hiz_multi =
-        getGEConfig()->m_screen_space_reflection_type <= GSSRT_FAST ? 2 : 1;
+    // One more set (without HiZ) if there is no HiZ depth, which has its own
+    // sets, see GEVulkanHiZDepth::getRenderingDescriptorSet
+    int hiz_multi = GEVulkanHiZDepth::isEnabled() ? 1 : 2;
     // m_descriptor_pool[GVDFP_DISPLACE_COLOR]
     VkDescriptorPoolSize pool_size;
     pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -502,8 +501,11 @@ void GEVulkanDeferredFBO::initDisplaceDescriptor(GEVulkanDriver* vk)
     std::array<VkDescriptorImageInfo, texture_layout_binding.size()>
         image_infos = {};
     image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    image_infos[0].imageView =
-        (VkImageView)m_attachments[GVDFT_DISPLACE_MASK]->getTextureHandler();
+    // The mask and ssr only exist if there is displace, the copy of the output
+    // doesn't use them
+    image_infos[0].imageView = m_attachments[GVDFT_DISPLACE_MASK] ?
+        (VkImageView)m_attachments[GVDFT_DISPLACE_MASK]->getTextureHandler() :
+        (VkImageView)m_vk->getTransparentTexture()->getTextureHandler();
     image_infos[0].sampler = m_vk->getSampler(GVS_NEAREST);
     image_infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     image_infos[1].imageView = m_attachments[GVDFT_DISPLACE_SSR] ?
@@ -790,7 +792,8 @@ void GEVulkanDeferredFBO::createDisplacePasses(unsigned mask_pass,
 {
     m_rtt_render_pass.resize(color_pass + 1, VK_NULL_HANDLE);
 
-    // m_rtt_render_pass[mask_pass]
+    // m_rtt_render_pass[mask_pass], without displace only the output is copied
+    if (getAttachment<GVDFT_DISPLACE_MASK>())
     {
         std::vector<VkAttachmentDescription> attachment_desc(1);
         attachment_desc[0].format = m_attachments[GVDFT_DISPLACE_MASK]->getInternalFormat();
@@ -925,6 +928,7 @@ void GEVulkanDeferredFBO::createDisplacePasses(unsigned mask_pass,
     }
 
     // m_rtt_frame_buffer[mask_pass]
+    if (getAttachment<GVDFT_DISPLACE_MASK>())
     {
         std::vector<VkImageView> attachments =
         {
