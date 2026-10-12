@@ -12,10 +12,14 @@
 namespace GE
 {
 class GEVulkanCameraSceneNode;
-class GEVulkanDeferredFBO;
 class GEVulkanDriver;
 class GEVulkanTexture;
 
+// Max depth mip chain (reverse-Z) of the depth buffer of one viewport (camera),
+// used by the screen space reflection of the displace pass and the solid
+// materials (solid_ssr.frag). It is owned by GEVulkanDeferredFBOSplit (one per
+// viewport), generated right after the g-buffer pass, so the lifetime of it is
+// the one of the FBO
 class GEVulkanHiZDepth
 {
 private:
@@ -39,8 +43,6 @@ private:
 
     irr::core::recti m_hiz_size;
 
-    std::weak_ptr<bool> m_dfbo_observer;
-
     // ------------------------------------------------------------------------
     void destroy();
     // ------------------------------------------------------------------------
@@ -49,16 +51,35 @@ private:
     void loadRenderingDescriptor();
 public:
     // ------------------------------------------------------------------------
+    // True if the HiZ screen space reflection is selected (the types of
+    // GEScreenSpaceReflectionType from GSSRT_HIZ100 and the device can run
+    // compute shaders), otherwise it uses GSSRT_FAST (the depth buffer only)
+    static bool isEnabled();
+    // ------------------------------------------------------------------------
     GEVulkanHiZDepth(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
     ~GEVulkanHiZDepth();
     // ------------------------------------------------------------------------
+    // Creates it for the viewport of the camera (again if the size changed)
     void prepare(GEVulkanCameraSceneNode* cam);
     // ------------------------------------------------------------------------
+    bool isReady() const
+    {
+        return m_hiz_depth != NULL && m_pipeline != VK_NULL_HANDLE &&
+            m_pipeline_layout != VK_NULL_HANDLE && !m_descriptor_sets.empty();
+    }
+    // ------------------------------------------------------------------------
+    // The depth buffer of the FBO needs to be written and in the read only
+    // layout (after the g-buffer pass, with a barrier for compute shaders), it
+    // is in shader read only layout after this
     void generate(VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
+    // Same descriptor layout as GVDFP_DISPLACE_COLOR: previous tonemap output
+    // as history, the depth (shadow sampler) and the HiZ depth. The output is
+    // the displace-color attachment when present, otherwise the FBO's
+    // offscreen image; NULL if prepare() didn't create the HiZ texture
     const VkDescriptorSet* getRenderingDescriptorSet() const
-     { return m_dfbo_observer.expired() ? NULL : &m_rendering_descriptor_set; }
+                   { return m_hiz_depth ? &m_rendering_descriptor_set : NULL; }
 };
 
 }
