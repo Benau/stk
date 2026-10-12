@@ -480,7 +480,9 @@ bool GEVulkanTexture::createImageView(VkImageAspectFlags aspect_flags,
     view_info.subresourceRange.levelCount = getMipmapLevels();
     view_info.subresourceRange.baseArrayLayer = 0;
     view_info.subresourceRange.layerCount = m_layer_count;
-    if (isSingleChannel())
+    // create_srgb_view is false when used by attachment texture
+    // SSAO uses single channel without texture swizzling
+    if (isSingleChannel() && create_srgb_view)
     {
         view_info.components.r = VK_COMPONENT_SWIZZLE_ONE;
         view_info.components.g = VK_COMPONENT_SWIZZLE_ONE;

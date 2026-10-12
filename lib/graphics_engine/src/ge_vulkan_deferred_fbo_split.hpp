@@ -11,6 +11,7 @@ class GEVulkanBloom;
 class GEVulkanGlowOutline;
 class GEVulkanHiZDepth;
 class GEVulkanLightScatter;
+class GEVulkanSSAO;
 
 // Same output as GEVulkanDeferredFBO, but every stage is its own traditional
 // render pass (single subpass) instead of a subpass of one, so there is no
@@ -80,6 +81,9 @@ private:
     // Same, NULL if light scattering is not enabled
     std::unique_ptr<GEVulkanLightScatter> m_light_scatter;
 
+    // Same, NULL if the ambient occlusion is not enabled
+    std::unique_ptr<GEVulkanSSAO> m_ssao;
+
     // Same, NULL if bloom is not enabled
     std::unique_ptr<GEVulkanBloom> m_bloom;
 
@@ -135,6 +139,10 @@ public:
     // (the second binding of GVDFP_CONVERT_COLOR, the widest level of it and
     // the blend texture are the third and fourth)
     bool hasBloom() const                           { return m_bloom != NULL; }
+    // ------------------------------------------------------------------------
+    // Same for the ambient occlusion which the lighting pass samples (the
+    // fourth binding of GVDFP_HDR)
+    bool hasSSAO() const                             { return m_ssao != NULL; }
     // ------------------------------------------------------------------------
     // Same for the blend texture (lens dust) of the bloom
     bool hasBloomBlend() const        { return m_bloom_blend_texture != NULL; }

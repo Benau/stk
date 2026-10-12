@@ -1351,6 +1351,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         VkBool32 m_light_scatter;
         VkBool32 m_bloom;
         VkBool32 m_bloom_blend;
+        VkBool32 m_ssao;
     };
     Constants constants = {};
     constants.m_ibl = getGEConfig()->m_pbr && getGEConfig()->m_ibl &&
@@ -1370,6 +1371,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
             constants.m_light_scatter = split->hasLightScatter();
             constants.m_bloom = split->hasBloom();
             constants.m_bloom_blend = split->hasBloomBlend();
+            constants.m_ssao = split->hasSSAO();
         }
     }
     constants.m_offscreen_rtt = offscreen_rtt;
@@ -1398,7 +1400,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         constants.m_shadow_type = getGEConfig()->m_shadow_type;
         constants.m_point_shadow_limit = getGEConfig()->m_point_shadow_limit;
     }
-    std::array<VkSpecializationMapEntry, 13> specialization_entries = {};
+    std::array<VkSpecializationMapEntry, 14> specialization_entries = {};
     specialization_entries[0].constantID = 0;
     specialization_entries[0].offset = offsetof(Constants, m_ibl);
     specialization_entries[0].size = sizeof(VkBool32);
@@ -1440,6 +1442,9 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     specialization_entries[12].constantID = 12;
     specialization_entries[12].offset = offsetof(Constants, m_bloom_blend);
     specialization_entries[12].size = sizeof(VkBool32);
+    specialization_entries[13].constantID = 13;
+    specialization_entries[13].offset = offsetof(Constants, m_ssao);
+    specialization_entries[13].size = sizeof(VkBool32);
     VkSpecializationInfo specialization_info = {};
     specialization_info.mapEntryCount = specialization_entries.size();
     specialization_info.pMapEntries = specialization_entries.data();

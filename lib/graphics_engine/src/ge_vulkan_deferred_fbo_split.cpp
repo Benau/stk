@@ -11,6 +11,7 @@
 #include "ge_vulkan_hiz_depth.hpp"
 #include "ge_vulkan_light_scatter.hpp"
 #include "ge_vulkan_skybox_renderer.hpp"
+#include "ge_vulkan_ssao.hpp"
 
 #include <array>
 #include <cassert>
@@ -236,8 +237,23 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
     // attachment descriptors if m_deferred_split != 0, which is expected
     // to be true if this class is used (see GEVulkanDriver)
     assert(getGEConfig()->m_deferred_split != 0);
-    initSplitGBufferDescriptor(vk);
     bool supports_compute = GEVulkanFeatures::supportsComputeInMainQueue();
+    // Before the descriptor of the g-buffer, which has the result of it (the
+    // lighting pass samples it)
+    if (supports_compute && getGEConfig()->m_ssao)
+    {
+        try
+        {
+            m_ssao.reset(new GEVulkanSSAO(vk, getSize(), m_depth_texture,
+                m_attachments[GVDFT_NORMAL]));
+        }
+        catch (const std::exception& e)
+        {
+            printf("Failed to initialize ambient occlusion: %s\n", e.what());
+            m_ssao.reset();
+        }
+    }
+    initSplitGBufferDescriptor(vk);
     if (supports_compute && getGEConfig()->m_glow_outline)
     {
         try
@@ -334,7 +350,9 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
 {
     // Same bindings as the input attachments in deferred_pbr.frag and
     // deferred_pointlight.frag: 0 = color, 1 = normal (with pbr data), 2 = depth
-    std::array<VkDescriptorImageInfo, 3> image_infos = {};
+    // and 3 = ambient occlusion (only deferred_pbr.frag, a transparent texture
+    // which is not used if there is none, specialization constant u_ssao)
+    std::array<VkDescriptorImageInfo, 4> image_infos = {};
     image_infos[0].sampler = vk->getSampler(GVS_NEAREST);
     image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     image_infos[0].imageView =
@@ -349,6 +367,21 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     image_infos[2].imageView =
         (VkImageView)m_depth_texture->getTextureHandler();
+    image_infos[3].sampler = vk->getSampler(GVS_NEAREST);
+    if (m_ssao)
+    {
+        image_infos[3].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[3].imageView = m_ssao->getImageView();
+    }
+    else
+    {
+        image_infos[3].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        if (vk->getTransparentTexture())
+        {
+            image_infos[3].imageView =
+                (VkImageView)vk->getTransparentTexture()->getTextureHandler();
+        }
+    }
     createSamplerDescriptor(vk, image_infos.size(),
         &m_descriptor_layout[GVDFP_HDR], &m_descriptor_pool[GVDFP_HDR],
         &m_descriptor_set[GVDFP_HDR], image_infos.data(), "GVDFP_HDR");
@@ -717,6 +750,10 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
     // And light scattering of the lights in the fog (compute shaders only)
     const bool has_light_scatter = m_light_scatter &&
         m_light_scatter->render(cmd, p);
+    // And the ambient occlusion which the lighting pass samples (compute
+    // shaders only)
+    if (m_ssao)
+        m_ssao->render(cmd, p);
 
     // 3. lighting, the background is the clear color of hdr
     {

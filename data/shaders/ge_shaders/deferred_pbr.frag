@@ -2,6 +2,9 @@
 layout(binding = 0) uniform sampler2D u_color;
 layout(binding = 1) uniform sampler2D u_normal;
 layout(binding = 2) uniform sampler2D u_depth;
+// Full size ambient occlusion of GEVulkanSSAO, used if u_ssao (a transparent
+// texture is bound if not)
+layout(binding = 3) uniform sampler2D u_ssao_texture;
 #define GE_LOAD_GBUFFER(tex) texelFetch(tex, ivec2(gl_FragCoord.xy), 0)
 #else
 layout (input_attachment_index = 0, binding = 0) uniform subpassInput u_color;
@@ -36,8 +39,13 @@ void main()
         world_position = u_camera.m_inverse_view_matrix * vec4(xpos, 1.0);
     vec3 eyedir = -normalize(xpos);
     vec3 normal = (u_camera.m_view_matrix * vec4(world_normal, 0.0)).xyz;
+    float ao = 1.0;
+#ifdef SPLIT
+    if (u_ssao)
+        ao = texelFetch(u_ssao_texture, ivec2(gl_FragCoord.xy), 0).x;
+#endif
     vec3 hdr = handlePBRDeferred(diffuse_color, pbr, world_normal, eyedir,
-        normal, 1.0 - pbr.x, world_position, xpos.z);
+        normal, 1.0 - pbr.x, world_position, xpos.z, ao);
     hdr += accumulateLights(u_push_constants.m_fullscreen_light_count,
         diffuse_color, normal, xpos, eyedir, 1.0 - pbr.x, pbr.y,
         world_position.xyz);

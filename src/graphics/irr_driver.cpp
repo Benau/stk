@@ -557,6 +557,7 @@ begin:
             GE::getGEConfig()->m_glow_outline = UserConfigParams::m_glow;
             GE::getGEConfig()->m_light_scatter =
                 UserConfigParams::m_light_scatter;
+            GE::getGEConfig()->m_ssao = UserConfigParams::m_ssao;
             GE::getGEConfig()->m_bloom = UserConfigParams::m_bloom;
             // Same lens dust as the OpenGL bloom (bloomblend.frag)
             GE::getGEConfig()->m_bloom_blend_texture =
@@ -2586,3 +2587,31 @@ u32 IrrDriver::getDefaultFramebuffer() const
 {
     return m_video_driver->getDefaultFramebuffer();
 }
+
+// ----------------------------------------------------------------------------
+// The Vulkan renderer (GEVulkanSSAO) reads them from its config
+void IrrDriver::setSSAORadius(float v)
+{
+    m_ssao_radius = v;
+#ifndef SERVER_ONLY
+    GE::getGEConfig()->m_ssao_radius = v;
+#endif
+}   // setSSAORadius
+
+// ----------------------------------------------------------------------------
+void IrrDriver::setSSAOK(float v)
+{
+    m_ssao_k = v;
+#ifndef SERVER_ONLY
+    GE::getGEConfig()->m_ssao_k = v;
+#endif
+}   // setSSAOK
+
+// ----------------------------------------------------------------------------
+void IrrDriver::setSSAOSigma(float v)
+{
+    m_ssao_sigma = v;
+#ifndef SERVER_ONLY
+    GE::getGEConfig()->m_ssao_sigma = v;
+#endif
+}   // setSSAOSigma
