@@ -8,6 +8,7 @@
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_features.hpp"
 #include "ge_vulkan_hiz_depth.hpp"
+#include "ge_vulkan_skybox_renderer.hpp"
 
 #include <array>
 #include <exception>
@@ -298,12 +299,6 @@ void GEVulkanDeferredFBO::render(VkCommandBuffer cmd,
     if (has_displace)
     {
         vkCmdEndRenderPass(cmd);
-        for (auto& q : p)
-        {
-            GEVulkanHiZDepth* hiz = q.first->getHiZDepth();
-            if (hiz)
-                hiz->generate(cmd);
-        }
         render_pass_info.clearValueCount =
             getZeroClearCountForPass(GVDFP_DISPLACE_MASK);
         render_pass_info.renderPass = getRTTRenderPass(GVDFP_DISPLACE_MASK);
@@ -460,8 +455,9 @@ void GEVulkanDeferredFBO::initDisplaceDescriptor(GEVulkanDriver* vk)
             "GVDFP_DISPLACE_COLOR in GEVulkanDeferredFBO");
     }
 
-    int hiz_multi =
-        getGEConfig()->m_screen_space_reflection_type <= GSSRT_FAST ? 2 : 1;
+    // One more set (without HiZ) if there is no HiZ depth, which has its own
+    // sets, see GEVulkanHiZDepth::getRenderingDescriptorSet
+    int hiz_multi = GEVulkanHiZDepth::isEnabled() ? 1 : 2;
     // m_descriptor_pool[GVDFP_DISPLACE_COLOR]
     VkDescriptorPoolSize pool_size;
     pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -502,8 +498,11 @@ void GEVulkanDeferredFBO::initDisplaceDescriptor(GEVulkanDriver* vk)
     std::array<VkDescriptorImageInfo, texture_layout_binding.size()>
         image_infos = {};
     image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    image_infos[0].imageView =
-        (VkImageView)m_attachments[GVDFT_DISPLACE_MASK]->getTextureHandler();
+    // The mask and ssr only exist if there is displace, the copy of the output
+    // doesn't use them
+    image_infos[0].imageView = m_attachments[GVDFT_DISPLACE_MASK] ?
+        (VkImageView)m_attachments[GVDFT_DISPLACE_MASK]->getTextureHandler() :
+        (VkImageView)m_vk->getTransparentTexture()->getTextureHandler();
     image_infos[0].sampler = m_vk->getSampler(GVS_NEAREST);
     image_infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     image_infos[1].imageView = m_attachments[GVDFT_DISPLACE_SSR] ?
@@ -511,8 +510,8 @@ void GEVulkanDeferredFBO::initDisplaceDescriptor(GEVulkanDriver* vk)
         (VkImageView)m_vk->getTransparentTexture()->getTextureHandler();
     image_infos[1].sampler = m_vk->getSampler(GVS_NEAREST);
     image_infos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    image_infos[2].imageView =
-        (VkImageView)m_attachments[GVDFT_DISPLACE_COLOR]->getTextureHandler();
+    // The output of the tonemap pass, see getOutputImageView()
+    image_infos[2].imageView = getOutputImageView();
     image_infos[2].sampler = m_vk->getSampler(GVS_NEAREST);
 
     VkWriteDescriptorSet write_descriptor_set = {};
@@ -974,5 +973,26 @@ void GEVulkanDeferredFBO::createDisplacePasses(unsigned mask_pass,
             throw std::runtime_error("vkCreateFramebuffer failed for GVDFP_DISPLACE_COLOR");
     }
 }   // createDisplacePasses
+
+// ----------------------------------------------------------------------------
+VkImageView GEVulkanDeferredFBO::getOutputImageView() const
+{
+    return getAttachment<GVDFT_DISPLACE_COLOR>() ?
+        (VkImageView)getAttachment<GVDFT_DISPLACE_COLOR>()
+        ->getTextureHandler() : (VkImageView)getTextureHandler();
+}   // getOutputImageView
+
+// ----------------------------------------------------------------------------
+std::vector<VkDescriptorSetLayout>
+    GEVulkanDeferredFBO::getAllDescriptorSetLayouts(
+    VkDescriptorSetLayout data_layout, unsigned id) const
+{
+    return
+        {
+            getDescriptorSetLayout(id),
+            data_layout,
+            m_vk->getSkyBoxRenderer()->getEnvDescriptorSetLayout()
+        };
+}   // getAllDescriptorSetLayouts
 
 }

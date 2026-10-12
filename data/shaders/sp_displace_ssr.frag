@@ -6,7 +6,7 @@ layout(location = 0) out float o_displace_mask;
 layout(location = 1) out vec4 o_displace_ssr;
 
 #stk_include "utils/sp_texture_sampling.frag"
-#stk_include "utils/screen_space_reflection.frag"
+#stk_include "utils/ssr.glsl"
 
 uniform samplerCube u_skybox_texture;
 uniform sampler2D u_displace_color;

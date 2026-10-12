@@ -33,6 +33,13 @@ enum GEVulkanDeferredFBOPass : unsigned
     // scattering is enabled: the glow color, its blurred version and the
     // blurred light scattering, sampled by the lighting pass
     GVDFP_LIGHTING_COMPOSITE,
+    // Only used by GEVulkanDeferredFBOSplit if solid screen space reflection
+    // is enabled (GEVulkanDrawCall::renderSolidSSR), it has no descriptor set
+    // layout of its own: set 0 uses the layout of GVDFP_DISPLACE_COLOR (the
+    // output of the tonemap pass of the previous frame, the depth and the
+    // HiZ depth, see GEVulkanHiZDepth::getRenderingDescriptorSet, or
+    // GVDFP_DISPLACE_MASK if there is no HiZ) and set 2 is GVDFP_HDR
+    GVDFP_SOLID_SSR,
     GVDFP_COUNT,
 };
 
@@ -131,6 +138,32 @@ public:
     // ------------------------------------------------------------------------
     virtual const VkDescriptorSet* getDescriptorSet(unsigned id) const
                                            { return &m_descriptor_set.at(id); }
+    // ------------------------------------------------------------------------
+    virtual std::vector<VkDescriptorSetLayout>
+           getAllDescriptorSetLayouts(VkDescriptorSetLayout data_layout,
+                                                            unsigned id) const;
+    // ------------------------------------------------------------------------
+    // True if displace materials can be rendered (the mask exists)
+    bool hasDisplace() const
+    {
+        return getAttachment<GVDFT_DISPLACE_MASK>() != NULL;
+    }
+    // ------------------------------------------------------------------------
+    // The tonemap output sampled by the displace passes and the solid SSR of
+    // the next frame (in shader-read-only layout afterwards). If a displace
+    // color attachment is present, use it. Otherwise, when the output size
+    // matches the screen size, use the swapchain image unless solid SSR is
+    // enabled, in which case a same-size offscreen image is created to
+    // preserve the tonemapped output for SSR. For other sizes, use the
+    // offscreen image of this FBO.
+    VkImageView getOutputImageView() const;
+    // ------------------------------------------------------------------------
+    // The layout of the set which has the output (see getOutputImageView),
+    // it's not VK_NULL_HANDLE even if there is no displace color attachment
+    VkDescriptorSetLayout getOutputDescriptorSetLayout() const
+    {
+        return m_descriptor_layout[GVDFP_DISPLACE_COLOR];
+    }
     // ------------------------------------------------------------------------
     template<unsigned AttachmentType>
     GEVulkanAttachmentTexture* getAttachment() const
