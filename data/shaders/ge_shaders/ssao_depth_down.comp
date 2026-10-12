@@ -1,0 +1,28 @@
+// Next levels of the depth chain of GEVulkanSSAO: filters the 2x2 blocks of
+// the level in pc.m_misc.x to the next one (the sampler has all the levels,
+// u_dst is a view of the next one)
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+#include "utils/ssao_common.glsl"
+
+layout(set = 0, binding = 0) uniform sampler2D u_src;
+layout(set = 0, binding = 2, r32f) uniform writeonly image2D u_dst;
+
+void main()
+{
+    const int level = pc.m_misc.x;
+    const ivec4 src_rect = ssaoLevelRect(pc.m_rect, level);
+    const ivec4 dst_rect = ssaoHalfRect(src_rect);
+    const ivec2 dst = dst_rect.xy + ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(dst, dst_rect.zw)))
+        return;
+
+    float z[4];
+    for (int i = 0; i < 4; i++)
+    {
+        ivec2 pixel = clamp(dst * 2 + ivec2(i & 1, i >> 1), src_rect.xy,
+            src_rect.zw - 1);
+        z[i] = texelFetch(u_src, pixel, level).x;
+    }
+    imageStore(u_dst, dst, vec4(ssaoDepthFilter(z[0], z[1], z[2], z[3])));
+}

@@ -1,0 +1,158 @@
+// Screen space ambient occlusion of GEVulkanSSAO, at half the size of the
+// g-buffer: one thread for every 2x2 block, evaluated at the first pixel of
+// it. The result is the visibility (1.0 = not occluded, same as the AO of
+// the OpenGL renderer), which ssao_blur.comp and ssao_upsample.comp turn into
+// the full size image that the lighting pass multiplies the ambient light by.
+//
+// The normal is the one of the g-buffer (also used by solid_ssr.frag), the
+// depth is the linear one of the chain (ssao_depth.comp, ssao_depth_down.comp)
+//
+// Only estimateVisibility() depends on the algorithm. It's the Alchemy / SAO
+// one of the OpenGL ssao.frag for now, a GTAO estimator can replace it
+// without changing anything else (the inputs and the output are the same)
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+#include "utils/ssao_common.glsl"
+
+layout(set = 0, binding = 0) uniform sampler2D u_depth;
+layout(set = 0, binding = 1) uniform sampler2D u_normal;
+layout(set = 0, binding = 2, SSAO_AO_FORMAT) uniform writeonly image2D u_ao;
+
+#include "utils/camera.glsl"
+#include "utils/unproject_position.glsl"
+#include "../utils/decodeNormal.frag"
+
+const int SAMPLES = 8;
+const float INV_SAMPLES = 1.0 / float(SAMPLES);
+const float GOLDEN_ANGLE = 2.39996323;
+const float PI = 3.14159265;
+// The offset (in pixels) of a sample which fetches level 0 is up to 2^3 = 8,
+// the levels of the chain after it are used for the farther ones
+const int LOG_MAX_OFFSET = 3;
+const int MAX_MIP = 3;
+// Largest radius on the screen, as a part of the height of the viewport (the
+// samples of a very close surface would otherwise be all over the screen)
+const float MAX_RADIUS_RATIO = 0.1;
+// Occluders which are farther than this (world units) are ignored
+const float THICKNESS = 10.0;
+
+// View space ray (z of 1 or -1, so the position is the ray multiplied by the
+// linear depth), linear in the position on the viewport
+vec3 g_ray_origin;
+vec3 g_ray_x;
+vec3 g_ray_y;
+
+vec3 unitDepthRay(vec2 ndc)
+{
+    vec4 v = u_camera.m_inverse_projection_matrix * vec4(ndc, 1.0, 1.0);
+    vec3 p = v.xyz / v.w;
+    return p / abs(p.z);
+}
+
+void initRays()
+{
+    g_ray_origin = unitDepthRay(vec2(0.0));
+    g_ray_x = unitDepthRay(vec2(1.0, 0.0)) - g_ray_origin;
+    g_ray_y = unitDepthRay(vec2(0.0, 1.0)) - g_ray_origin;
+}
+
+// Position is in pixels of the g-buffer, at the center of the pixel
+vec3 viewRay(vec2 position)
+{
+    vec2 ndc = (position - u_camera.m_viewport.xy) /
+        u_camera.m_viewport.zw * 2.0 - 1.0;
+    return g_ray_origin + ndc.x * g_ray_x + ndc.y * g_ray_y;
+}
+
+float interleavedGradientNoise(vec2 w)
+{
+    const vec3 m = vec3(0.06711056, 0.00583715, 52.9829189);
+    return fract(m.z * fract(dot(w, m.xy)));
+}
+
+// View space position of the pixel (full size coordinates, inside of the rect
+// of the viewport) at a level of the depth chain
+vec3 fetchViewPosition(ivec2 pixel, int mip)
+{
+    ivec4 level_rect = ssaoLevelRect(pc.m_rect, mip);
+    ivec2 p = clamp(pixel >> mip, level_rect.xy, level_rect.zw - 1);
+    float z = texelFetch(u_depth, p, mip).x;
+    // Center of the texel of the level, in pixels of level 0
+    return viewRay((vec2(p) + 0.5) * float(1 << mip)) * z;
+}
+
+// The estimator. Inputs: the pixel (full size coordinates, inside of the rect
+// of the viewport), its view space position and normal, and
+// fetchViewPosition() for the others. Output: the visibility in [0, 1]
+float estimateVisibility(ivec2 pixel, vec3 pos, vec3 normal)
+{
+    const float radius = pc.m_params.x;
+    const float sigma = pc.m_params.y;
+    const float k = pc.m_params.z;
+    const float z = abs(pos.z);
+
+    // Radius on the screen in pixels, the farther the surface is the
+    // smaller it is, and nothing is sampled if it's less than a pixel
+    float radius_px = radius * abs(u_camera.m_projection_matrix[1][1]) *
+        0.5 * u_camera.m_viewport.w / z;
+    if (radius_px < 1.0)
+        return 1.0;
+    radius_px = min(radius_px, MAX_RADIUS_RATIO * u_camera.m_viewport.w);
+
+    float peak = 0.1 * radius;
+    float intensity = 2.0 * PI * sigma * peak * INV_SAMPLES;
+    // Stronger bias when the resolution is lower
+    float min_size = min(u_camera.m_viewport.z, u_camera.m_viewport.w);
+    float horizon = min(100.0 / min_size, 0.3);
+    float bias = min(1.0 / min_size, 0.003);
+
+    // Consecutive coordinates in the half size image (pixel = block * 2), the
+    // noise is designed for that, with a stride of 2 it turns into stripes
+    float phi = interleavedGradientNoise(vec2(pixel >> 1)) * 2.0 * PI;
+    float occlusion = 0.0;
+    for (int i = 0; i < SAMPLES; i++)
+    {
+        float alpha = (float(i) + 0.5) * INV_SAMPLES;
+        float angle = phi + float(i) * GOLDEN_ANGLE;
+        float offset_px = alpha * radius_px;
+        ivec2 offset = ivec2(round(vec2(cos(angle), sin(angle)) *
+            offset_px));
+        // Farther samples fetch the next levels, so the distance between the
+        // texels which are fetched is about the same
+        int mip = clamp(findMSB(max(int(offset_px), 1)) - LOG_MAX_OFFSET, 0,
+            MAX_MIP);
+
+        vec3 occluder = fetchViewPosition(pixel + offset, mip);
+        vec3 vi = occluder - pos;
+        float vv = dot(vi, vi);
+        float vn = dot(vi, normal);
+        float w = max(0.0, 1.0 - vv / (THICKNESS * THICKNESS));
+        w = w * w;
+        w *= step(vv * horizon * horizon, vn * vn);
+        occlusion += w * max(0.0, vn - z * bias) / (vv + peak);
+    }
+    return pow(max(1.0 - sqrt(occlusion * intensity), 0.0), k);
+}
+
+void main()
+{
+    const ivec4 half_rect = ssaoHalfRect(pc.m_rect);
+    const ivec2 block = half_rect.xy + ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(block, half_rect.zw)))
+        return;
+
+    ivec2 pixel = clamp(block * 2, pc.m_rect.xy, pc.m_rect.zw - 1);
+    float visibility = 1.0;
+    float z = texelFetch(u_depth, pixel, 0).x;
+    if (z < 0.5 * SSAO_SKY_Z)
+    {
+        initRays();
+        vec3 pos = viewRay(vec2(pixel) + 0.5) * z;
+        // View space normal, same as solid_ssr.frag
+        vec4 normal_data = texelFetch(u_normal, pixel, 0);
+        vec3 normal = (u_camera.m_view_matrix *
+            vec4(DecodeNormal(normal_data.xy), 0.0)).xyz;
+        visibility = estimateVisibility(pixel, pos, normal);
+    }
+    imageStore(u_ao, block, vec4(vec3(visibility), 1.0));
+}

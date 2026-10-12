@@ -46,7 +46,9 @@ vec3 PBRSunAmbientEmitLight(
     float perceptual_roughness,
     float metallic,
     float emissive,
-    float shadow)
+    float shadow,
+    vec3 ao_diffuse,
+    vec3 ao_specular)
 {
     // Copied from PBRLight to use F_ab and F90 again
     float NdotV = max(dot(normal, eyedir), 0.0001);
@@ -86,19 +88,20 @@ vec3 PBRSunAmbientEmitLight(
     if (u_ibl)
     {
         environment = environmentLight(irradiance, radiance, roughness,
-            diffuse_color, F_ab, F0, F90, NdotV);
+            diffuse_color, F_ab, F0, F90, NdotV, ao_diffuse, ao_specular);
     }
     else
     {
         environment = u_global_light.m_skytop_color * ambient_color *
-            diffuse_color;
+            diffuse_color * ao_diffuse;
     }
 
     vec3 emit = emissive * color * 4.0;
 
     return sun_color * sunlight
           + environment + emit
-          + (diffuse_ambient + specular_ambient) * ambient_color;
+          + (diffuse_ambient * ao_diffuse + specular_ambient * ao_specular) *
+          ambient_color;
 }
 
 float getShadowPCF(sampler2DArrayShadow map, vec2 shadowtexcoord, int layer, float depth)

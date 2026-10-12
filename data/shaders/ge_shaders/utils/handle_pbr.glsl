@@ -11,10 +11,34 @@ layout (set = 2, binding = 3) uniform sampler2DArrayShadow u_shadow_map;
 #include "pbr_light.glsl"
 #include "sun_direction.glsl"
 
+vec3 gtaoMultiBounce(float visibility, vec3 albedo)
+{
+    // Jimenez et al. 2016, "Practical Realtime Strategies for Accurate Indirect Occlusion"
+    vec3 a =  2.0404 * albedo - 0.3324;
+    vec3 b = -4.7951 * albedo + 0.6417;
+    vec3 c =  2.7552 * albedo + 0.6903;
+
+    return max(vec3(visibility), ((visibility * a + b) * visibility + c) * visibility);
+}
+
+// ao is the visibility of the ambient light (screen space ambient occlusion),
+// 1.0 if there is none. Same as IBL.frag of the OpenGL renderer
 vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
                        vec3 eyedir, vec3 normal, float perceptual_roughness,
-                       vec4 world_position, float view_depth)
+                       vec4 world_position, float view_depth, float ao)
 {
+    vec3 ao_diffuse = vec3(1.0);
+    vec3 ao_specular = vec3(1.0);
+    if (u_ssao && ao < 1.0)
+    {
+        float NdotV = max(dot(normal, eyedir), 0.0);
+        // Lagarde and de Rousiers 2014, "Moving Frostbite to PBR"
+        float ao_spec = clamp(pow(NdotV + ao,
+            exp2(-16.0 * perceptual_roughness - 1.0)) - 1.0 + ao, 0.0, 1.0);
+        ao_diffuse = gtaoMultiBounce(ao, diffuse_color);
+        ao_specular = gtaoMultiBounce(ao_spec, diffuse_color);
+    }
+
     float radiance_level = perceptual_roughness * u_specular_levels_minus_one;
     vec3 reflection = reflect(-eyedir, normal);
 
@@ -44,7 +68,7 @@ vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
         irradiance, radiance,
         u_global_light.m_sun_color,
         u_global_light.m_ambient_color,
-        perceptual_roughness, pbr.y, pbr.z, shadow);
+        perceptual_roughness, pbr.y, pbr.z, shadow, ao_diffuse, ao_specular);
 
     return mixed_color;
 }
@@ -72,7 +96,7 @@ vec3 handlePBR(vec3 diffuse_color, vec3 pbr, vec4 world_position,
     float perceptual_roughness = 1.0 - pbr.x;
 
     vec3 mixed_color = handlePBRDeferred(diffuse_color, pbr, world_normal,
-        eyedir, normal, perceptual_roughness, world_position, xpos.z);
+        eyedir, normal, perceptual_roughness, world_position, xpos.z, 1.0);
 
     mixed_color += accumulateLights(u_global_light.m_light_count,
         diffuse_color, normal, xpos, eyedir, perceptual_roughness, pbr.y,

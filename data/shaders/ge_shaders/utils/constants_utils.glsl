@@ -18,6 +18,9 @@ layout (constant_id = 10) const bool u_light_scatter = false;
 layout (constant_id = 11) const bool u_bloom = false;
 // The blend texture (lens dust) of the bloom is also added (needs u_bloom)
 layout (constant_id = 12) const bool u_bloom_blend = false;
+// Of deferred_pbr.frag, the ambient light is multiplied by the ambient
+// occlusion (GEVulkanSSAO)
+layout (constant_id = 13) const bool u_ssao = false;
 
 vec3 convertColor(vec3 input_color)
 {

@@ -30,6 +30,7 @@ GEConfig g_config =
     false,
     false,
     "",
+    false,
     GADT_DISABLED,
     GSSRT_DISABLED,
     {},
@@ -37,7 +38,10 @@ GEConfig g_config =
     0,
     GST_NONE,
     8,
-    32
+    32,
+    0.5f,
+    3.0f,
+    1.0f
 };
 std::string g_shader_folder = "";
 std::chrono::steady_clock::time_point g_mono_start =
@@ -280,6 +284,10 @@ void refreshDeferredSplit()
     // separated), and the HiZ depth is generated after the g-buffer
     if (g_config.m_screen_space_reflection_type != GSSRT_DISABLED)
         g_config.m_deferred_split |= 1 << 3;
+    // The ambient occlusion is computed between the g-buffer and the lighting
+    // passes, and sampled by the lighting pass
+    if (g_config.m_ssao)
+        g_config.m_deferred_split |= 1 << 4;
 }
 
 }
