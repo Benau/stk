@@ -6,6 +6,7 @@
 #include "ge_vulkan_camera_scene_node.hpp"
 #include "ge_vulkan_deferred_fbo.hpp"
 #include "ge_vulkan_driver.hpp"
+#include "ge_vulkan_features.hpp"
 #include "ge_vulkan_shader_manager.hpp"
 
 #include <algorithm>
@@ -13,6 +14,13 @@
 
 namespace GE
 {
+// ----------------------------------------------------------------------------
+bool GEVulkanHiZDepth::isEnabled()
+{
+    return getGEConfig()->m_screen_space_reflection_type >= GSSRT_HIZ &&
+        GEVulkanFeatures::supportsComputeInMainQueue();
+}   // isEnabled
+
 // ----------------------------------------------------------------------------
 GEVulkanHiZDepth::GEVulkanHiZDepth(GEVulkanDriver* vk)
                 : m_vk(vk), m_hiz_depth(NULL),
@@ -40,9 +48,9 @@ void GEVulkanHiZDepth::prepare(GEVulkanCameraSceneNode* cam)
         irr::core::dimension2du(
         cam->getUBOData()->m_viewport.LowerRightCorner.X,
         cam->getUBOData()->m_viewport.LowerRightCorner.Y));
-    if (m_vk->getRTTTexture() == NULL || hiz_size.getArea() == 0)
+    if (hiz_size.getArea() == 0)
         return;
-    if (m_dfbo_observer.expired() || m_hiz_size != hiz_size)
+    if (m_hiz_depth == NULL || m_hiz_size != hiz_size)
     {
         m_hiz_size = hiz_size;
         destroy();
@@ -180,7 +188,6 @@ void GEVulkanHiZDepth::init()
 
     GEVulkanDeferredFBO* dfbo =
         static_cast<GEVulkanDeferredFBO*>(m_vk->getRTTTexture());
-    m_dfbo_observer = dfbo->getDepthTexture()->getTextureObserver();
     for (uint32_t i = 0; i < mip_levels; i++)
     {
         VkDescriptorImageInfo input_info = {};
@@ -241,7 +248,7 @@ void GEVulkanHiZDepth::loadRenderingDescriptor()
     GEVulkanDeferredFBO* dfbo =
         static_cast<GEVulkanDeferredFBO*>(m_vk->getRTTTexture());
     std::vector<VkDescriptorSetLayout> layouts(1,
-        dfbo->getDescriptorSetLayout(GVDFP_DISPLACE_COLOR));
+        dfbo->getOutputDescriptorSetLayout());
 
     VkDescriptorSetAllocateInfo alloc_info = {};
     alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -258,9 +265,7 @@ void GEVulkanHiZDepth::loadRenderingDescriptor()
 
     std::array<VkDescriptorImageInfo, displace_binding_count> image_infos = {};
     image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    image_infos[0].imageView =
-        (VkImageView)
-        dfbo->getAttachment<GVDFT_DISPLACE_COLOR>()->getTextureHandler();
+    image_infos[0].imageView = dfbo->getOutputImageView();
     image_infos[0].sampler = m_vk->getSampler(GVS_NEAREST);
     image_infos[1].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     image_infos[1].imageView =
@@ -317,7 +322,7 @@ void GEVulkanHiZDepth::destroy()
 // ----------------------------------------------------------------------------
 void GEVulkanHiZDepth::generate(VkCommandBuffer cmd)
 {
-    if (m_dfbo_observer.expired())
+    if (!isReady())
         return;
 
     const uint32_t mip_levels = m_hiz_depth->getMipmapLevels();

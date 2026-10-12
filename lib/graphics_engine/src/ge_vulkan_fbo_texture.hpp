@@ -82,6 +82,11 @@ public:
     // ------------------------------------------------------------------------
     virtual const VkDescriptorSet* getDescriptorSet(unsigned id) const
                                                                { return NULL; }
+    // ------------------------------------------------------------------------
+    virtual std::vector<VkDescriptorSetLayout>
+            getAllDescriptorSetLayouts(VkDescriptorSetLayout data_layout,
+                                                             unsigned id) const
+                               { return std::vector<VkDescriptorSetLayout>(); }
 
 };   // GEVulkanFBOTexture
 
