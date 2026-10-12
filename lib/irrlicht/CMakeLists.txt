@@ -536,7 +536,7 @@ if(DLOPEN_MOLTENVK)
         ${IRRLICHT_SOURCES}
         source/Irrlicht/MoltenVK.mm
         source/Irrlicht/MoltenVK.h)
-    set_source_files_properties(source/Irrlicht/MoltenVK.mm PROPERTIES COMPILE_FLAGS "-x objective-c++ -O3  -fno-rtti")
+    set_source_files_properties(source/Irrlicht/MoltenVK.mm PROPERTIES COMPILE_FLAGS "-x objective-c++ -O3")
     set_source_files_properties(source/Irrlicht/MoltenVK.mm PROPERTIES LANGUAGE C)
 endif()
 
@@ -546,7 +546,7 @@ if(IOS)
         source/Irrlicht/CIrrDeviceiOS.mm
         source/Irrlicht/CIrrDeviceiOS.h)
 
-    set_source_files_properties(source/Irrlicht/CIrrDeviceiOS.mm PROPERTIES COMPILE_FLAGS "-x objective-c++ -O3  -fno-rtti")
+    set_source_files_properties(source/Irrlicht/CIrrDeviceiOS.mm PROPERTIES COMPILE_FLAGS "-x objective-c++ -O3")
     set_source_files_properties(source/Irrlicht/CIrrDeviceiOS.mm PROPERTIES LANGUAGE C)
 endif()
 
@@ -555,7 +555,7 @@ if (NOT SERVER_ONLY AND APPLE AND NOT IOS)
         ${IRRLICHT_SOURCES}
         source/Irrlicht/MacOS.mm)
 
-    set_source_files_properties(source/Irrlicht/MacOS.mm PROPERTIES COMPILE_FLAGS "-x objective-c++ -O3  -fno-rtti")
+    set_source_files_properties(source/Irrlicht/MacOS.mm PROPERTIES COMPILE_FLAGS "-x objective-c++ -O3")
     set_source_files_properties(source/Irrlicht/MacOS.mm PROPERTIES LANGUAGE C)
 
 endif()
