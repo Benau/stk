@@ -1,0 +1,48 @@
+// First step of the depth chain of GEVulkanSSAO: the linear view space depth
+// of the g-buffer (level 0) and the filtered 2x2 blocks of it (level 1), one
+// thread for every block. Sky pixels are SSAO_SKY_Z
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+#include "utils/ssao_common.glsl"
+
+layout(set = 0, binding = 0) uniform sampler2D u_depth;
+layout(set = 0, binding = 2, r32f) uniform writeonly image2D u_level0;
+layout(set = 0, binding = 3, r32f) uniform writeonly image2D u_level1;
+
+#include "utils/camera.glsl"
+#include "utils/unproject_position.glsl"
+
+float linearDepth(ivec2 pixel)
+{
+    // Never reads outside of the viewport of the camera
+    pixel = clamp(pixel, pc.m_rect.xy, pc.m_rect.zw - 1);
+    float depth = texelFetch(u_depth, pixel, 0).x;
+    // Reverse z
+    if (depth == 0.0)
+        return SSAO_SKY_Z;
+    vec3 pos = getPosFromUVDepth(vec3(vec2(pixel) + 0.5, depth),
+        u_camera.m_viewport, u_camera.m_inverse_projection_matrix);
+    return abs(pos.z);
+}
+
+void main()
+{
+    const ivec4 half_rect = ssaoHalfRect(pc.m_rect);
+    const ivec2 block = half_rect.xy + ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(block, half_rect.zw)))
+        return;
+
+    float z[4];
+    for (int i = 0; i < 4; i++)
+    {
+        ivec2 pixel = block * 2 + ivec2(i & 1, i >> 1);
+        z[i] = linearDepth(pixel);
+        // The block can be partly outside of the rect (it belongs to the
+        // next viewport there)
+        if (all(greaterThanEqual(pixel, pc.m_rect.xy)) &&
+            all(lessThan(pixel, pc.m_rect.zw)))
+            imageStore(u_level0, pixel, vec4(z[i]));
+    }
+    imageStore(u_level1, block,
+        vec4(ssaoDepthFilter(z[0], z[1], z[2], z[3])));
+}

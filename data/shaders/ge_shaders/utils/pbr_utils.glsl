@@ -70,7 +70,9 @@ vec3 environmentLight(
     vec2 F_ab,
     vec3 F0,
     float F90,
-    float NdotV)
+    float NdotV,
+    vec3 ao_diffuse,
+    vec3 ao_specular)
 {
     // Multiscattering approximation: https://www.jcgt.org/published/0008/01/03/paper.pdf
     // Useful reference: https://bruop.github.io/ibl
@@ -85,7 +87,7 @@ vec3 environmentLight(
     vec3 Edss = 1.0 - (FssEss + FmsEms);
     vec3 kD = diffuse_color * Edss;
 
-    vec3 diffuse = (FmsEms + kD) * irradiance;
-    vec3 specular = FssEss * radiance;
+    vec3 diffuse = (FmsEms + kD) * irradiance * ao_diffuse;
+    vec3 specular = FssEss * radiance * ao_specular;
     return diffuse + specular;
 }

@@ -483,10 +483,7 @@ public:
     }
 
     // ------------------------------------------------------------------------
-    void setSSAORadius(float v)
-    {
-        m_ssao_radius = v;
-    }
+    void setSSAORadius(float v);
 
     // ------------------------------------------------------------------------
     float getSSAOK() const
@@ -495,10 +492,7 @@ public:
     }
 
     // ------------------------------------------------------------------------
-    void setSSAOK(float v)
-    {
-        m_ssao_k = v;
-    }
+    void setSSAOK(float v);
 
     // ------------------------------------------------------------------------
     float getSSAOSigma() const
@@ -507,10 +501,7 @@ public:
     }
 
     // ------------------------------------------------------------------------
-    void setSSAOSigma(float v)
-    {
-        m_ssao_sigma = v;
-    }
+    void setSSAOSigma(float v);
 #ifdef DEBUG
     std::vector<scene::IAnimatedMeshSceneNode*> getDebugMeshes()
     {
