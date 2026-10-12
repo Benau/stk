@@ -2832,7 +2832,11 @@ void GEVulkanDriver::reloadShaders()
     waitIdle();
     setDisableWaitIdle(true);
     clearDrawCallsCache();
+    if (getGEConfig()->m_deferred_split != 0)
+        destroySwapChainRelated(false/*handle_surface*/);
     GEVulkanShaderManager::loadAllShaders();
+    if (getGEConfig()->m_deferred_split != 0)
+        createSwapChainRelated(false/*handle_surface*/);
     for (auto& dc : static_cast<GEVulkanSceneManager*>(
         m_irrlicht_device->getSceneManager())->getDrawCalls())
         dc.second = std::unique_ptr<GEVulkanDrawCall>(new GEVulkanDrawCall);
