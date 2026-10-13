@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -40,6 +41,13 @@ std::array<int32_t, 4> GEVulkanPostProcessing::innerHalfRect(
 {
     return {{ (r[0] + 1) >> 1, (r[1] + 1) >> 1, r[2] >> 1, r[3] >> 1 }};
 }   // innerHalfRect
+
+// ----------------------------------------------------------------------------
+GEVulkanPostProcessing::BlurPipelines::BlurPipelines()
+{
+    m_layout = VK_NULL_HANDLE;
+    m_pipelines.fill(VK_NULL_HANDLE);
+}   // BlurPipelines
 
 // ----------------------------------------------------------------------------
 bool GEVulkanPostProcessing::getViewport(GEVulkanDrawCall* dc,
@@ -217,10 +225,10 @@ void GEVulkanPostProcessing::writeImageDescriptorSet(VkDescriptorSet set,
 }   // writeImageDescriptorSet
 
 // ----------------------------------------------------------------------------
-void GEVulkanPostProcessing::createBlurPipeline(const char* shader,
+void GEVulkanPostProcessing::createBlurPipelines(const char* shader,
                                              VkDescriptorSetLayout layout,
-                                             VkPipelineLayout* pipeline_layout,
-                                             VkPipeline* pipeline) const
+                                             uint32_t mode_mask,
+                                             BlurPipelines* out) const
 {
     VkDevice device = m_vk->getDevice();
     VkPushConstantRange push_constant = {};
@@ -234,40 +242,102 @@ void GEVulkanPostProcessing::createBlurPipeline(const char* shader,
     pipeline_layout_info.pushConstantRangeCount = 1;
     pipeline_layout_info.pPushConstantRanges = &push_constant;
     if (vkCreatePipelineLayout(device, &pipeline_layout_info, NULL,
-        pipeline_layout) != VK_SUCCESS)
+        &out->m_layout) != VK_SUCCESS)
     {
         throw std::runtime_error(std::string(
             "vkCreatePipelineLayout failed for ") + shader);
     }
 
-    VkComputePipelineCreateInfo pipeline_info = {};
-    pipeline_info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipeline_info.stage.sType =
-        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    pipeline_info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    pipeline_info.stage.module = GEVulkanShaderManager::getShader(shader);
-    pipeline_info.stage.pName = "main";
-    pipeline_info.layout = *pipeline_layout;
-    if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeline_info,
-        NULL, pipeline) != VK_SUCCESS)
+    // constant_id = 0 of utils/blur.glsl is the mode
+    VkSpecializationMapEntry entry = {};
+    entry.constantID = 0;
+    entry.offset = 0;
+    entry.size = sizeof(uint32_t);
+
+    std::array<uint32_t, BM_COUNT> mode_values = {};
+    std::array<VkSpecializationInfo, BM_COUNT> specializations = {};
+    std::array<VkComputePipelineCreateInfo, BM_COUNT> infos = {};
+    std::array<VkPipeline, BM_COUNT> created = {};
+    std::array<unsigned, BM_COUNT> modes = {};
+    unsigned count = 0;
+    VkShaderModule module = GEVulkanShaderManager::getShader(shader);
+    for (unsigned mode = 0; mode < BM_COUNT; mode++)
+    {
+        if (!(mode_mask & (1u << mode)))
+            continue;
+        mode_values[count] = mode;
+        specializations[count].mapEntryCount = 1;
+        specializations[count].pMapEntries = &entry;
+        specializations[count].dataSize = sizeof(uint32_t);
+        specializations[count].pData = &mode_values[count];
+
+        VkComputePipelineCreateInfo& info = infos[count];
+        info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        info.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        info.stage.module = module;
+        info.stage.pName = "main";
+        info.stage.pSpecializationInfo = &specializations[count];
+        info.layout = out->m_layout;
+        modes[count] = mode;
+        count++;
+    }
+    if (count == 0)
+        return;
+
+    // On failure the driver sets the handles which it couldn't create to
+    // VK_NULL_HANDLE and the others are valid, so keep them for the destroy
+    const VkResult result = vkCreateComputePipelines(device, VK_NULL_HANDLE,
+        count, infos.data(), NULL, created.data());
+    for (unsigned i = 0; i < count; i++)
+        out->m_pipelines[modes[i]] = created[i];
+    if (result != VK_SUCCESS)
     {
         throw std::runtime_error(std::string(
             "vkCreateComputePipelines failed for ") + shader);
     }
-}   // createBlurPipeline
+}   // createBlurPipelines
 
 // ----------------------------------------------------------------------------
-void GEVulkanPostProcessing::dispatchBlur(VkCommandBuffer cmd,
-                                       VkPipelineLayout pipeline_layout,
-                                       VkDescriptorSet set, BlurMode mode,
+void GEVulkanPostProcessing::destroyBlurPipelines(BlurPipelines* pipelines)
+                                                                          const
+{
+    VkDevice device = m_vk->getDevice();
+    for (VkPipeline& p : pipelines->m_pipelines)
+    {
+        if (p != VK_NULL_HANDLE)
+            vkDestroyPipeline(device, p, NULL);
+        p = VK_NULL_HANDLE;
+    }
+    if (pipelines->m_layout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, pipelines->m_layout, NULL);
+    pipelines->m_layout = VK_NULL_HANDLE;
+}   // destroyBlurPipelines
+
+// ----------------------------------------------------------------------------
+bool GEVulkanPostProcessing::dispatchBlur(VkCommandBuffer cmd,
+                                       const BlurPipelines& pipelines,
+                                       VkPipeline* bound, VkDescriptorSet set,
+                                       BlurMode mode,
                                        const std::array<int32_t, 4>& src_rect,
                                        const std::array<int32_t, 4>& dst_rect,
                                        float scale, float blend,
                                        int32_t direction_x,
                                        int32_t direction_y) const
 {
+    const VkPipeline pipeline = pipelines.m_pipelines[mode];
+    // The mode was not in the mask of createBlurPipelines
+    assert(pipeline != VK_NULL_HANDLE);
+    if (pipeline == VK_NULL_HANDLE)
+        return false;
+
+    if (*bound != pipeline)
+    {
+        *bound = pipeline;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+    }
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        pipeline_layout, 0, 1, &set, 0, NULL);
+        pipelines.m_layout, 0, 1, &set, 0, NULL);
     BlurPushConstants pc = {};
     for (unsigned i = 0; i < 4; i++)
     {
@@ -276,14 +346,14 @@ void GEVulkanPostProcessing::dispatchBlur(VkCommandBuffer cmd,
     }
     pc.m_direction[0] = direction_x;
     pc.m_direction[1] = direction_y;
-    pc.m_mode = mode;
     pc.m_scale = scale;
     pc.m_blend = blend;
-    vkCmdPushConstants(cmd, pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+    vkCmdPushConstants(cmd, pipelines.m_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
         sizeof(pc), &pc);
     const uint32_t w = (uint32_t)(dst_rect[2] - dst_rect[0]);
     const uint32_t h = (uint32_t)(dst_rect[3] - dst_rect[1]);
     vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
+    return true;
 }   // dispatchBlur
 
 // ----------------------------------------------------------------------------

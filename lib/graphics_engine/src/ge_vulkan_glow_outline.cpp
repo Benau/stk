@@ -21,9 +21,7 @@ GEVulkanGlowOutline::GEVulkanGlowOutline(GEVulkanDriver* vk,
                      m_render_pass(VK_NULL_HANDLE),
                      m_framebuffer(VK_NULL_HANDLE),
                      m_blur_layout(VK_NULL_HANDLE),
-                     m_blur_pool(VK_NULL_HANDLE),
-                     m_blur_pipeline_layout(VK_NULL_HANDLE),
-                     m_blur_pipeline(VK_NULL_HANDLE)
+                     m_blur_pool(VK_NULL_HANDLE)
 {
     m_blur.fill(NULL);
     m_blur_sets.fill(VK_NULL_HANDLE);
@@ -74,10 +72,7 @@ GEVulkanGlowOutline::~GEVulkanGlowOutline()
 void GEVulkanGlowOutline::destroy()
 {
     VkDevice device = m_vk->getDevice();
-    if (m_blur_pipeline != VK_NULL_HANDLE)
-        vkDestroyPipeline(device, m_blur_pipeline, NULL);
-    if (m_blur_pipeline_layout != VK_NULL_HANDLE)
-        vkDestroyPipelineLayout(device, m_blur_pipeline_layout, NULL);
+    destroyBlurPipelines(&m_blur_pipelines);
     // Descriptor sets are freed with their pools
     if (m_blur_pool != VK_NULL_HANDLE)
         vkDestroyDescriptorPool(device, m_blur_pool, NULL);
@@ -207,8 +202,8 @@ void GEVulkanGlowOutline::createBlur()
         m_blur_pool, m_blur_layout, m_blur_sets.size(),
         m_blur_sets.data());
 
-    createBlurPipeline("blur_unorm.comp", m_blur_layout,
-        &m_blur_pipeline_layout, &m_blur_pipeline);
+    createBlurPipelines("blur_unorm.comp", m_blur_layout,
+        blurModeBit(BM_DOWN) | blurModeBit(BM_UP), &m_blur_pipelines);
 
     // Index of m_blur, -1 is m_color
     const int inputs[5] = { -1, 0, 1, 1, 3 };
@@ -254,7 +249,7 @@ void GEVulkanGlowOutline::blur(VkCommandBuffer cmd,
     // twice as wide as shallow, without skipping pixels
     static const unsigned deep[5] = { 0, 1, 3, 4, 2 };
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_blur_pipeline);
+    VkPipeline bound = VK_NULL_HANDLE;
     // Every viewport has its own dispatches (and bounds, the pixels of a
     // viewport never read what's outside of it: other viewports, or the
     // pixels left by the last frame), the images are shared. The barriers are
@@ -276,7 +271,7 @@ void GEVulkanGlowOutline::blur(VkCommandBuffer cmd,
         for (unsigned j = 0; j < count; j++)
         {
             const unsigned set = sequence[j];
-            dispatchBlur(cmd, m_blur_pipeline_layout, m_blur_sets[set],
+            dispatchBlur(cmd, m_blur_pipelines, &bound, m_blur_sets[set],
                 upscale[set] ? BM_UP : BM_DOWN, rects[src_level[set]],
                 rects[dst_level[set]], scale);
 

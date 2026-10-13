@@ -100,9 +100,8 @@ private:
     // m_streak[0] -> level 0 (upscale, blends)
     std::array<VkDescriptorSet, 2 * STREAK_LEVELS> m_streak_sets;
 
-    VkPipelineLayout m_pipeline_layout;
-
-    VkPipeline m_pipeline;
+    // BM_BLOOM_PREFILTER, BM_DOWN, BM_UP_ADD and BM_STREAK
+    BlurPipelines m_blur_pipelines;
 
     // The viewports which have valid bloom of this frame, and the area of the
     // first level which it's in (x0, y0, x1, y1)

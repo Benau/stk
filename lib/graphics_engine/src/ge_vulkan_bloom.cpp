@@ -43,8 +43,7 @@ GEVulkanBloom::GEVulkanBloom(GEVulkanDriver* vk,
                              const irr::core::dimension2d<irr::u32>& size,
                              GEVulkanAttachmentTexture* hdr)
              : GEVulkanPostProcessing(vk, size), m_layout(VK_NULL_HANDLE),
-               m_pool(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE),
-               m_pipeline(VK_NULL_HANDLE)
+               m_pool(VK_NULL_HANDLE)
 {
     m_sets.fill(VK_NULL_HANDLE);
     m_levels.fill(NULL);
@@ -81,8 +80,10 @@ GEVulkanBloom::GEVulkanBloom(GEVulkanDriver* vk,
         }
 
         createDescriptors(hdr);
-        createBlurPipeline("blur_hdr.comp", m_layout, &m_pipeline_layout,
-            &m_pipeline);
+        createBlurPipelines("blur_hdr.comp", m_layout,
+            blurModeBit(BM_BLOOM_PREFILTER) | blurModeBit(BM_DOWN) |
+            blurModeBit(BM_UP_ADD) | blurModeBit(BM_STREAK),
+            &m_blur_pipelines);
     }
     catch (...)
     {
@@ -101,10 +102,7 @@ GEVulkanBloom::~GEVulkanBloom()
 void GEVulkanBloom::destroy()
 {
     VkDevice device = m_vk->getDevice();
-    if (m_pipeline != VK_NULL_HANDLE)
-        vkDestroyPipeline(device, m_pipeline, NULL);
-    if (m_pipeline_layout != VK_NULL_HANDLE)
-        vkDestroyPipelineLayout(device, m_pipeline_layout, NULL);
+    destroyBlurPipelines(&m_blur_pipelines);
     // Descriptor sets are freed with their pool
     if (m_pool != VK_NULL_HANDLE)
         vkDestroyDescriptorPool(device, m_pool, NULL);
@@ -305,13 +303,13 @@ bool GEVulkanBloom::render(VkCommandBuffer cmd,
             NULL);
     }
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
+    VkPipeline bound = VK_NULL_HANDLE;
     // Every level is dispatched for all the viewports, and then there is a
     // barrier (their areas never overlap)
     // 1. Threshold and downscale of hdr to the first level
     for (const Item& item : items)
     {
-        dispatchBlur(cmd, m_pipeline_layout, m_sets[0], BM_BLOOM_PREFILTER,
+        dispatchBlur(cmd, m_blur_pipelines, &bound, m_sets[0], BM_BLOOM_PREFILTER,
             item.m_rects[0], item.m_rects[1], item.m_prefilter_scale);
     }
     // 2. The rest of the levels, each one is half of the previous one
@@ -322,7 +320,7 @@ bool GEVulkanBloom::render(VkCommandBuffer cmd,
         {
             if (item.m_levels <= level)
                 continue;
-            dispatchBlur(cmd, m_pipeline_layout, m_sets[level], BM_DOWN,
+            dispatchBlur(cmd, m_blur_pipelines, &bound, m_sets[level], BM_DOWN,
                 item.m_rects[level], item.m_rects[level + 1],
                 item.m_blur_scale);
         }
@@ -344,7 +342,7 @@ bool GEVulkanBloom::render(VkCommandBuffer cmd,
             {
                 if (!item.m_streak_extra_down)
                     continue;
-                dispatchBlur(cmd, m_pipeline_layout, m_sets[STREAK_LEVELS],
+                dispatchBlur(cmd, m_blur_pipelines, &bound, m_sets[STREAK_LEVELS],
                     BM_DOWN, item.m_rects[STREAK_LEVELS],
                     item.m_rects[STREAK_LEVELS + 1], item.m_blur_scale);
             }
@@ -354,7 +352,7 @@ bool GEVulkanBloom::render(VkCommandBuffer cmd,
         {
             for (unsigned i = 0; i < item.m_streak_levels; i++)
             {
-                dispatchBlur(cmd, m_pipeline_layout, m_streak_sets[i],
+                dispatchBlur(cmd, m_blur_pipelines, &bound, m_streak_sets[i],
                     BM_STREAK, item.m_rects[i + 2], item.m_rects[i + 2],
                     item.m_streak_scale);
             }
@@ -367,7 +365,7 @@ bool GEVulkanBloom::render(VkCommandBuffer cmd,
             {
                 if (item.m_streak_levels <= (unsigned)i + 1)
                     continue;
-                dispatchBlur(cmd, m_pipeline_layout,
+                dispatchBlur(cmd, m_blur_pipelines, &bound,
                     m_streak_sets[STREAK_LEVELS + i], BM_UP_ADD,
                     item.m_rects[i + 3], item.m_rects[i + 2],
                     item.m_blur_scale, UPSCALE_BLEND);
@@ -383,7 +381,7 @@ bool GEVulkanBloom::render(VkCommandBuffer cmd,
         {
             if (item.m_levels <= (unsigned)level + 1)
                 continue;
-            dispatchBlur(cmd, m_pipeline_layout,
+            dispatchBlur(cmd, m_blur_pipelines, &bound,
                 m_sets[MAX_LEVELS + level], BM_UP_ADD,
                 item.m_rects[level + 2], item.m_rects[level + 1],
                 item.m_blur_scale, UPSCALE_BLEND);
@@ -398,7 +396,7 @@ bool GEVulkanBloom::render(VkCommandBuffer cmd,
         {
             if (item.m_streak_levels == 0)
                 continue;
-            dispatchBlur(cmd, m_pipeline_layout,
+            dispatchBlur(cmd, m_blur_pipelines, &bound,
                 m_streak_sets[2 * STREAK_LEVELS - 1], BM_UP_ADD,
                 item.m_rects[2], item.m_rects[1], item.m_blur_scale,
                 STREAK_MIX);
