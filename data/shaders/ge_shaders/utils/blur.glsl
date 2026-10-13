@@ -24,6 +24,10 @@ const uint BLUR_MODE_GAUSSIAN = 3;
 const uint BLUR_MODE_BLOOM_PREFILTER = 4;
 const uint BLUR_MODE_STREAK = 5;
 
+// The mode of the pipeline (a specialization constant, so the code of the other
+// modes is removed from it, which matters for the shader compiler of MoltenVK)
+layout(constant_id = 0) const uint u_blur_mode = BLUR_MODE_DOWN;
+
 layout(push_constant) uniform PushConstants
 {
     // x0, y0, x1, y1 (exclusive) in pixels of u_src, samples are clamped
@@ -33,7 +37,6 @@ layout(push_constant) uniform PushConstants
     ivec4 m_dst_rect;
     // BLUR_MODE_GAUSSIAN only, (1, 0) = horizontal, (0, 1) = vertical
     ivec2 m_direction;
-    uint m_mode;
     // Multiplies the distance of the samples (1.0 at the reference height of
     // the viewport), so the blur has the same width relative to the viewport
     float m_scale;
@@ -232,26 +235,17 @@ void blurMain()
         return;
     vec2 center = vec2(dst) + 0.5;
     vec4 result;
-    switch (pc.m_mode)
-    {
-    case BLUR_MODE_DOWN:
+    if (u_blur_mode == BLUR_MODE_DOWN)
         result = dualDown(center);
-        break;
-    case BLUR_MODE_UP:
+    else if (u_blur_mode == BLUR_MODE_UP)
         result = dualUp(center);
-        break;
-    case BLUR_MODE_UP_ADD:
+    else if (u_blur_mode == BLUR_MODE_UP_ADD)
         result = mix(imageLoad(u_dst, dst), dualUp(center), pc.m_blend);
-        break;
-    case BLUR_MODE_GAUSSIAN:
+    else if (u_blur_mode == BLUR_MODE_GAUSSIAN)
         result = gaussian(center);
-        break;
-    case BLUR_MODE_STREAK:
+    else if (u_blur_mode == BLUR_MODE_STREAK)
         result = streak(center);
-        break;
-    default:
+    else
         result = bloomPrefilter(center);
-        break;
-    }
     imageStore(u_dst, dst, result);
 }
