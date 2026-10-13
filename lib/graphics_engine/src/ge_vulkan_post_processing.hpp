@@ -50,6 +50,27 @@ protected:
         // Horizontal gaussian blur (always, the direction is ignored) with
         // weights which add up to 1.0, the same size, for the bloom streak
         BM_STREAK,
+        BM_COUNT
+    };
+    // ------------------------------------------------------------------------
+    // Bit of a mode for the mask of createBlurPipelines
+    static constexpr uint32_t blurModeBit(BlurMode mode)
+                                                     { return 1u << mode; }
+    // ------------------------------------------------------------------------
+    // One pipeline for every mode which an effect uses. The mode is a
+    // specialization constant of the shader (not a push constant), so the
+    // unused code of the other modes is removed from the pipeline: the
+    // shader compiler of the driver (MoltenVK / Metal) doesn't have to
+    // compile the whole of utils/blur.glsl for the effects which only need a
+    // part of it. The pipelines of the modes which are not in the mask stay
+    // VK_NULL_HANDLE
+    struct BlurPipelines
+    {
+        // Shared by all pipelines, so the descriptor sets stay bound when the
+        // pipeline changes
+        VkPipelineLayout m_layout;
+        std::array<VkPipeline, BM_COUNT> m_pipelines;
+        BlurPipelines();
     };
     // ------------------------------------------------------------------------
     // Push constants of utils/blur.glsl
@@ -62,7 +83,6 @@ protected:
         int32_t m_dst_rect[4];
         // (1, 0) = horizontal, (0, 1) = vertical, only for BM_GAUSSIAN
         int32_t m_direction[2];
-        uint32_t m_mode;
         // Multiplies the distance of the samples
         float m_scale;
         // Only for BM_UP_ADD
@@ -139,17 +159,23 @@ protected:
                                  VkImageView output_view,
                                  VkImageLayout output_layout) const;
     // ------------------------------------------------------------------------
-    // The compute pipeline of a blur shader (blur_hdr.comp or
+    // The compute pipelines of a blur shader (blur_hdr.comp or
     // blur_unorm.comp) which uses the standard descriptor layout and
-    // BlurPushConstants
-    void createBlurPipeline(const char* shader, VkDescriptorSetLayout layout,
-                            VkPipelineLayout* pipeline_layout,
-                            VkPipeline* pipeline) const;
+    // BlurPushConstants, one for every mode with its bit set in mode_mask
+    // (see blurModeBit). They are created with one call
+    void createBlurPipelines(const char* shader, VkDescriptorSetLayout layout,
+                             uint32_t mode_mask, BlurPipelines* out) const;
     // ------------------------------------------------------------------------
-    // Dispatches the bound blur pipeline for every pixel of dst_rect (it also
-    // binds the descriptor set)
-    void dispatchBlur(VkCommandBuffer cmd, VkPipelineLayout pipeline_layout,
-                      VkDescriptorSet set, BlurMode mode,
+    // Safe to call with partially created / empty pipelines
+    void destroyBlurPipelines(BlurPipelines* pipelines) const;
+    // ------------------------------------------------------------------------
+    // Binds the pipeline of the mode (only if bound is not it already, the
+    // same as GEVulkanDrawCall::bindPipeline, so bound has to be
+    // VK_NULL_HANDLE at the start of every command buffer / when anything
+    // else was bound in between), binds the descriptor set and dispatches it
+    // for every pixel of dst_rect. Returns false if the mode was not created
+    bool dispatchBlur(VkCommandBuffer cmd, const BlurPipelines& pipelines,
+                      VkPipeline* bound, VkDescriptorSet set, BlurMode mode,
                       const std::array<int32_t, 4>& src_rect,
                       const std::array<int32_t, 4>& dst_rect, float scale,
                       float blend = 0.0f, int32_t direction_x = 0,

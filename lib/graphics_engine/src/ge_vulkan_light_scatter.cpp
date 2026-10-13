@@ -19,8 +19,6 @@ GEVulkanLightScatter::GEVulkanLightScatter(GEVulkanDriver* vk,
                               GEVulkanAttachmentTexture* depth)
                     : GEVulkanPostProcessing(vk, size),
                       m_layout(VK_NULL_HANDLE), m_pool(VK_NULL_HANDLE),
-                      m_blur_pipeline_layout(VK_NULL_HANDLE),
-                      m_blur_pipeline(VK_NULL_HANDLE),
                       m_data_layout(VK_NULL_HANDLE),
                       m_pipeline_layout(VK_NULL_HANDLE),
                       m_pipeline(VK_NULL_HANDLE)
@@ -74,10 +72,7 @@ void GEVulkanLightScatter::destroy()
         vkDestroyPipelineLayout(device, m_pipeline_layout, NULL);
     if (m_data_layout != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(device, m_data_layout, NULL);
-    if (m_blur_pipeline != VK_NULL_HANDLE)
-        vkDestroyPipeline(device, m_blur_pipeline, NULL);
-    if (m_blur_pipeline_layout != VK_NULL_HANDLE)
-        vkDestroyPipelineLayout(device, m_blur_pipeline_layout, NULL);
+    destroyBlurPipelines(&m_blur_pipelines);
     // Descriptor sets are freed with their pool
     if (m_pool != VK_NULL_HANDLE)
         vkDestroyDescriptorPool(device, m_pool, NULL);
@@ -136,8 +131,8 @@ void GEVulkanLightScatter::createDescriptors(GEVulkanAttachmentTexture* depth)
 // ----------------------------------------------------------------------------
 void GEVulkanLightScatter::createBlurPipeline()
 {
-    GEVulkanPostProcessing::createBlurPipeline("blur_hdr.comp", m_layout,
-        &m_blur_pipeline_layout, &m_blur_pipeline);
+    createBlurPipelines("blur_hdr.comp", m_layout,
+        blurModeBit(BM_GAUSSIAN), &m_blur_pipelines);
 }   // createBlurPipeline
 
 // ----------------------------------------------------------------------------
@@ -249,7 +244,7 @@ bool GEVulkanLightScatter::render(VkCommandBuffer cmd,
     // 2. Horizontal and then vertical blur, one dispatch per viewport, which
     // only reads inside of its own rect (a pixel at an odd border can be
     // written by two viewports, each with only its own pixels)
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_blur_pipeline);
+    VkPipeline bound = VK_NULL_HANDLE;
     for (unsigned pass = 0; pass < 2; pass++)
     {
         for (const Viewport& vp : viewports)
@@ -258,7 +253,7 @@ bool GEVulkanLightScatter::render(VkCommandBuffer cmd,
             const std::array<int32_t, 4> rect = halfRect(vp.m_rect);
             const float scale = std::min(std::max(vp.m_height /
                 REFERENCE_HEIGHT, 0.25f), 2.5f);
-            dispatchBlur(cmd, m_blur_pipeline_layout, m_sets[pass + 1],
+            dispatchBlur(cmd, m_blur_pipelines, &bound, m_sets[pass + 1],
                 BM_GAUSSIAN, rect, rect, scale, 0.0f,
                 pass == 0 ? 1 : 0, pass == 0 ? 0 : 1);
         }

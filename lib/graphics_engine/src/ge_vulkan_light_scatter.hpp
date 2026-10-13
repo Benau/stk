@@ -36,9 +36,8 @@ private:
     // 0: depth -> [0], 1: [0] -> [1] (horizontal), 2: [1] -> [0] (vertical)
     std::array<VkDescriptorSet, 3> m_sets;
 
-    VkPipelineLayout m_blur_pipeline_layout;
-
-    VkPipeline m_blur_pipeline;
+    // Only BM_GAUSSIAN
+    BlurPipelines m_blur_pipelines;
 
     // Same definition as the data descriptor set layout of draw calls (camera
     // and lights), so their sets can be bound with m_pipeline_layout. It's

@@ -48,9 +48,8 @@ private:
     // 3: [1] -> [3], 4: [3] -> [1] (upscale)
     std::array<VkDescriptorSet, 5> m_blur_sets;
 
-    VkPipelineLayout m_blur_pipeline_layout;
-
-    VkPipeline m_blur_pipeline;
+    // Only BM_DOWN and BM_UP
+    BlurPipelines m_blur_pipelines;
     // ------------------------------------------------------------------------
     void createRenderPass(GEVulkanAttachmentTexture* depth);
     // ------------------------------------------------------------------------
