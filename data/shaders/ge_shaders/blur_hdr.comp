@@ -1,4 +1,4 @@
-// Blur of hdr colors (light scattering and bloom), see utils/blur.glsl. Alpha
+// Blur of hdr colors (light scattering, without BLUR_MODE_UP_ADD), see utils/blur.glsl. Alpha
 // is not needed and the values are never negative, B10G11R11 has the range and
 // half of the memory of RGBA16F (storage image support of it is optional)
 #ifdef SHADER_STORAGE_IMAGE_EXTENDED_FORMATS
