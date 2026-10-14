@@ -1124,8 +1124,7 @@ void Skin::drawButton(Widget* w, const core::recti &rect,
 
             if (sized_rect.isPointInside(mouse_position))
             {
-                m_tooltip_at_mouse.push_back(true);
-                m_tooltips.push_back(w);
+                addTooltip(w, true);
             }
         }
     }
@@ -1158,8 +1157,7 @@ void Skin::drawButton(Widget* w, const core::recti &rect,
 
             if (rect.isPointInside(mouse_position))
             {
-                m_tooltip_at_mouse.push_back(true);
-                m_tooltips.push_back(w);
+                addTooltip(w, true);
             }
         }
     }   // not within an appearing dialog
@@ -1709,8 +1707,7 @@ void Skin::drawRibbonChild(const core::recti &rect, Widget* widget,
         if (rect.isPointInside(irr_driver->getDevice()->getCursorControl()
                                                       ->getPosition()))
         {
-            m_tooltip_at_mouse.push_back(true);
-            m_tooltips.push_back(widget);
+            addTooltip(widget, true);
         }
     }
     else if (widget->hasTooltip())
@@ -1719,8 +1716,7 @@ void Skin::drawRibbonChild(const core::recti &rect, Widget* widget,
         if (rect.isPointInside(irr_driver->getDevice()->getCursorControl()
                                                       ->getPosition()))
         {
-            m_tooltip_at_mouse.push_back(true);
-            m_tooltips.push_back(widget);
+            addTooltip(widget, true);
         }
     }
 #endif
@@ -1908,8 +1904,7 @@ void Skin::drawSpinnerBody(const core::recti &rect, Widget* widget,
 
     if (focused && widget->hasTooltip())
     {
-        m_tooltip_at_mouse.push_back(false);
-        m_tooltips.push_back(widget);
+        addTooltip(widget, false);
     }
     else if (widget->hasTooltip())
     {
@@ -1919,8 +1914,7 @@ void Skin::drawSpinnerBody(const core::recti &rect, Widget* widget,
 
         if (sized_rect.isPointInside(mouse_position))
         {
-            m_tooltip_at_mouse.push_back(true);
-            m_tooltips.push_back(widget);
+            addTooltip(widget, true);
         }
     }
 }
@@ -2062,8 +2056,7 @@ void Skin::drawIconButton(const core::recti &rect, Widget* widget,
 
         if (rect.isPointInside(mouse_position))
         {
-            m_tooltip_at_mouse.push_back(true);
-            m_tooltips.push_back(widget);
+            addTooltip(widget, true);
         }
     }
 
@@ -2188,8 +2181,7 @@ void Skin::drawCheckBox(const core::recti &rect, Widget* widget, bool focused)
 
         if (rect.isPointInside(mouse_position))
         {
-            m_tooltip_at_mouse.push_back(true);
-            m_tooltips.push_back(widget);
+            addTooltip(widget, true);
         }
     }
     else if (widget->hasTooltip())
@@ -2200,8 +2192,7 @@ void Skin::drawCheckBox(const core::recti &rect, Widget* widget, bool focused)
 
         if (rect.isPointInside(mouse_position))
         {
-            m_tooltip_at_mouse.push_back(true);
-            m_tooltips.push_back(widget);
+            addTooltip(widget, true);
         }
     }
 }   // drawCheckBox
@@ -2423,6 +2414,36 @@ void Skin::drawScrollbarButton(const irr::core::rect< irr::s32 > &rect,
     }
 
 }   // drawScrollbarButton
+
+// ----------------------------------------------------------------------------
+/** Queues a tooltip to be drawn at the end of the frame. While a modal
+ *  dialog (or the screen keyboard) is open the screen below it is still
+ *  drawn, so tooltips of widgets that do not belong to the dialog are
+ *  dropped, otherwise they would show up on top of the dialog.
+ *  \param widget The widget the tooltip belongs to.
+ *  \param at_mouse True if the tooltip is displayed at the mouse position.
+ */
+void Skin::addTooltip(Widget* widget, bool at_mouse)
+{
+    IGUIElement* element = widget->m_element != NULL ?
+        widget->m_element : widget->m_parent;
+
+    if (ScreenKeyboard::isActive())
+    {
+        if (element == NULL ||
+            !ScreenKeyboard::getCurrent()->getIrrlichtElement()
+            ->isMyChild(element))
+            return;
+    }
+    else if (ModalDialog::isADialogActive())
+    {
+        if (element == NULL ||
+            !ModalDialog::getCurrent()->isMyIrrChild(element))
+            return;
+    }
+    m_tooltips.push_back(widget);
+    m_tooltip_at_mouse.push_back(at_mouse);
+}   // addTooltip
 
 // ----------------------------------------------------------------------------
 void Skin::drawTooltips()

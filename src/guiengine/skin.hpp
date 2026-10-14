@@ -332,6 +332,7 @@ namespace GUIEngine
                                  const bool pressed, const bool bottomArrow);
 
         void drawTooltip(Widget* widget, bool atMouse);
+        void addTooltip(Widget* widget, bool at_mouse);
         irr::video::SColorf getPlayerColor(int player_id);
 
     public:
