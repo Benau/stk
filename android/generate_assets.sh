@@ -144,9 +144,24 @@ fi
 
 # Use `magick` when it's available
 if command -v magick > /dev/null; then
-    MAGICK='magick'
+    export MAGICK='magick'
 else
-    MAGICK='convert'
+    export MAGICK='convert'
+fi
+
+# Parallel processing configuration
+if [ -z "$JOBS" ]; then
+    JOBS="`nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4`"
+fi
+
+# ImageMagick has its own threading
+export MAGICK_THREAD_LIMIT=1
+export OMP_NUM_THREADS=1
+
+# Don't run the command when there is no input (not supported by every xargs)
+XARGS_R=""
+if echo | xargs -r true 2>/dev/null; then
+    XARGS_R="-r"
 fi
 
 # Clear previous assets directory
@@ -241,6 +256,7 @@ convert_image()
 {
     FILE="$1"
     FILE_TYPE="$2"
+    TMP="tmp_$$.$FILE_TYPE"
     echo "Convert file: $FILE"
 
     if [ ! -f "$FILE" ]; then
@@ -277,23 +293,25 @@ convert_image()
         QUALITY_CMD="-quality $PNG_QUALITY"
     fi
 
-    $MAGICK "$FILE" $SCALE_CMD $QUALITY_CMD "tmp.$FILE_TYPE"
+    $MAGICK "$FILE" $SCALE_CMD $QUALITY_CMD "$TMP"
     
-    if [ -s "tmp.$FILE_TYPE" ]; then
+    if [ -s "$TMP" ]; then
         SIZE_OLD=`du -k "$FILE" | cut -f1`
-        SIZE_NEW=`du -k "tmp.$FILE_TYPE" | cut -f1`
+        SIZE_NEW=`du -k "$TMP" | cut -f1`
 
         if [ $SIZE_NEW -lt $SIZE_OLD ]; then
-            mv "tmp.$FILE_TYPE" "$FILE"
+            mv "$TMP" "$FILE"
         fi
     fi
 
-    rm -f "tmp.$FILE_TYPE"
+    rm -f "$TMP"
 }
 
 convert_sound()
 {
     FILE="$1"
+    TMP_WAV="tmp_$$.wav"
+    TMP_OGG="tmp_$$.ogg"
     echo "Convert file: $FILE"
 
     if [ ! -f "$FILE" ]; then
@@ -301,9 +319,9 @@ convert_sound()
         return
     fi
 
-    oggdec "$FILE" -o tmp.wav
+    oggdec "$FILE" -o "$TMP_WAV"
 
-    if [ -s tmp.wav ]; then
+    if [ -s "$TMP_WAV" ]; then
         OGGENC_CMD=""
 
         if [ "$SOUND_MONO" -gt 0 ]; then
@@ -319,19 +337,19 @@ convert_sound()
 
         OGGENC_CMD="$OGGENC_CMD -b $SOUND_QUALITY"
 
-        oggenc $OGGENC_CMD tmp.wav -o tmp.ogg
+        oggenc $OGGENC_CMD "$TMP_WAV" -o "$TMP_OGG"
     fi
 
-    if [ -s tmp.ogg ]; then
+    if [ -s "$TMP_OGG" ]; then
         SIZE_OLD=`du -k "$FILE" | cut -f1`
-        SIZE_NEW=`du -k "tmp.ogg" | cut -f1`
+        SIZE_NEW=`du -k "$TMP_OGG" | cut -f1`
 
         if [ $SIZE_NEW -lt $SIZE_OLD ]; then
-            mv tmp.ogg "$FILE"
+            mv "$TMP_OGG" "$FILE"
         fi
     fi
 
-    rm -f tmp.wav tmp.ogg
+    rm -f "$TMP_WAV" "$TMP_OGG"
 }
 
 optimize_png()
@@ -432,6 +450,8 @@ convert_to_jpg()
     echo "$FILE" >> "./converted_textures"
 }
 
+# This function runs serially (several b3dz files in one directory modify the
+# same kart.xml file)
 convert_to_jpg_extract_b3dz()
 {
     FILE="$1"
@@ -613,52 +633,71 @@ convert_to_jpg_update_xml()
 {
     FILE="$1"
     echo "Update xml file: $FILE"
-
+ 
     if [ ! -f "$FILE" ]; then
         echo "  File doesn't exist."
         return
     fi
-
+ 
     DIRNAME="`dirname "$FILE"`"
-
+    SED_ARGS=()
+ 
     while read -r CONVERTED_TEXTURE; do
         DIRNAME_TEX="`dirname "$CONVERTED_TEXTURE"`"
-
+ 
         if [ "$DIRNAME_TEX" != "$DIRNAME" ]; then
             continue;
         fi
-
+ 
         TEXNAME="`basename "$CONVERTED_TEXTURE" | rev | cut -c 5- | rev`"
-
+ 
+        SED_ARGS+=(-e "s/\"$TEXNAME.[pP][nN][gG]/\"$TEXNAME.jpg/g"
+                   -e "s/ $TEXNAME.[pP][nN][gG]/ $TEXNAME.jpg/g")
+    done < <(grep -F -- "$DIRNAME/" "./converted_textures")
+ 
+    if [ ${#SED_ARGS[@]} -gt 0 ]; then
         if [ "$OS_NAME" = "Darwin" ]; then
-            sed -i "" "s/\"$TEXNAME.[pP][nN][gG]/\"$TEXNAME.jpg/g" "$FILE"
-            sed -i "" "s/ $TEXNAME.[pP][nN][gG]/ $TEXNAME.jpg/g" "$FILE"
+            sed -i "" "${SED_ARGS[@]}" "$FILE"
         else
-            sed -i "s/\"$TEXNAME.[pP][nN][gG]/\"$TEXNAME.jpg/g" "$FILE"
-            sed -i "s/ $TEXNAME.[pP][nN][gG]/ $TEXNAME.jpg/g" "$FILE"
+            sed -i "${SED_ARGS[@]}" "$FILE"
         fi
-    done < "./converted_textures"
+    fi
+}
+
+export -f convert_image convert_sound optimize_png convert_to_jpg \
+          convert_to_jpg_update_b3d convert_to_jpg_update_spm \
+          convert_to_jpg_update_xml
+
+pfind()
+{
+    PF_PATTERN="$1"
+    PF_CMD="$2"
+    shift 2
+
+    find "$OUTPUT_PATH/data" "$@" -iname "$PF_PATTERN" -print0 \
+        | xargs -0 $XARGS_R -n 1 -P "$JOBS" bash -c "$PF_CMD; exit 0" _
 }
 
 
 if [ $DECREASE_QUALITY -gt 0 ]; then
-    find "$OUTPUT_PATH/data" -iname "*.png" | while read f; do convert_image "$f" "png"; done
-    find "$OUTPUT_PATH/data" -iname "*.jpg" | while read f; do convert_image "$f" "jpg"; done
-    find "$OUTPUT_PATH/data" -iname "*.ogg" | while read f; do convert_sound "$f"; done
+    pfind "*.png" 'convert_image "$1" png'
+    pfind "*.jpg" 'convert_image "$1" jpg'
+    pfind "*.ogg" 'convert_sound "$1"'
 fi
 
 
 if [ $CONVERT_TO_JPG -gt 0 ]; then
     rm -f "./converted_textures"
     
-    find "$OUTPUT_PATH/data" -not -path "$OUTPUT_PATH/data/textures/*" \
-                             -not -path "$OUTPUT_PATH/data/karts/*"    \
-                             -iname "*.png" | while read f; do convert_to_jpg "$f"; done
+    pfind "*.png" 'convert_to_jpg "$1"' \
+                  -not -path "$OUTPUT_PATH/data/textures/*" \
+                  -not -path "$OUTPUT_PATH/data/karts/*"
 
     find "$OUTPUT_PATH/data" -iname "*.b3dz" | while read f; do convert_to_jpg_extract_b3dz "$f"; done
-    find "$OUTPUT_PATH/data" -iname "*.b3d" | while read f; do convert_to_jpg_update_b3d "$f"; done
-    find "$OUTPUT_PATH/data" -iname "*.spm" | while read f; do convert_to_jpg_update_spm "$f"; done
-    find "$OUTPUT_PATH/data" -iname "*.xml" | while read f; do convert_to_jpg_update_xml "$f"; done
+
+    pfind "*.b3d" 'convert_to_jpg_update_b3d "$1"'
+    pfind "*.spm" 'convert_to_jpg_update_spm "$1"'
+    pfind "*.xml" 'convert_to_jpg_update_xml "$1"'
 
     if [ -s "./converted_textures" ]; then
         echo "Converted textures:"
@@ -668,7 +707,7 @@ if [ $CONVERT_TO_JPG -gt 0 ]; then
 fi
 
 if [ $DECREASE_QUALITY -gt 0 ]; then
-    find "$OUTPUT_PATH/data" -iname "*.png" | while read f; do optimize_png "$f" "png"; done
+    pfind "*.png" 'optimize_png "$1"'
 fi
 
 
