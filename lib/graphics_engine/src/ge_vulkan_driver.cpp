@@ -1500,10 +1500,23 @@ void GEVulkanDriver::createSyncObjects()
     fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
+    // The swapchain can be recreated with a different image count
+    m_current_semaphore = 0;
+
     for (unsigned int i = 0; i < m_vk->swap_chain_images.size(); i++)
     {
-        // Semaphores are per swapchain image
+        // Semaphores are per swapchain image:
+        // image_available_semaphores are used for acquiring and indexed by
+        // m_current_semaphore (the image index is not known before acquiring),
+        // render_finished_semaphores are signaled by the submit and waited by
+        // the presentation, so they must be indexed by the acquired image
+        // index (m_image_index), because only re-acquiring the same image
+        // guarantees that the previous presentation of it has finished with
+        // the semaphore. Images are not necessarily acquired in order (for
+        // example mailbox present mode), so a round-robin counter is not
+        // enough for them.
         // See https://github.com/SaschaWillems/Vulkan/commit/64ba09900257ef0971c8ac0013a5f6448f51a45b
+        // and https://docs.vulkan.org/guide/latest/swapchain_semaphore_reuse.html
         VkSemaphore image_available_semaphore;
         VkResult result = vkCreateSemaphore(m_vk->device, &semaphore_info, NULL,
             &image_available_semaphore);
@@ -1943,7 +1956,7 @@ bool GEVulkanDriver::endScene()
 
     VkSemaphore wait_semaphores[] = {m_vk->image_available_semaphores[m_current_semaphore]};
     VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-    VkSemaphore signal_semaphores[] = {m_vk->render_finished_semaphores[m_current_semaphore]};
+    VkSemaphore signal_semaphores[] = {m_vk->render_finished_semaphores[m_image_index]};
 
     VkSubmitInfo submit_info = {};
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -1966,7 +1979,7 @@ bool GEVulkanDriver::endScene()
 
     VkSemaphore semaphores[] =
     {
-        m_vk->render_finished_semaphores[m_current_semaphore]
+        m_vk->render_finished_semaphores[m_image_index]
     };
     VkSwapchainKHR swap_chains[] =
     {
