@@ -108,9 +108,9 @@ void GEVulkanPostProcessing::initializeGeneralImages(
 
 // ----------------------------------------------------------------------------
 void GEVulkanPostProcessing::createImageDescriptorSetLayout(
-                                           VkDescriptorSetLayout* layout) const
+                         VkDescriptorSetLayout* layout, bool read_dst) const
 {
-    std::array<VkDescriptorSetLayoutBinding, 2> bindings = {};
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings = {};
 
     bindings[0].binding = 0;
     bindings[0].descriptorCount = 1;
@@ -123,10 +123,16 @@ void GEVulkanPostProcessing::createImageDescriptorSetLayout(
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
+    bindings[2].binding = 2;
+    bindings[2].descriptorCount = 1;
+    bindings[2].descriptorType =
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
     VkDescriptorSetLayoutCreateInfo layout_info = {};
     layout_info.sType =
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layout_info.bindingCount = bindings.size();
+    layout_info.bindingCount = read_dst ? 3 : 2;
     layout_info.pBindings = bindings.data();
 
     if (vkCreateDescriptorSetLayout(m_vk->getDevice(), &layout_info, NULL,
@@ -140,12 +146,12 @@ void GEVulkanPostProcessing::createImageDescriptorSetLayout(
 
 // ----------------------------------------------------------------------------
 void GEVulkanPostProcessing::createImageDescriptorPool(
-                              unsigned set_count, VkDescriptorPool* pool) const
+                  unsigned set_count, VkDescriptorPool* pool, bool read_dst) const
 {
     std::array<VkDescriptorPoolSize, 2> pool_sizes = {};
 
     pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    pool_sizes[0].descriptorCount = set_count;
+    pool_sizes[0].descriptorCount = read_dst ? set_count * 2 : set_count;
 
     pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     pool_sizes[1].descriptorCount = set_count;
@@ -192,7 +198,8 @@ void GEVulkanPostProcessing::writeImageDescriptorSet(VkDescriptorSet set,
                                                      VkSampler input_sampler,
                                                     VkImageLayout input_layout,
                                                        VkImageView output_view,
-                                             VkImageLayout output_layout) const
+                                             VkImageLayout output_layout,
+                                                     bool read_dst) const
 {
     VkDescriptorImageInfo input = {};
     input.sampler = input_sampler;
@@ -203,7 +210,13 @@ void GEVulkanPostProcessing::writeImageDescriptorSet(VkDescriptorSet set,
     output.imageLayout = output_layout;
     output.imageView = output_view;
 
-    std::array<VkWriteDescriptorSet, 2> writes = {};
+    // The same image as binding 1, sampled
+    VkDescriptorImageInfo output_read = {};
+    output_read.sampler = input_sampler;
+    output_read.imageLayout = output_layout;
+    output_read.imageView = output_view;
+
+    std::array<VkWriteDescriptorSet, 3> writes = {};
 
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = set;
@@ -220,8 +233,15 @@ void GEVulkanPostProcessing::writeImageDescriptorSet(VkDescriptorSet set,
     writes[1].descriptorCount = 1;
     writes[1].pImageInfo = &output;
 
-    vkUpdateDescriptorSets(m_vk->getDevice(), writes.size(), writes.data(),
-        0, NULL);
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = set;
+    writes[2].dstBinding = 2;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[2].descriptorCount = 1;
+    writes[2].pImageInfo = &output_read;
+
+    vkUpdateDescriptorSets(m_vk->getDevice(), read_dst ? 3 : 2,
+        writes.data(), 0, NULL);
 }   // writeImageDescriptorSet
 
 // ----------------------------------------------------------------------------

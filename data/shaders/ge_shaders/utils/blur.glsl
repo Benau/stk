@@ -3,7 +3,8 @@
 // blur_unorm.comp) only choose the format of the storage image.
 //
 // The including shader must define BLUR_FORMAT (the format qualifier of the
-// storage image) and then calls blurMain() from main().
+// storage image) and then calls blurMain() from main(). It defines BLUR_UP_ADD
+// if it uses BLUR_MODE_UP_ADD (the descriptor set has u_dst_read too).
 //
 // Every mode reads only inside m_src_rect, which is the rect of one viewport
 // (camera) in the source image: the sample position is clamped to the center
@@ -14,8 +15,17 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0) uniform sampler2D u_src;
-// Can be read too (BLUR_MODE_UP_ADD blends with what is already in it)
-layout(set = 0, binding = 1, BLUR_FORMAT) uniform image2D u_dst;
+// Only written, never loaded with imageLoad. A storage image which is read in
+// any way of the shader is read_write in the MSL of MoltenVK (a specialization
+// constant doesn't remove the access from the SPIR-V), and read_write textures
+// need Apple GPUs of the family 4 (A11) or newer, and only some formats of them
+layout(set = 0, binding = 1, BLUR_FORMAT) uniform writeonly image2D u_dst;
+#ifdef BLUR_UP_ADD
+// The same image as u_dst, but sampled (combined image sampler, both of them
+// are in the layout GENERAL), only for BLUR_MODE_UP_ADD, which blends with
+// what is already in it. Each invocation reads only the pixel which it writes
+layout(set = 0, binding = 2) uniform sampler2D u_dst_read;
+#endif
 
 const uint BLUR_MODE_DOWN = 0;
 const uint BLUR_MODE_UP = 1;
@@ -239,8 +249,13 @@ void blurMain()
         result = dualDown(center);
     else if (u_blur_mode == BLUR_MODE_UP)
         result = dualUp(center);
+#ifdef BLUR_UP_ADD
     else if (u_blur_mode == BLUR_MODE_UP_ADD)
-        result = mix(imageLoad(u_dst, dst), dualUp(center), pc.m_blend);
+    {
+        result = mix(texelFetch(u_dst_read, dst, 0), dualUp(center),
+            pc.m_blend);
+    }
+#endif
     else if (u_blur_mode == BLUR_MODE_GAUSSIAN)
         result = gaussian(center);
     else if (u_blur_mode == BLUR_MODE_STREAK)
