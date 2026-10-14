@@ -80,7 +80,7 @@ GEVulkanBloom::GEVulkanBloom(GEVulkanDriver* vk,
         }
 
         createDescriptors(hdr);
-        createBlurPipelines("blur_hdr.comp", m_layout,
+        createBlurPipelines("blur_hdr_add.comp", m_layout,
             blurModeBit(BM_BLOOM_PREFILTER) | blurModeBit(BM_DOWN) |
             blurModeBit(BM_UP_ADD) | blurModeBit(BM_STREAK),
             &m_blur_pipelines);
@@ -145,9 +145,9 @@ bool GEVulkanBloom::getRects(const GEVulkanDrawCall* dc,
 void GEVulkanBloom::createDescriptors(GEVulkanAttachmentTexture* hdr)
 {
     const bool streak = m_streak[0] != NULL;
-    createImageDescriptorSetLayout(&m_layout);
+    createImageDescriptorSetLayout(&m_layout, true);
     createImageDescriptorPool(m_sets.size() +
-        (streak ? m_streak_sets.size() : 0), &m_pool);
+        (streak ? m_streak_sets.size() : 0), &m_pool, true);
     allocateImageDescriptorSets(m_pool, m_layout, m_sets.size(),
         m_sets.data());
     if (streak)
@@ -162,7 +162,7 @@ void GEVulkanBloom::createDescriptors(GEVulkanAttachmentTexture* hdr)
     writeImageDescriptorSet(m_sets[0], (VkImageView)hdr->getTextureHandler(),
         sampler, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         (VkImageView)m_levels[0]->getTextureHandler(),
-        VK_IMAGE_LAYOUT_GENERAL);
+        VK_IMAGE_LAYOUT_GENERAL, true);
     for (unsigned i = 1; i < MAX_LEVELS; i++)
     {
         // Downscale
@@ -170,13 +170,13 @@ void GEVulkanBloom::createDescriptors(GEVulkanAttachmentTexture* hdr)
             (VkImageView)m_levels[i - 1]->getTextureHandler(), sampler,
             VK_IMAGE_LAYOUT_GENERAL,
             (VkImageView)m_levels[i]->getTextureHandler(),
-            VK_IMAGE_LAYOUT_GENERAL);
+            VK_IMAGE_LAYOUT_GENERAL, true);
         // Upscale
         writeImageDescriptorSet(m_sets[MAX_LEVELS + i - 1],
             (VkImageView)m_levels[i]->getTextureHandler(), sampler,
             VK_IMAGE_LAYOUT_GENERAL,
             (VkImageView)m_levels[i - 1]->getTextureHandler(),
-            VK_IMAGE_LAYOUT_GENERAL);
+            VK_IMAGE_LAYOUT_GENERAL, true);
     }
     if (!streak)
         return;
@@ -187,7 +187,7 @@ void GEVulkanBloom::createDescriptors(GEVulkanAttachmentTexture* hdr)
             (VkImageView)m_levels[i + 1]->getTextureHandler(), sampler,
             VK_IMAGE_LAYOUT_GENERAL,
             (VkImageView)m_streak[i]->getTextureHandler(),
-            VK_IMAGE_LAYOUT_GENERAL);
+            VK_IMAGE_LAYOUT_GENERAL, true);
         if (i + 1 < STREAK_LEVELS)
         {
             // Upscale
@@ -195,7 +195,7 @@ void GEVulkanBloom::createDescriptors(GEVulkanAttachmentTexture* hdr)
                 (VkImageView)m_streak[i + 1]->getTextureHandler(), sampler,
                 VK_IMAGE_LAYOUT_GENERAL,
                 (VkImageView)m_streak[i]->getTextureHandler(),
-                VK_IMAGE_LAYOUT_GENERAL);
+                VK_IMAGE_LAYOUT_GENERAL, true);
         }
     }
     // To the first level
@@ -203,7 +203,7 @@ void GEVulkanBloom::createDescriptors(GEVulkanAttachmentTexture* hdr)
         (VkImageView)m_streak[0]->getTextureHandler(), sampler,
         VK_IMAGE_LAYOUT_GENERAL,
         (VkImageView)m_levels[0]->getTextureHandler(),
-        VK_IMAGE_LAYOUT_GENERAL);
+        VK_IMAGE_LAYOUT_GENERAL, true);
 }   // createDescriptors
 
 // ----------------------------------------------------------------------------

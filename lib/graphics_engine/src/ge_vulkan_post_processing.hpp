@@ -135,12 +135,16 @@ protected:
     // binding 1 = storage image
     //
     // Both are compute-only
-    void createImageDescriptorSetLayout(VkDescriptorSetLayout* layout) const;
+    // With read_dst there is also binding 2 = combined image sampler (the same
+    // image as the storage image, to read what is already in it), see
+    // BLUR_UP_ADD of utils/blur.glsl
+    void createImageDescriptorSetLayout(VkDescriptorSetLayout* layout,
+                                        bool read_dst = false) const;
     // ------------------------------------------------------------------------
     // Create a pool containing exactly set_count sets of the standard
     // two-descriptor layout
-    void createImageDescriptorPool(unsigned set_count,
-                                   VkDescriptorPool* pool) const;
+    void createImageDescriptorPool(unsigned set_count, VkDescriptorPool* pool,
+                                   bool read_dst = false) const;
     // ------------------------------------------------------------------------
     // Allocate set_count copies of layout into sets
     void allocateImageDescriptorSets(VkDescriptorPool pool,
@@ -157,7 +161,8 @@ protected:
                                  VkSampler input_sampler,
                                  VkImageLayout input_layout,
                                  VkImageView output_view,
-                                 VkImageLayout output_layout) const;
+                                 VkImageLayout output_layout,
+                                 bool read_dst = false) const;
     // ------------------------------------------------------------------------
     // The compute pipelines of a blur shader (blur_hdr.comp or
     // blur_unorm.comp) which uses the standard descriptor layout and
