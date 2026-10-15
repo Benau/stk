@@ -41,6 +41,9 @@ private:
     Input::AxisDirection    m_dir;
     Input::AxisRange        m_range;
 public:
+    Binding() : m_type(Input::IT_NONE), m_id(-1), m_dir(Input::AD_NEUTRAL),
+                m_range(Input::AR_HALF) {}
+    // ------------------------------------------------------------------------
     /** Returns the type of device this binding is using. */
     Input::InputType     getType() const {return m_type; }
     // ------------------------------------------------------------------------
