@@ -248,7 +248,7 @@ irr::u32 GEVulkanSceneManager::registerNodeForRendering(
     GEVulkanDrawCall* dc = &m_current_entry->m_draw_call;
     if (node->getType() == irr::scene::ESNT_SKY_BOX)
     {
-        dc->addSkyBox(node);
+        getVKDriver()->getSkyBoxRenderer()->addSkyBox(node);
         return 1;
     }
 
@@ -413,6 +413,21 @@ irr::scene::ILightSceneNode* GEVulkanSceneManager::getSunNode(
     return sun;
 }   // getSunNode
 
+// ----------------------------------------------------------------------------
+irr::scene::ISceneNode* GEVulkanSceneManager::getSkyBoxNode(
+                                                  irr::scene::ISceneNode* node)
+{
+    if (node->isVisible() && node->getType() == irr::scene::ESNT_SKY_BOX)
+        return node;
+    irr::scene::ISceneNode* sky = NULL;
+    for (unsigned i = 0; i < node->getChildren().size(); i++)
+    {
+        sky = getSkyBoxNode(node->getChildren()[i]);
+        if (sky)
+            break;
+    }
+    return sky;
+}   // getSkyBoxNode
 
 // ----------------------------------------------------------------------------
 GEVulkanDrawCall* GEVulkanSceneManager::getActiveDrawCall() const
