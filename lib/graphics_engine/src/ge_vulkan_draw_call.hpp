@@ -245,6 +245,8 @@ protected:
 
     bool m_update_data_descriptor_sets;
 
+    bool m_has_skybox;
+
     VkDescriptorSetLayout m_data_layout;
 
     VkDescriptorPool m_descriptor_pool;
@@ -266,8 +268,6 @@ protected:
 
     std::map<std::string, std::map<GESPMBuffer*, DynamicSPMData > >
         m_rendered_dspm;
-
-    GEVulkanSkyBoxRenderer* m_skybox_renderer;
 
     GEVulkanTextureDescriptor* m_texture_descriptor;
 
@@ -449,10 +449,7 @@ public:
         m_dynamic_spm_buffers.clear();
         m_glow_outline_nodes.clear();
         m_glow_outline_draws.clear();
-        m_skybox_renderer = NULL;
     }
-    // ------------------------------------------------------------------------
-    void addSkyBox(irr::scene::ISceneNode* node);
     // ------------------------------------------------------------------------
     void addLightNode(irr::scene::ILightSceneNode* node);
     // ------------------------------------------------------------------------
