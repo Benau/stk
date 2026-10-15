@@ -3,24 +3,35 @@
 
 #include "../source/Irrlicht/CSceneManager.h"
 #include <memory>
-#include <map>
+#include <vector>
 
 namespace GE
 {
+class GEVulkanCamera;
 class GEVulkanCameraSceneNode;
 class GEVulkanDrawCall;
 class GEVulkanDriver;
 enum GEAutoDeferredType : unsigned;
+
+struct GEVulkanDrawEntry;
+struct GEVulkanTargetGroup;
 
 class GEVulkanSceneManager : public irr::scene::CSceneManager
 {
 private:
     unsigned m_pointlight_count, m_spotlight_count, m_displace_count;
 
-    std::map<GEVulkanCameraSceneNode*, std::unique_ptr<GEVulkanDrawCall> > m_draw_calls;
+    std::vector<std::unique_ptr<GEVulkanTargetGroup> > m_groups;
+
+    // Groups which are used in this frame, in the order of the first drawAll()
+    std::vector<GEVulkanTargetGroup*> m_frame_groups;
+
+    GEVulkanTargetGroup* m_current_group;
+
+    GEVulkanDrawEntry* m_current_entry;
 
     // ------------------------------------------------------------------------
-    bool drawAllInternal(GEVulkanDriver* vk);
+    GEVulkanDrawEntry* acquireEntry(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
     void resetDetectDeferred()
     {
@@ -67,12 +78,22 @@ public:
     virtual irr::u32 registerNodeForRendering(irr::scene::ISceneNode* node,
         irr::scene::E_SCENE_NODE_RENDER_PASS pass = irr::scene::ESNRP_AUTOMATIC);
     // ------------------------------------------------------------------------
-    void addDrawCall(GEVulkanCameraSceneNode* cam);
+    // Check if the (GEConfig) deferred type should be changed by the nodes of
+    // the scene, it's called when a camera is created
+    void detectAutoDeferred();
     // ------------------------------------------------------------------------
-    void removeDrawCall(GEVulkanCameraSceneNode* cam);
+    // Groups which have draw calls in the current frame, GEVulkanDriver
+    // renders them (the group of the default framebuffer is the last one) in
+    // buildCommandBuffers
+    std::vector<GEVulkanTargetGroup*>& getFrameGroups()
+                                                     { return m_frame_groups; }
     // ------------------------------------------------------------------------
-    std::map<GEVulkanCameraSceneNode*, std::unique_ptr<GEVulkanDrawCall> >&
-                                        getDrawCalls() { return m_draw_calls; }
+    // Called at the end of every frame by GEVulkanDriver, groups which are not
+    // used for long or have deleted targets will be removed
+    void endFrame(GEVulkanDriver* vk);
+    // ------------------------------------------------------------------------
+    // Destroy all draw calls, they will be created again when needed
+    void resetDrawCalls();
     // ------------------------------------------------------------------------
     irr::scene::ILightSceneNode* getSunNode(irr::scene::ISceneNode* node);
     // ------------------------------------------------------------------------

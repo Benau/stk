@@ -18,12 +18,18 @@ GEVulkanCameraSceneNode::GEVulkanCameraSceneNode(irr::scene::ISceneNode* parent,
                                                  irr::s32 id,
                                            const irr::core::vector3df& position,
                                              const irr::core::vector3df& lookat)
-                       : CCameraSceneNode(parent, mgr, id, position, lookat),
-                         m_ubo_padding(getPadding(getCameraUBOSize(),
-                         getVKDriver()->getPhysicalDeviceProperties().limits.
-                         minUniformBufferOffsetAlignment))
+                       : CCameraSceneNode(parent, mgr, id, position, lookat)
 {
-    static_cast<GEVulkanSceneManager*>(SceneManager)->addDrawCall(this);
+    static_cast<GEVulkanSceneManager*>(SceneManager)->detectAutoDeferred();
+}   // GEVulkanCameraSceneNode
+
+// ----------------------------------------------------------------------------
+GEVulkanCamera::GEVulkanCamera()
+              : m_near(0.0f), m_far(0.0f),
+                m_ubo_padding(getPadding(getCameraUBOSize(),
+                getVKDriver()->getPhysicalDeviceProperties().limits.
+                minUniformBufferOffsetAlignment))
+{
     m_camera_ubo = new GEVulkanDynamicBuffer(
         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
         0/*will be grown later so forceUpdateDataDescriptorSets works*/,
@@ -31,22 +37,39 @@ GEVulkanCameraSceneNode::GEVulkanCameraSceneNode(irr::scene::ISceneNode* parent,
         GEVulkanDynamicBuffer::supportsHostTransfer() ? 0 :
         GEVulkanDriver::getMaxFrameInFlight() + 1);
     m_camera_ubo_count = 0;
-}   // GEVulkanCameraSceneNode
+}   // GEVulkanCamera
 
 // ----------------------------------------------------------------------------
-GEVulkanCameraSceneNode::~GEVulkanCameraSceneNode()
+GEVulkanCamera::~GEVulkanCamera()
 {
-    static_cast<GEVulkanSceneManager*>(SceneManager)->removeDrawCall(this);
     delete m_camera_ubo;
-}   // ~GEVulkanCameraSceneNode
+}   // ~GEVulkanCamera
 
 // ----------------------------------------------------------------------------
-void GEVulkanCameraSceneNode::render()
+void GEVulkanCamera::update(GEVulkanCameraSceneNode* node)
 {
-    irr::scene::CCameraSceneNode::render();
+    // Updates the view frustum of the node
+    node->render();
+    m_view_area = *node->getViewFrustum();
+    m_absolute_position = node->getAbsolutePosition();
+    m_target = node->getTarget();
+    m_near = node->getNearValue();
+    m_far = node->getFarValue();
+    GEVulkanDriver* vk = getVKDriver();
+    m_viewport = node->getViewPort();
+    if (m_viewport.getWidth() <= 0 || m_viewport.getHeight() <= 0)
+    {
+        // The viewport of the node is never set (like a camera which is only
+        // used for a separate RTT), so use the whole target
+        irr::core::dimension2d<irr::u32> size =
+            vk->getSeparateRTTTexture() ?
+            vk->getSeparateRTTTexture()->getSize() :
+            vk->getCurrentRenderTargetSize();
+        m_viewport = irr::core::rect<irr::s32>(0, 0, size.Width, size.Height);
+    }
 
-    m_ubo_data.m_view_matrix = ViewArea.getTransform(irr::video::ETS_VIEW);
-    m_ubo_data.m_projection_matrix = m_reverse_z_projection_matrix;
+    m_ubo_data.m_view_matrix = m_view_area.getTransform(irr::video::ETS_VIEW);
+    m_ubo_data.m_projection_matrix = node->getReverseZProjectionMatrix();
     // https://matthewwellings.com/blog/the-new-vulkan-coordinate-system/
     // Vulkan clip space has inverted Y and half Z
     irr::core::matrix4 clip;
@@ -56,7 +79,6 @@ void GEVulkanCameraSceneNode::render()
     //clip[10] = 0.5f;
     //clip[14] = 0.5f;
     m_ubo_data.m_projection_matrix = clip * m_ubo_data.m_projection_matrix;
-    GEVulkanDriver* vk = getVKDriver();
     if (!vk->getRTTTexture() || vk->getRTTTexture()->useSwapChainOutput())
     {
         m_ubo_data.m_projection_matrix = vk->getPreRotationMatrix() *
@@ -64,7 +86,7 @@ void GEVulkanCameraSceneNode::render()
     }
 
     irr::core::matrix4 mat;
-    ViewArea.getTransform(irr::video::ETS_VIEW).getInverse(mat);
+    m_view_area.getTransform(irr::video::ETS_VIEW).getInverse(mat);
     m_ubo_data.m_inverse_view_matrix = mat;
 
     m_ubo_data.m_projection_matrix.getInverse(mat);
@@ -110,18 +132,18 @@ void GEVulkanCameraSceneNode::render()
         m_ubo_data.m_screensize.LowerRightCorner.X = 0.0;
         m_ubo_data.m_screensize.LowerRightCorner.Y = 0.0;
     }
-}   // render
+}   // update
 
 // ----------------------------------------------------------------------------
-irr::core::matrix4 GEVulkanCameraSceneNode::getPVM() const
+irr::core::matrix4 GEVulkanCamera::getPVM() const
 {
     // Use the original unedited matrix for culling
-    return ViewArea.getTransform(irr::video::ETS_PROJECTION) *
-        ViewArea.getTransform(irr::video::ETS_VIEW);
+    return m_view_area.getTransform(irr::video::ETS_PROJECTION) *
+        m_view_area.getTransform(irr::video::ETS_VIEW);
 }   // getPVM
 
 // ----------------------------------------------------------------------------
-void GEVulkanCameraSceneNode::collectUBO(GEVulkanDriver* vk,
+void GEVulkanCamera::collectUBO(GEVulkanDriver* vk,
                                          GEVulkanDrawCall* dc,
                                          VkCommandBuffer cmd)
 {

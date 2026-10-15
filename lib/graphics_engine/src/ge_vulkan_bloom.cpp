@@ -209,7 +209,7 @@ void GEVulkanBloom::createDescriptors(GEVulkanAttachmentTexture* hdr)
 // ----------------------------------------------------------------------------
 bool GEVulkanBloom::render(VkCommandBuffer cmd,
     const std::vector<std::pair<GEVulkanDrawCall*,
-    GEVulkanCameraSceneNode*> >& p)
+    GEVulkanCamera*> >& p)
 {
     m_active.clear();
 

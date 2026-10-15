@@ -14,10 +14,12 @@
 #include "ge_vulkan_mesh_scene_node.hpp"
 #include "ge_vulkan_shadow_fbo.hpp"
 #include "ge_vulkan_skybox_renderer.hpp"
+#include "ge_vulkan_target_group.hpp"
 #include "ge_vulkan_texture_descriptor.hpp"
 
 #include "IBillboardSceneNode.h"
 #include "ILightSceneNode.h"
+#include <algorithm>
 #include <sstream>
 
 namespace GE
@@ -30,6 +32,8 @@ GEVulkanSceneManager::GEVulkanSceneManager(irr::video::IVideoDriver* driver,
                     : CSceneManager(driver, fs, cursor_control,
                                     new GEVulkanMeshCache(), gui_environment)
 {
+    m_current_group = NULL;
+    m_current_entry = NULL;
     resetDetectDeferred();
     // CSceneManager grabbed it
     getMeshCache()->drop();
@@ -44,8 +48,10 @@ GEVulkanSceneManager::~GEVulkanSceneManager()
 void GEVulkanSceneManager::clear()
 {
     irr::scene::CSceneManager::clear();
-    static_cast<GEVulkanDriver*>(getVideoDriver())
-        ->getMeshTextureDescriptor()->clear();
+    GEVulkanDriver* vk = static_cast<GEVulkanDriver*>(getVideoDriver());
+    vk->waitIdle();
+    resetDrawCalls();
+    vk->getMeshTextureDescriptor()->clear();
 }   // clear
 
 // ----------------------------------------------------------------------------
@@ -154,111 +160,81 @@ irr::scene::IMeshSceneNode* GEVulkanSceneManager::addMeshSceneNode(
 }   // addMeshSceneNode
 
 // ----------------------------------------------------------------------------
-bool GEVulkanSceneManager::drawAllInternal(GEVulkanDriver* vk)
+GEVulkanDrawEntry* GEVulkanSceneManager::acquireEntry(GEVulkanDriver* vk)
 {
+    GEVulkanFBOTexture* target = vk->getRTTTexture();
+    GEVulkanTargetGroup* group = NULL;
+    for (auto& g : m_groups)
+    {
+        if (g->m_target == target && (!target || !g->m_observer.expired()))
+        {
+            group = g.get();
+            break;
+        }
+    }
+    if (!group)
+    {
+        m_groups.emplace_back(new GEVulkanTargetGroup);
+        group = m_groups.back().get();
+        group->m_target = target;
+        if (target)
+            group->m_observer = target->getTextureObserver();
+    }
+    if (group->m_used == 0)
+        m_frame_groups.push_back(group);
+    group->m_clear_color = vk->getRTTClearColor();
+    m_current_group = group;
+    // Don't use the cache of GEVulkanDriver (it's for draw calls which can
+    // be used for any target)
+    return &group->acquireEntry();
+}   // acquireEntry
+
+// ----------------------------------------------------------------------------
+void GEVulkanSceneManager::drawAll(irr::u32 flags)
+{
+    // The actual rendering is in GEVulkanDriver::buildCommandBuffers, which
+    // renders every group of the draw calls to its own target. So this can be
+    // called with a separate render target (GEVulkanDriver::setRenderTarget)
+    // the same way as the default framebuffer
+    GEVulkanDriver* vk = static_cast<GEVulkanDriver*>(getVideoDriver());
+    m_current_group = NULL;
+    m_current_entry = NULL;
+    bool paused = vk->getSwapChainImageViews().empty();
+
     static_cast<GEVulkanMeshCache*>(getMeshCache())->updateCache();
     GEVulkanCameraSceneNode* cam = NULL;
     if (getActiveCamera())
     {
         cam = static_cast<
             GEVulkanCameraSceneNode*>(getActiveCamera());
+        // Each drawAll has its own draw call (no matter which camera is used),
+        // which is later rendered to the current render target of the driver
+        // (default framebuffer or the one of setRenderTarget), this is needed
+        // before OnAnimate because of getActiveDrawCall
+        if (!paused)
+            m_current_entry = acquireEntry(vk);
     }
     OnAnimate(os::Timer::getTime());
     // Mobile STK will destroy swapchain when the main thread is paused
-    if (vk->getSwapChainImageViews().empty())
-        return false;
+    if (paused)
+        return;
+
     if (cam)
     {
-        cam->render();
-        auto it = m_draw_calls.find(cam);
-        if (it == m_draw_calls.end())
-            return false;
-
-        std::unique_ptr<GEVulkanDrawCall>& dc = it->second;
-        dc->prepare(cam);
+        GEVulkanCamera* camera = &m_current_entry->m_camera;
+        GEVulkanDrawCall* dc = &m_current_entry->m_draw_call;
+        camera->update(cam);
+        dc->prepare(camera);
         GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
         if (sfbo)
-            sfbo->prepare(cam, dc->getLightHandler());
+            sfbo->prepare(camera, dc->getLightHandler());
         OnRegisterSceneNode();
-        dc->generate(static_cast<GEVulkanDriver*>(getVideoDriver()));
+        dc->generate(vk);
         if (sfbo)
             sfbo->generate();
     }
-    return true;
-}   // drawAllInternal
-
-// ----------------------------------------------------------------------------
-void GEVulkanSceneManager::drawAll(irr::u32 flags)
-{
-    GEVulkanDriver* vk = static_cast<GEVulkanDriver*>(getVideoDriver());
-    if (!drawAllInternal(vk))
-        return;
-    GEVulkanFBOTexture* rtt = vk->getSeparateRTTTexture();
-    if (!rtt)
-        return;
-
-    vk->getMeshTextureDescriptor()->updateDescriptor();
-    std::vector<VkClearValue> clear_values(2);
-    video::SColorf cf(vk->getRTTClearColor());
-    clear_values[0].color =
-    {
-        cf.getRed(), cf.getGreen(), cf.getBlue(), cf.getAlpha()
-    };
-    clear_values[1].depthStencil = {0.0f, 0};
-    unsigned count = rtt->getZeroClearCountForPass(GVDFP_HDR);
-    VkClearValue zero;
-    zero.color = {0, 0, 0, 0};
-    for (unsigned c = 0; c < count; c++)
-        clear_values.push_back(zero);
-    // The output attachment which is the last one in GEVulkanDeferredFBO
-    // (render pass attachments are cleared too), same as the clear values
-    // in GEVulkanDriver::buildCommandBuffers
-    if (rtt->isDeferredFBO())
-        clear_values.push_back(zero);
-
-    VkCommandBuffer cmd = GEVulkanCommandLoader::beginSingleTimeCommands();
-
-    GEVulkanCameraSceneNode* cam = static_cast<
-        GEVulkanCameraSceneNode*>(getActiveCamera());
-    std::unique_ptr<GEVulkanDrawCall>& dc = m_draw_calls.at(cam);
-    cam->setViewPort(
-        core::recti(0, 0, rtt->getSize().Width, rtt->getSize().Height));
-    cam->render();
-    cam->collectUBO(vk, dc.get(), cmd);
-    bool has_indirect = false;
-    dc->uploadDynamicData(vk, has_indirect, cmd);
-    GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
-    if (sfbo)
-        sfbo->uploadDynamicData(cmd, has_indirect);
-    vk->insertBufferBarrier(cmd, has_indirect);
-    if (sfbo)
-        sfbo->render(cmd, cam);
-
-    // GEVulkanDeferredFBOSplit::render() begins all render passes by itself
-    // (and the clear colors, so clear_values is not used for it), the last
-    // one is left open for both deferred FBO classes, which is ended here
-    if (!rtt->isSplit())
-    {
-        VkRenderPassBeginInfo render_pass_info = {};
-        render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        render_pass_info.renderPass = rtt->getRTTRenderPass();
-        render_pass_info.framebuffer = rtt->getRTTFramebuffer();
-        render_pass_info.renderArea.offset = {0, 0};
-        render_pass_info.renderArea.extent =
-            { rtt->getSize().Width, rtt->getSize().Height };
-        render_pass_info.clearValueCount = (uint32_t)(clear_values.size());
-        render_pass_info.pClearValues = &clear_values[0];
-        vkCmdBeginRenderPass(cmd, &render_pass_info,
-            VK_SUBPASS_CONTENTS_INLINE);
-    }
-
-    vk->renderDrawCalls({{ dc.get(), cam }}, cmd);
-    vk->addRTTPolyCount(dc->getPolyCount());
-    dc->reset();
-
-    vkCmdEndRenderPass(cmd);
-
-    GEVulkanCommandLoader::endSingleTimeCommands(cmd);
+    m_current_group = NULL;
+    m_current_entry = NULL;
 }   // drawAll
 
 // ----------------------------------------------------------------------------
@@ -266,13 +242,10 @@ irr::u32 GEVulkanSceneManager::registerNodeForRendering(
     irr::scene::ISceneNode* node,
     irr::scene::E_SCENE_NODE_RENDER_PASS pass)
 {
-    if (!getActiveCamera())
+    if (!m_current_entry)
         return 0;
 
-    GEVulkanCameraSceneNode* cam = static_cast<
-        GEVulkanCameraSceneNode*>(getActiveCamera());
-
-    std::unique_ptr<GEVulkanDrawCall>& dc = m_draw_calls.at(cam);
+    GEVulkanDrawCall* dc = &m_current_entry->m_draw_call;
     if (node->getType() == irr::scene::ESNT_SKY_BOX)
     {
         dc->addSkyBox(node);
@@ -355,34 +328,61 @@ GEAutoDeferredType GEVulkanSceneManager::getDetectDeferredResult() const
 }   // getDetectDeferredResult
 
 // ----------------------------------------------------------------------------
-void GEVulkanSceneManager::addDrawCall(GEVulkanCameraSceneNode* cam)
+void GEVulkanSceneManager::detectAutoDeferred()
 {
     GEVulkanDriver* gevk = static_cast<GEVulkanDriver*>(getVideoDriver());
-    if (!gevk->getSeparateRTTTexture())
-    {
-        bool prev_deferred = needsDeferredRendering();
-        GEAutoDeferredType prev_deferred_type =
-            getGEConfig()->m_auto_deferred_type;
-        resetDetectDeferred();
-        detectDeferred(this);
-        getGEConfig()->m_auto_deferred_type = getDetectDeferredResult();
-        if (needsDeferredRendering() != prev_deferred ||
-            prev_deferred_type != getGEConfig()->m_auto_deferred_type)
-            gevk->updateDriver();
-    }
-    m_draw_calls[cam] = gevk->getDrawCallFromCache();
-}   // addDrawCall
+    if (gevk->getSeparateRTTTexture())
+        return;
+    bool prev_deferred = needsDeferredRendering();
+    GEAutoDeferredType prev_deferred_type =
+        getGEConfig()->m_auto_deferred_type;
+    resetDetectDeferred();
+    detectDeferred(this);
+    getGEConfig()->m_auto_deferred_type = getDetectDeferredResult();
+    if (needsDeferredRendering() != prev_deferred ||
+        prev_deferred_type != getGEConfig()->m_auto_deferred_type)
+        gevk->updateDriver();
+}   // detectAutoDeferred
 
 // ----------------------------------------------------------------------------
-void GEVulkanSceneManager::removeDrawCall(GEVulkanCameraSceneNode* cam)
+void GEVulkanSceneManager::endFrame(GEVulkanDriver* vk)
 {
-    if (m_draw_calls.find(cam) == m_draw_calls.end())
-        return;
-    GEVulkanDriver* gevk = static_cast<GEVulkanDriver*>(getVideoDriver());
-    auto& dc = m_draw_calls.at(cam);
-    gevk->addDrawCallToCache(dc);
-    m_draw_calls.erase(cam);
-}   // removeDrawCall
+    m_current_group = NULL;
+    m_current_entry = NULL;
+    m_frame_groups.clear();
+    // The default target is always kept (its draw calls have created pipelines
+    // which are expensive to create on some drivers)
+    GEVulkanFBOTexture* default_target = vk->getDefaultRTTTexture();
+    auto should_remove = [&](const std::unique_ptr<GEVulkanTargetGroup>& g)
+    {
+        return (g->m_target && g->m_observer.expired()) ||
+            (g->m_target != default_target && g->m_unused_frames >
+            GEVulkanDriver::getMaxFrameInFlight() + 1);
+    };
+    bool need_wait = false;
+    for (auto& g : m_groups)
+    {
+        g->m_unused_frames = g->m_used > 0 ? 0 : g->m_unused_frames + 1;
+        g->resetUsed();
+        need_wait = need_wait || should_remove(g);
+    }
+    if (need_wait)
+    {
+        // Draw calls of removed groups may be used by frames in flight
+        vk->waitIdle();
+        m_groups.erase(std::remove_if(m_groups.begin(), m_groups.end(),
+            should_remove), m_groups.end());
+    }
+}   // endFrame
+
+// ----------------------------------------------------------------------------
+void GEVulkanSceneManager::resetDrawCalls()
+{
+    m_current_group = NULL;
+    m_current_entry = NULL;
+    m_frame_groups.clear();
+    m_groups.clear();
+}   // resetDrawCalls
 
 // ----------------------------------------------------------------------------
 irr::scene::ILightSceneNode* GEVulkanSceneManager::getSunNode(
@@ -417,11 +417,8 @@ irr::scene::ILightSceneNode* GEVulkanSceneManager::getSunNode(
 // ----------------------------------------------------------------------------
 GEVulkanDrawCall* GEVulkanSceneManager::getActiveDrawCall() const
 {
-    auto it = m_draw_calls.find(static_cast<
-        GEVulkanCameraSceneNode*>(getActiveCamera()));
-    if (it == m_draw_calls.end())
-        return NULL;
-    return it->second.get();
+    // Only valid when drawAll is processing
+    return m_current_entry ? &m_current_entry->m_draw_call : NULL;
 }   // getActiveDrawCall
 
 }

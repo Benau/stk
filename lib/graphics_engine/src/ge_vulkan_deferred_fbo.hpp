@@ -10,7 +10,7 @@
 namespace GE
 {
 class GEVulkanDrawCall;
-class GEVulkanCameraSceneNode;
+class GEVulkanCamera;
 
 enum GEVulkanDeferredFBOType : unsigned
 {
@@ -101,7 +101,7 @@ public:
     // render pass is left open (also when displace needs more of them)
     virtual void render(VkCommandBuffer cmd,
                         const std::vector<std::pair<GEVulkanDrawCall*,
-                        GEVulkanCameraSceneNode*> >& p);
+                        GEVulkanCamera*> >& p);
     // ------------------------------------------------------------------------
     virtual bool isDeferredFBO() const                         { return true; }
     // ------------------------------------------------------------------------

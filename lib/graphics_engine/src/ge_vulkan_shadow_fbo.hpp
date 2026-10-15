@@ -22,7 +22,7 @@ namespace GE
 class GEVulkanDriver;
 class GEVulkanLightHandler;
 class GEVulkanDrawCall;
-class GEVulkanCameraSceneNode;
+class GEVulkanCamera;
 class GEVulkanShadowDrawCall;
 struct GEVulkanCameraUBO;
 
@@ -86,7 +86,7 @@ public:
     // ------------------------------------------------------------------------
     VkFramebuffer getRTTFramebuffer() const      { return m_rtt_frame_buffer; }
     // ------------------------------------------------------------------------
-    virtual void prepare(irr::scene::ICameraSceneNode* cam,
+    virtual void prepare(GEVulkanCamera* cam,
                          GEVulkanLightHandler* lh);
     // ------------------------------------------------------------------------
     virtual void addNode(irr::scene::ISceneNode* node);
@@ -95,7 +95,7 @@ public:
     // ------------------------------------------------------------------------
     void uploadDynamicData(VkCommandBuffer cmd, bool& has_indirect);
     // ------------------------------------------------------------------------
-    void render(VkCommandBuffer cmd, GEVulkanCameraSceneNode* cam);
+    void render(VkCommandBuffer cmd, GEVulkanCamera* cam);
     // ------------------------------------------------------------------------
     virtual irr::core::matrix4 getShadowProjectionViewMatrix(
                                                           unsigned layer) const

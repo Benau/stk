@@ -26,9 +26,11 @@ namespace GE
 {
     class GESPM;
     class GEVulkanAttachmentTexture;
+    class GEVulkanCamera;
     class GEVulkanCameraSceneNode;
     class GEVulkanDrawCall;
     class GEVulkanDynamicSPMBuffer;
+    struct GEVulkanTargetGroup;
     class GEVulkanFBOTexture;
     class GEVulkanMeshCache;
     class GEVulkanSkyBoxRenderer;
@@ -385,6 +387,11 @@ namespace GE
         GEVulkanFBOTexture* getRTTTexture() const      { return m_rtt_texture; }
         GEVulkanFBOTexture* getSeparateRTTTexture() const
                                               { return m_separate_rtt_texture; }
+        // The default framebuffer one (also when a separate one is set)
+        GEVulkanFBOTexture* getDefaultRTTTexture() const
+        {
+            return m_separate_rtt_texture ? m_prev_rtt_texture : m_rtt_texture;
+        }
         void addRTTPolyCount(unsigned count)       { m_rtt_polycount += count; }
         SDL_Window* getSDLWindow() const       { return m_params.m_sdl_window; }
         void clearDrawCallsCache();
@@ -396,7 +403,7 @@ namespace GE
                                        { m_dynamic_spm_buffers.insert(buffer); }
         void removeDynamicSPMBuffer(GEVulkanDynamicSPMBuffer* buffer)
                                         { m_dynamic_spm_buffers.erase(buffer); }
-        void renderDrawCalls(const std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCameraSceneNode*> >& p,
+        void renderDrawCalls(const std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCamera*> >& p,
                              VkCommandBuffer cmd);
         void insertBufferBarrier(VkCommandBuffer cmd, bool has_indirect);
         u32& getPrimitivesDrawn() { return PrimitivesDrawn; }
@@ -546,6 +553,8 @@ namespace GE
         GEVulkanFBOTexture* m_rtt_texture;
         GEVulkanFBOTexture* m_prev_rtt_texture;
         GEVulkanFBOTexture* m_separate_rtt_texture;
+
+        core::rect<s32> m_prev_viewport;
         u32 m_rtt_polycount;
 
         std::vector<std::unique_ptr<GEVulkanDrawCall> > m_draw_calls_cache;

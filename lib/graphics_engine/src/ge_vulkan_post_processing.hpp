@@ -13,7 +13,7 @@
 namespace GE
 {
 class GEVulkanAttachmentTexture;
-class GEVulkanCameraSceneNode;
+class GEVulkanCamera;
 class GEVulkanDrawCall;
 class GEVulkanDriver;
 
@@ -102,7 +102,7 @@ protected:
     // Returns false if the area is empty (so it has nothing to be applied to).
     // The same viewport as GEVulkanDrawCall::prepareViewport, in pixels of the
     // FBO
-    bool getViewport(GEVulkanDrawCall* dc, GEVulkanCameraSceneNode* cam,
+    bool getViewport(GEVulkanDrawCall* dc, GEVulkanCamera* cam,
                      Viewport* out) const;
     // ------------------------------------------------------------------------
     static irr::core::dimension2d<irr::u32> halfSize(
@@ -200,7 +200,7 @@ public:
     // ------------------------------------------------------------------------
     virtual bool render(VkCommandBuffer cmd,
                         const std::vector<std::pair<GEVulkanDrawCall*,
-                        GEVulkanCameraSceneNode*> >& p) = 0;
+                        GEVulkanCamera*> >& p) = 0;
 
 };   // GEVulkanPostProcessing
 

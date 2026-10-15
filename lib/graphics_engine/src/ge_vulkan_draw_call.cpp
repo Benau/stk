@@ -818,7 +818,7 @@ start:
 }   // generate
 
 // ----------------------------------------------------------------------------
-void GEVulkanDrawCall::prepare(GEVulkanCameraSceneNode* cam)
+void GEVulkanDrawCall::prepare(GEVulkanCamera* cam)
 {
     reset();
     // Only the split deferred FBO has glow outline
@@ -2228,7 +2228,7 @@ void GEVulkanDrawCall::drawCommands(VkCommandBuffer cmd,
 
 // ----------------------------------------------------------------------------
 void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
-                                                GEVulkanCameraSceneNode* cam)
+                                                GEVulkanCamera* cam)
 {
     if (m_data_descriptor_sets.empty())
         return;
@@ -2263,7 +2263,7 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
             cam->getCameraUBO()->getHostBuffer()[i] :
             cam->getCameraUBO()->getLocalBuffer()[i];
         ubo_info.offset = 0;
-        ubo_info.range = GEVulkanCameraSceneNode::getCameraUBOSize();
+        ubo_info.range = GEVulkanCamera::getCameraUBOSize();
 
         std::vector<VkWriteDescriptorSet> data_set;
         data_set.resize(1, {});
@@ -2409,9 +2409,9 @@ bool GEVulkanDrawCall::renderSkyBox(GEVulkanDriver* vk, VkCommandBuffer cmd)
 void GEVulkanDrawCall::renderDeferredLighting(GEVulkanDriver* vk,
                                               VkCommandBuffer cmd)
 {
-    // Make draw commands during offscreen RTT causes validation errors
-    if (m_deferred_layouts.empty() ||
-        (m_visible_nodes.empty() && !m_skybox_renderer))
+    // Nothing to light, the draw call is for the target of its own (default
+    // framebuffer or a separate RTT) so this has nothing to do with the target
+    if (!hasDeferredOutput())
         return;
     auto& pl = m_graphics_pipelines.at("deferred_pbr").m_pipelines;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -2586,7 +2586,7 @@ void GEVulkanDrawCall::renderSolidSSR(GEVulkanDriver* vk, VkCommandBuffer cmd)
 {
     if (m_deferred_layouts.empty() ||
         m_deferred_layouts[GVDFP_SOLID_SSR] == VK_NULL_HANDLE ||
-        (m_visible_nodes.empty() && !m_skybox_renderer))
+        m_visible_nodes.empty())
         return;
     // The set of the HiZ depth of this viewport, or the one of the FBO with
     // the depth only (the pipeline has no iterations of HiZ then)
@@ -2646,8 +2646,7 @@ void GEVulkanDrawCall::renderDisplaceColor(GEVulkanDriver* vk,
                                            VkCommandBuffer cmd,
                                            VkBool32 has_displace)
 {
-    if (m_deferred_layouts.empty() ||
-        (m_visible_nodes.empty() && !m_skybox_renderer))
+    if (!hasDeferredOutput())
         return;
     auto& pl = m_graphics_pipelines.at("displace_color").m_pipelines;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,

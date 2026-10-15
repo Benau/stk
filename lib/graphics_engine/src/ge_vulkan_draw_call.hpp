@@ -33,7 +33,7 @@ namespace GE
 class GECullingTool;
 struct GEVulkanBloomRects;
 class GESPMBuffer;
-class GEVulkanCameraSceneNode;
+class GEVulkanCamera;
 class GEVulkanDriver;
 class GEVulkanDynamicBuffer;
 class GEVulkanLightHandler;
@@ -345,7 +345,7 @@ public:
     void addBillboardNode(irr::scene::ISceneNode* node,
                           irr::scene::ESCENE_NODE_TYPE node_type);
     // ------------------------------------------------------------------------
-    virtual void prepare(GEVulkanCameraSceneNode* cam);
+    virtual void prepare(GEVulkanCamera* cam);
     // ------------------------------------------------------------------------
     void generate(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
@@ -357,7 +357,7 @@ public:
     void bindAllMaterials(VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
     void updateDataDescriptorSets(GEVulkanDriver* vk,
-                                  GEVulkanCameraSceneNode* cam);
+                                  GEVulkanCamera* cam);
     // ------------------------------------------------------------------------
     void prepareViewport(GEVulkanDriver* vk,
                          const irr::core::rect<irr::s32>& viewp,
@@ -385,8 +385,7 @@ public:
     // sky is visible)
     bool hasDeferredOutput() const
     {
-        return !m_deferred_layouts.empty() &&
-            (!m_visible_nodes.empty() || m_skybox_renderer);
+        return !m_deferred_layouts.empty() && !m_visible_nodes.empty();
     }
     // ------------------------------------------------------------------------
     void renderDisplaceColor(GEVulkanDriver* vk, VkCommandBuffer cmd,

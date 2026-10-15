@@ -342,7 +342,7 @@ void GEVulkanSSAO::createPipelines()
 // ----------------------------------------------------------------------------
 bool GEVulkanSSAO::render(VkCommandBuffer cmd,
     const std::vector<std::pair<GEVulkanDrawCall*,
-    GEVulkanCameraSceneNode*> >& p)
+    GEVulkanCamera*> >& p)
 {
     std::vector<Viewport> viewports;
     for (auto& q : p)
