@@ -243,7 +243,7 @@ void GEVulkanShadowFBO::createDrawCalls()
 }   // createDrawCalls
 
 // ----------------------------------------------------------------------------
-void GEVulkanShadowFBO::prepare(irr::scene::ICameraSceneNode* cam,
+void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
                                 GEVulkanLightHandler* lh)
 {
     irr::core::vector3df eyepos = cam->getAbsolutePosition();
@@ -448,7 +448,7 @@ void GEVulkanShadowFBO::uploadDynamicData(VkCommandBuffer cmd,
 
 // ----------------------------------------------------------------------------
 void GEVulkanShadowFBO::render(VkCommandBuffer cmd,
-                               GEVulkanCameraSceneNode* cam)
+                               GEVulkanCamera* cam)
 {
     const bool vk_13 =
         m_vk->getPhysicalDeviceProperties().apiVersion >= VK_API_VERSION_1_3;

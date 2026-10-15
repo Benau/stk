@@ -100,11 +100,11 @@ void main()
     }
 #endif
     vec4 color = vec4(convertColor(hdr.xyz), 1.0);
-    // Offscreen RTT has an HDR attachment with alpha (never B10G11R11), which
-    // is the clear color (transparent) where nothing is drawn, lighting writes
-    // 1.0 for pixels with geometry (point lights are additive so it can be
-    // above 1.0)
-    if (u_offscreen_rtt)
-        color.a = clamp(hdr.a, 0.0, 1.0);
+    // An offscreen RTT can have an HDR attachment with alpha, which is the
+    // clear color (transparent) where nothing is drawn, lighting writes 1.0
+    // for pixels with geometry (point lights are additive so it can be above
+    // 1.0). For a HDR attachment without alpha (like the one of the default
+    // framebuffer usually) this is always 1.0
+    color.a = clamp(hdr.a, 0.0, 1.0);
     o_color = color;
 }

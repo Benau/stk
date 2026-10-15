@@ -104,7 +104,7 @@ private:
     // ------------------------------------------------------------------------
     void generateHiZ(VkCommandBuffer cmd,
                      const std::vector<std::pair<GEVulkanDrawCall*,
-                     GEVulkanCameraSceneNode*> >& p);
+                     GEVulkanCamera*> >& p);
 public:
     // ------------------------------------------------------------------------
     static bool needsSolidSSR();
@@ -123,7 +123,7 @@ public:
     // ------------------------------------------------------------------------
     virtual void render(VkCommandBuffer cmd,
                         const std::vector<std::pair<GEVulkanDrawCall*,
-                        GEVulkanCameraSceneNode*> >& p);
+                        GEVulkanCamera*> >& p);
     // ------------------------------------------------------------------------
     virtual bool isSplit() const                               { return true; }
     // ------------------------------------------------------------------------

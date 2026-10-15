@@ -31,7 +31,7 @@ private:
     virtual uint32_t getSubpassForPipelineCreation(GEVulkanDriver* vk,
                                                    GEVulkanPipelineType type);
     // ------------------------------------------------------------------------
-    virtual void prepare(GEVulkanCameraSceneNode* cam)       { assert(false); }
+    virtual void prepare(GEVulkanCamera* cam)                { assert(false); }
     // ------------------------------------------------------------------------
     virtual bool ignoreMaterial(irr::video::E_MATERIAL_TYPE mt,
                                 const irr::video::SMaterial& m) const;

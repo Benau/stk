@@ -562,6 +562,19 @@ RenderTarget* Graph::makeMiniMap(const core::dimension2du &dimension,
     camera->updateAbsolutePosition();
 
     m_render_target->renderToTexture(camera, GUIEngine::getLatestDt());
+#ifndef SERVER_ONLY
+    if (GE::getDriver()->getDriverType() == video::EDT_VULKAN)
+    {
+        // The Vulkan driver only generates the draw calls in renderToTexture
+        // (drawAll) and renders the render target in endScene, so a frame is
+        // needed here (the loading screen is drawn again) before the nodes and
+        // the camera are removed
+        GE::getDriver()->beginScene(true, true,
+            video::SColor(255, 100, 101, 140));
+        GUIEngine::renderLoading(false, true, false);
+        GE::getDriver()->endScene();
+    }
+#endif
 
     cleanupDebugMesh();
     irr_driver->removeCameraSceneNode(camera);

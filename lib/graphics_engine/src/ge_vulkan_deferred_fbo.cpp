@@ -231,7 +231,7 @@ GEVulkanDeferredFBO::~GEVulkanDeferredFBO()
 // ----------------------------------------------------------------------------
 void GEVulkanDeferredFBO::render(VkCommandBuffer cmd,
     const std::vector<std::pair<GEVulkanDrawCall*,
-    GEVulkanCameraSceneNode*> >& p)
+    GEVulkanCamera*> >& p)
 {
     bool rebind_base_vertex = true;
     const bool bind_mesh_textures =

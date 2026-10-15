@@ -40,7 +40,7 @@ GEVulkanHiZDepth::~GEVulkanHiZDepth()
 }   // ~GEVulkanHiZDepth
 
 // ----------------------------------------------------------------------------
-void GEVulkanHiZDepth::prepare(GEVulkanCameraSceneNode* cam)
+void GEVulkanHiZDepth::prepare(GEVulkanCamera* cam)
 {
     irr::core::recti hiz_size(irr::core::position2di(
         cam->getUBOData()->m_viewport.UpperLeftCorner.X,

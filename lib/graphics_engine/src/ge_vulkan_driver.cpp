@@ -20,6 +20,7 @@
 #include "ge_vulkan_hiz_depth.hpp"
 #include "ge_vulkan_mesh_cache.hpp"
 #include "ge_vulkan_scene_manager.hpp"
+#include "ge_vulkan_target_group.hpp"
 #include "ge_vulkan_shader_manager.hpp"
 #include "ge_vulkan_shadow_fbo.hpp"
 #include "ge_vulkan_skybox_renderer.hpp"
@@ -738,6 +739,8 @@ void GEVulkanDriver::destroyVulkan()
     {
         getGEConfig()->m_enable_draw_call_cache = false;
         m_irrlicht_device->getSceneManager()->clear();
+        static_cast<GEVulkanSceneManager*>(
+            m_irrlicht_device->getSceneManager())->resetDrawCalls();
         if (m_irrlicht_device->getSceneManager()->getActiveCamera())
             m_irrlicht_device->getSceneManager()->setActiveCamera(NULL);
         if (m_irrlicht_device->getSceneManager()->getMeshCache())
@@ -1907,6 +1910,17 @@ bool GEVulkanDriver::beginScene(bool backBuffer, bool zBuffer, SColor color,
 // ----------------------------------------------------------------------------
 bool GEVulkanDriver::endScene()
 {
+    // The draw calls of drawAll() are used in buildCommandBuffers, they must be
+    // cleared in all the cases (including early return)
+    struct EndFrameGuard
+    {
+        GEVulkanDriver* m_driver;
+        ~EndFrameGuard()
+        {
+            static_cast<GEVulkanSceneManager*>(m_driver->m_irrlicht_device
+                ->getSceneManager())->endFrame(m_driver);
+        }
+    } end_frame_guard = { this };
     if (g_paused_rendering.load())
     {
         GEVulkan2dRenderer::clear();
@@ -2576,53 +2590,31 @@ GEVulkanMeshCache* GEVulkanDriver::getVulkanMeshCache() const
 // ----------------------------------------------------------------------------
 void GEVulkanDriver::buildCommandBuffers()
 {
-    std::vector<VkClearValue> clear_values(2);
-    video::SColorf cf(getClearColor());
-    clear_values[0].color =
+    if (m_separate_rtt_texture)
     {
-        cf.getRed(), cf.getGreen(), cf.getBlue(), cf.getAlpha()
-    };
-    clear_values[1].depthStencil = {0.0f, 0};
-    if (m_rtt_texture)
-    {
-        unsigned count = m_rtt_texture->getZeroClearCountForPass(GVDFP_HDR);
-        VkClearValue zero;
-        zero.color = {0, 0, 0, 0};
-        for (unsigned c = 0; c < count; c++)
-            clear_values.push_back(zero);
-        if (m_rtt_texture->isDeferredFBO())
-            clear_values.push_back(zero);
+        printf("setRenderTarget(NULL) is not called before endScene\n");
+        setRenderTarget(NULL, false, false, video::SColor(0));
     }
-
-    VkRenderPassBeginInfo render_pass_info = {};
-    render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    render_pass_info.clearValueCount = (uint32_t)(clear_values.size());
-    render_pass_info.pClearValues = &clear_values[0];
-    render_pass_info.renderArea.offset = {0, 0};
-
-    if (m_rtt_texture)
+    GEVulkanSceneManager* sm = static_cast<GEVulkanSceneManager*>(
+        m_irrlicht_device->getSceneManager());
+    // Draw calls of separate render targets are rendered first (in the order of
+    // drawAll), then the ones of the default framebuffer (the last one)
+    std::vector<GEVulkanTargetGroup*> render_groups;
+    render_groups.reserve(sm->getFrameGroups().size());
+    GEVulkanTargetGroup* default_group = NULL;
+    for (GEVulkanTargetGroup* g : sm->getFrameGroups())
     {
-        render_pass_info.renderPass = m_rtt_texture->getRTTRenderPass();
-        if (m_rtt_texture->useSwapChainOutput() &&
-            m_rtt_texture->getRTTRenderPassCount() == 1)
-        {
-            render_pass_info.framebuffer =
-                m_rtt_texture->getRTTFramebuffer(getCurrentImageIndex());
-        }
-        else
-        {
-            render_pass_info.framebuffer = m_rtt_texture->getRTTFramebuffer(0);
-        }
-        render_pass_info.renderArea.extent = { m_rtt_texture->getSize().Width,
-            m_rtt_texture->getSize().Height };
+        if (g->m_target == m_rtt_texture)
+            default_group = g;
+        else if (g->m_target && !g->m_observer.expired())
+            render_groups.push_back(g);
+        // Otherwise the target is deleted before endScene or it's not the
+        // default one anymore, nothing to render
     }
-    else
-    {
-        render_pass_info.renderPass = getRenderPass();
-        render_pass_info.framebuffer =
-            getSwapChainFramebuffers()[getCurrentImageIndex()];
-        render_pass_info.renderArea.extent = getSwapChainExtent();
-    }
+    // The first rtt_group_count of render_groups are the separate targets
+    const size_t rtt_group_count = render_groups.size();
+    if (default_group)
+        render_groups.push_back(default_group);
 
     VkCommandBufferBeginInfo begin_info = {};
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -2634,24 +2626,162 @@ void GEVulkanDriver::buildCommandBuffers()
         return;
 
     GEVulkan2dRenderer::uploadTrisBuffers();
-    auto& dcp = static_cast<GEVulkanSceneManager*>(
-        m_irrlicht_device->getSceneManager())->getDrawCalls();
     bool has_indirect = false;
-    for (auto& p : dcp)
+    for (GEVulkanTargetGroup* g : render_groups)
     {
-        p.first->collectUBO(this, p.second.get());
-        p.second->uploadDynamicData(this, has_indirect);
-        GEVulkanShadowFBO* sfbo = p.second->getShadowFBO();
-        if (sfbo)
-            sfbo->uploadDynamicData(getCurrentCommandBuffer(), has_indirect);
+        for (auto& p : g->m_dcs)
+        {
+            p.second->collectUBO(this, p.first);
+            p.first->uploadDynamicData(this, has_indirect);
+            GEVulkanShadowFBO* sfbo = p.first->getShadowFBO();
+            if (sfbo)
+                sfbo->uploadDynamicData(getCurrentCommandBuffer(), has_indirect);
+        }
     }
     insertBufferBarrier(getCurrentCommandBuffer(), has_indirect);
-    for (auto& p : dcp)
+    for (GEVulkanTargetGroup* g : render_groups)
     {
-        GEVulkanShadowFBO* sfbo = p.second->getShadowFBO();
-        if (sfbo)
-            sfbo->render(getCurrentCommandBuffer(), p.first);
+        for (auto& p : g->m_dcs)
+        {
+            GEVulkanShadowFBO* sfbo = p.first->getShadowFBO();
+            if (sfbo)
+                sfbo->render(getCurrentCommandBuffer(), p.second);
+        }
     }
+
+    // Clear values and render pass info of the current m_rtt_texture
+    auto fill_render_pass_info = [this](VkRenderPassBeginInfo& info,
+        std::vector<VkClearValue>& clear_values, const video::SColor& color)
+    {
+        clear_values.resize(2);
+        video::SColorf cf(color);
+        clear_values[0].color =
+        {
+            cf.getRed(), cf.getGreen(), cf.getBlue(), cf.getAlpha()
+        };
+        clear_values[1].depthStencil = {0.0f, 0};
+        if (m_rtt_texture)
+        {
+            unsigned count =
+                m_rtt_texture->getZeroClearCountForPass(GVDFP_HDR);
+            VkClearValue zero;
+            zero.color = {0, 0, 0, 0};
+            for (unsigned c = 0; c < count; c++)
+                clear_values.push_back(zero);
+            // The output attachment which is the last one in
+            // GEVulkanDeferredFBO (render pass attachments are cleared too)
+            if (m_rtt_texture->isDeferredFBO())
+                clear_values.push_back(zero);
+        }
+        info = {};
+        info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        info.clearValueCount = (uint32_t)(clear_values.size());
+        info.pClearValues = &clear_values[0];
+        info.renderArea.offset = {0, 0};
+        if (m_rtt_texture)
+        {
+            info.renderPass = m_rtt_texture->getRTTRenderPass();
+            if (m_rtt_texture->useSwapChainOutput() &&
+                m_rtt_texture->getRTTRenderPassCount() == 1)
+            {
+                info.framebuffer =
+                    m_rtt_texture->getRTTFramebuffer(getCurrentImageIndex());
+            }
+            else
+                info.framebuffer = m_rtt_texture->getRTTFramebuffer(0);
+            info.renderArea.extent = { m_rtt_texture->getSize().Width,
+                m_rtt_texture->getSize().Height };
+        }
+        else
+        {
+            info.renderPass = getRenderPass();
+            info.framebuffer =
+                getSwapChainFramebuffers()[getCurrentImageIndex()];
+            info.renderArea.extent = getSwapChainExtent();
+        }
+    };
+
+    if (rtt_group_count != 0)
+    {
+        // Frames in flight may still sample the targets (written below), so
+        // wait for them, and wait for the targets (in fragment shader when
+        // rendering the default framebuffer)
+        VkMemoryBarrier barrier = {};
+        barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        vkCmdPipelineBarrier(getCurrentCommandBuffer(),
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0, NULL, 0,
+            NULL);
+    }
+    for (size_t group_id = 0; group_id < rtt_group_count; group_id++)
+    {
+        GEVulkanTargetGroup* g = render_groups[group_id];
+        // Same state as when setRenderTarget was called before drawAll, which
+        // is used by all the rendering code
+        struct SeparateRTTScope
+        {
+            GEVulkanDriver* m_driver;
+            GEVulkanFBOTexture* m_rtt;
+            GEVulkanFBOTexture* m_prev;
+            GEVulkanFBOTexture* m_separate;
+            video::SColor m_clear_color;
+            SeparateRTTScope(GEVulkanDriver* d, GEVulkanTargetGroup* g)
+            {
+                m_driver = d;
+                m_rtt = d->m_rtt_texture;
+                m_prev = d->m_prev_rtt_texture;
+                m_separate = d->m_separate_rtt_texture;
+                m_clear_color = d->m_rtt_clear_color;
+                d->m_prev_rtt_texture = d->m_rtt_texture;
+                d->m_rtt_texture = d->m_separate_rtt_texture = g->m_target;
+                d->m_rtt_clear_color = g->m_clear_color;
+            }
+            ~SeparateRTTScope()
+            {
+                m_driver->m_rtt_texture = m_rtt;
+                m_driver->m_prev_rtt_texture = m_prev;
+                m_driver->m_separate_rtt_texture = m_separate;
+                m_driver->m_rtt_clear_color = m_clear_color;
+            }
+        } scope(this, g);
+
+        std::vector<VkClearValue> clear_values;
+        VkRenderPassBeginInfo render_pass_info;
+        fill_render_pass_info(render_pass_info, clear_values,
+            m_rtt_clear_color);
+        // GEVulkanDeferredFBOSplit::render() begins all render passes by
+        // itself, the last one is left open for both deferred FBO classes
+        if (!m_rtt_texture->isSplit())
+        {
+            vkCmdBeginRenderPass(getCurrentCommandBuffer(), &render_pass_info,
+                VK_SUBPASS_CONTENTS_INLINE);
+        }
+        renderDrawCalls(g->m_dcs, getCurrentCommandBuffer());
+        vkCmdEndRenderPass(getCurrentCommandBuffer());
+    }
+    if (rtt_group_count != 0)
+    {
+        VkMemoryBarrier barrier = {};
+        barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+            VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(getCurrentCommandBuffer(),
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, NULL, 0,
+            NULL);
+    }
+
+    std::vector<VkClearValue> clear_values;
+    VkRenderPassBeginInfo render_pass_info;
+    fill_render_pass_info(render_pass_info, clear_values, getClearColor());
 
     // GEVulkanDeferredFBOSplit::render() begins all render passes of its own,
     // the last one is left open the same way, so the rest is the same
@@ -2661,12 +2791,10 @@ void GEVulkanDriver::buildCommandBuffers()
             VK_SUBPASS_CONTENTS_INLINE);
     }
 
-    std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCameraSceneNode*> > dcs;
-    for (auto& p : dcp)
-    {
-        dcs.emplace_back(p.second.get(), p.first);
-    }
-    renderDrawCalls(dcs, getCurrentCommandBuffer());
+    static const std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCamera*> >
+        no_draw_calls;
+    renderDrawCalls(default_group ? default_group->m_dcs : no_draw_calls,
+        getCurrentCommandBuffer());
 
     if (m_rtt_texture && !m_rtt_texture->useSwapChainOutput())
     {
@@ -2689,7 +2817,7 @@ void GEVulkanDriver::buildCommandBuffers()
 
 // ----------------------------------------------------------------------------
 void GEVulkanDriver::renderDrawCalls(
- const std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCameraSceneNode*> >& p,
+ const std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCamera*> >& p,
                                                            VkCommandBuffer cmd)
 {
     bool rebind_base_vertex = true;
@@ -2759,16 +2887,17 @@ ITexture* GEVulkanDriver::addRenderTargetTexture(const core::dimension2d<u32>& s
     const io::path& name, const ECOLOR_FORMAT format,
     const bool useStencil)
 {
-    // Pipelines are shared with the swapchain FBO and the HDR attachment needs
-    // alpha, see GEVulkanDeferredFBO::setCreatingOffscreenRTT (reset even if
-    // the creation throws)
     struct OffscreenRTTScope
     {
         OffscreenRTTScope()  { GEVulkanDeferredFBO::setCreatingOffscreenRTT(true); }
         ~OffscreenRTTScope() { GEVulkanDeferredFBO::setCreatingOffscreenRTT(false); }
     } scope;
+    bool auto_deferred = getGEConfig()->m_pbr &&
+        getGEConfig()->m_auto_deferred_type != GADT_DISABLED;
     GEVulkanFBOTexture* rtt = getGEConfig()->m_deferred_split != 0 ?
         new GEVulkanDeferredFBOSplit(this, size, false/*swapchain_output*/) :
+        auto_deferred ?
+        new GEVulkanDeferredFBO(this, size, false/*swapchain_output*/) :
         new GEVulkanFBOTexture(this, size);
     rtt->createRTT();
     return rtt;
@@ -2779,21 +2908,40 @@ bool GEVulkanDriver::setRenderTarget(video::ITexture* texture,
                                      bool clearBackBuffer, bool clearZBuffer,
                                      SColor color)
 {
+    // Using a separate render target: setRenderTarget(texture), drawAll() (can
+    // be called several times, one for each camera / viewport) and then
+    // setRenderTarget(NULL) before endScene, the draw calls (made in drawAll)
+    // are rendered to the target in endScene (see buildCommandBuffers), so the
+    // target must not be deleted before it
     GEVulkanFBOTexture* new_rtt = dynamic_cast<GEVulkanFBOTexture*>(texture);
     if (m_separate_rtt_texture == new_rtt)
         return true;
+    GEVulkanCameraSceneNode* cam = NULL;
+    if (m_irrlicht_device->getSceneManager() &&
+        m_irrlicht_device->getSceneManager()->getActiveCamera())
+    {
+        cam = static_cast<GEVulkanCameraSceneNode*>(
+            m_irrlicht_device->getSceneManager()->getActiveCamera());
+    }
     m_separate_rtt_texture = new_rtt;
     if (m_separate_rtt_texture)
     {
         m_rtt_clear_color = color;
         m_prev_rtt_texture = m_rtt_texture;
         m_rtt_texture = m_separate_rtt_texture;
+        // Same as other drivers, the viewport is the whole target
+        m_prev_viewport = ViewPort;
+        ViewPort = core::rect<s32>(0, 0, m_rtt_texture->getSize().Width,
+            m_rtt_texture->getSize().Height);
     }
     else
     {
         m_rtt_texture = m_prev_rtt_texture;
         m_prev_rtt_texture = NULL;
+        ViewPort = m_prev_viewport;
     }
+    if (cam)
+        cam->setViewPort(ViewPort);
     return true;
 }   // setRenderTarget
 
@@ -2851,9 +2999,8 @@ void GEVulkanDriver::updateDriver(bool scale_changed, bool pbr_changed,
         m_skybox_renderer->reset();
     if (scale_changed || pbr_changed || deferred_split_changed)
         createSwapChainRelated(false/*handle_surface*/);
-    for (auto& dc : static_cast<GEVulkanSceneManager*>(
-        m_irrlicht_device->getSceneManager())->getDrawCalls())
-        dc.second = std::unique_ptr<GEVulkanDrawCall>(new GEVulkanDrawCall);
+    static_cast<GEVulkanSceneManager*>(
+        m_irrlicht_device->getSceneManager())->resetDrawCalls();
     if (scale_changed || pbr_changed || deferred_split_changed)
     {
         GEVulkan2dRenderer::destroy();
@@ -2873,9 +3020,8 @@ void GEVulkanDriver::reloadShaders()
     GEVulkanShaderManager::loadAllShaders();
     if (getGEConfig()->m_deferred_split != 0)
         createSwapChainRelated(false/*handle_surface*/);
-    for (auto& dc : static_cast<GEVulkanSceneManager*>(
-        m_irrlicht_device->getSceneManager())->getDrawCalls())
-        dc.second = std::unique_ptr<GEVulkanDrawCall>(new GEVulkanDrawCall);
+    static_cast<GEVulkanSceneManager*>(
+        m_irrlicht_device->getSceneManager())->resetDrawCalls();
     GEVulkan2dRenderer::destroy();
     GEVulkan2dRenderer::init(this);
     setDisableWaitIdle(false);
