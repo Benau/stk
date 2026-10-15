@@ -77,7 +77,7 @@ public:
     // must skip GEVulkanDrawCall::renderLightingComposite then
     virtual bool render(VkCommandBuffer cmd,
                         const std::vector<std::pair<GEVulkanDrawCall*,
-                        GEVulkanCameraSceneNode*> >& p);
+                        GEVulkanCamera*> >& p);
     // ------------------------------------------------------------------------
     VkRenderPass getRenderPass() const                { return m_render_pass; }
     // ------------------------------------------------------------------------

@@ -184,9 +184,9 @@ void GEVulkanLightScatter::createPipeline()
 // ----------------------------------------------------------------------------
 bool GEVulkanLightScatter::render(VkCommandBuffer cmd,
     const std::vector<std::pair<GEVulkanDrawCall*,
-    GEVulkanCameraSceneNode*> >& p)
+    GEVulkanCamera*> >& p)
 {
-    std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCameraSceneNode*> > list;
+    std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCamera*> > list;
     for (auto& q : p)
     {
         if (q.first->hasLightScatter())

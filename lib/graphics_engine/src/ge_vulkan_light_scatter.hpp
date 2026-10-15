@@ -75,7 +75,7 @@ public:
     // must skip it then
     virtual bool render(VkCommandBuffer cmd,
                         const std::vector<std::pair<GEVulkanDrawCall*,
-                        GEVulkanCameraSceneNode*> >& p);
+                        GEVulkanCamera*> >& p);
     // ------------------------------------------------------------------------
     // Sampled by the lighting pass in general layout
     VkImageView getImageView() const;

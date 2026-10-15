@@ -703,7 +703,7 @@ void GEVulkanDeferredFBOSplit::beginPass(VkCommandBuffer cmd, unsigned pass,
 // ----------------------------------------------------------------------------
 void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
     const std::vector<std::pair<GEVulkanDrawCall*,
-    GEVulkanCameraSceneNode*> >& p)
+    GEVulkanCamera*> >& p)
 {
     bool rebind_base_vertex = true;
     const bool bind_mesh_textures =
@@ -871,7 +871,7 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
 // ----------------------------------------------------------------------------
 void GEVulkanDeferredFBOSplit::generateHiZ(VkCommandBuffer cmd,
     const std::vector<std::pair<GEVulkanDrawCall*,
-    GEVulkanCameraSceneNode*> >& p)
+    GEVulkanCamera*> >& p)
 {
     if (!GEVulkanHiZDepth::isEnabled())
     {

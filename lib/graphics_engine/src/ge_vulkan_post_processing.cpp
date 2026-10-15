@@ -51,7 +51,7 @@ GEVulkanPostProcessing::BlurPipelines::BlurPipelines()
 
 // ----------------------------------------------------------------------------
 bool GEVulkanPostProcessing::getViewport(GEVulkanDrawCall* dc,
-                                      GEVulkanCameraSceneNode* cam,
+                                      GEVulkanCamera* cam,
                                       Viewport* out) const
 {
     const VkViewport vp = dc->getRenderViewport(m_vk, cam->getViewPort());

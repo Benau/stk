@@ -21,7 +21,7 @@ public:
     // ------------------------------------------------------------------------
     virtual void createDrawCalls();
     // ------------------------------------------------------------------------
-    virtual void prepare(irr::scene::ICameraSceneNode* cam,
+    virtual void prepare(GEVulkanCamera* cam,
                          GEVulkanLightHandler* lh)
     {
         GEVulkanShadowFBO::prepare(cam, lh);

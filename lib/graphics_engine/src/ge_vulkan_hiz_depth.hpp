@@ -11,7 +11,7 @@
 
 namespace GE
 {
-class GEVulkanCameraSceneNode;
+class GEVulkanCamera;
 class GEVulkanDriver;
 class GEVulkanTexture;
 
@@ -61,7 +61,7 @@ public:
     ~GEVulkanHiZDepth();
     // ------------------------------------------------------------------------
     // Creates it for the viewport of the camera (again if the size changed)
-    void prepare(GEVulkanCameraSceneNode* cam);
+    void prepare(GEVulkanCamera* cam);
     // ------------------------------------------------------------------------
     bool isReady() const
     {

@@ -13,7 +13,7 @@ namespace irr
 namespace GE
 {
 class GESPMBuffer;
-class GEVulkanCameraSceneNode;
+class GEVulkanCamera;
 class GEVulkanShadowFBO;
 class GEVulkanOmniShadowFBO;
 
@@ -39,7 +39,7 @@ public:
     GECullingTool() : m_skip_near_plane(false), m_omni_sfbo(NULL),
                       m_bucket_light_start(0), m_bucket_light_end(0)         {}
     // ------------------------------------------------------------------------
-    void init(GEVulkanCameraSceneNode* cam);
+    void init(GEVulkanCamera* cam);
     // ------------------------------------------------------------------------
     void initShadow(const GEVulkanShadowFBO* sfbo, unsigned layer);
     // ------------------------------------------------------------------------

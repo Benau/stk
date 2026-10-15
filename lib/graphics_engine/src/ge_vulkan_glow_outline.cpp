@@ -293,9 +293,9 @@ void GEVulkanGlowOutline::blur(VkCommandBuffer cmd,
 // ----------------------------------------------------------------------------
 bool GEVulkanGlowOutline::render(VkCommandBuffer cmd,
     const std::vector<std::pair<GEVulkanDrawCall*,
-    GEVulkanCameraSceneNode*> >& p)
+    GEVulkanCamera*> >& p)
 {
-    std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCameraSceneNode*> > glow;
+    std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCamera*> > glow;
     for (auto& q : p)
     {
         if (q.first->hasGlowOutline())
