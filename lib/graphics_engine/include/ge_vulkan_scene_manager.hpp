@@ -97,6 +97,8 @@ public:
     // ------------------------------------------------------------------------
     irr::scene::ILightSceneNode* getSunNode(irr::scene::ISceneNode* node);
     // ------------------------------------------------------------------------
+    irr::scene::ISceneNode* getSkyBoxNode(irr::scene::ISceneNode* node);
+    // ------------------------------------------------------------------------
     GEVulkanDrawCall* getActiveDrawCall() const;
 };   // GEVulkanSceneManager
 
