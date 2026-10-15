@@ -19,6 +19,7 @@
 #include "graphics/fixed_pipeline_renderer.hpp"
 #include "config/user_config.hpp"
 #include "graphics/camera/camera.hpp"
+#include "graphics/ge_rtt_test.hpp"
 #include "graphics/irr_driver.hpp"
 #include "graphics/weather.hpp"
 #include "graphics/render_target.hpp"
@@ -36,7 +37,8 @@ void FixedPipelineRenderer::onLoadWorld()
 
 void FixedPipelineRenderer::onUnloadWorld()
 {
-    
+    if (GERTTTest::isEnabled())
+        GERTTTest::getInstance()->reset();
 }
 
 void FixedPipelineRenderer::render(float dt, bool is_loading)
@@ -74,6 +76,11 @@ void FixedPipelineRenderer::render(float dt, bool is_loading)
         if (weather)
             weather->finishLightning();
 
+        // Test of several drawAll for a separate RTT (GE Vulkan), only active
+        // with STK_GE_RTT_TEST environment variable
+        if (GERTTTest::isEnabled() && Camera::getNumCameras() == 1)
+            GERTTTest::getInstance()->renderViews(camera);
+
         PROFILER_POP_CPU_MARKER();
 
         // Note that drawAll must be called before rendering
@@ -91,6 +98,9 @@ void FixedPipelineRenderer::render(float dt, bool is_loading)
     irr_driver->getVideoDriver()->setViewPort(core::recti(0, 0,
                                               UserConfigParams::m_width,
                                               UserConfigParams::m_height));
+
+    if (GERTTTest::isEnabled())
+        GERTTTest::getInstance()->drawResult();
 
     for(unsigned int i=0; i<Camera::getNumCameras(); i++)
     {
