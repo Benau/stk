@@ -55,7 +55,6 @@ bool m_disable_npot_texture;
 bool m_convert_irrlicht_mesh;
 bool m_texture_compression;
 bool m_fullscreen_desktop;
-bool m_enable_draw_call_cache;
 bool m_pbr;
 bool m_ibl;
 unsigned m_deferred_split;

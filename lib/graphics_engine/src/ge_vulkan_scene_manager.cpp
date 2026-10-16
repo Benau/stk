@@ -184,8 +184,6 @@ GEVulkanDrawEntry* GEVulkanSceneManager::acquireEntry(GEVulkanDriver* vk)
         m_frame_groups.push_back(group);
     group->m_clear_color = vk->getRTTClearColor();
     m_current_group = group;
-    // Don't use the cache of GEVulkanDriver (it's for draw calls which can
-    // be used for any target)
     return &group->acquireEntry();
 }   // acquireEntry
 
@@ -435,5 +433,15 @@ GEVulkanDrawCall* GEVulkanSceneManager::getActiveDrawCall() const
     // Only valid when drawAll is processing
     return m_current_entry ? &m_current_entry->m_draw_call : NULL;
 }   // getActiveDrawCall
+
+// ----------------------------------------------------------------------------
+void GEVulkanSceneManager::initPipelineCache()
+{
+    // Pipeline cache warm-up
+    GEVulkanCamera camera;
+    GEVulkanDrawCall draw_call;
+    draw_call.prepare(&camera);
+    draw_call.generate(getVKDriver());
+}   // initPipelineCache
 
 }

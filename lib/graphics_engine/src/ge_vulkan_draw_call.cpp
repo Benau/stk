@@ -1519,7 +1519,8 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     if (!insert_from_cache(settings, false))
     {
         VkResult result = vkCreateGraphicsPipelines(vk->getDevice(),
-            VK_NULL_HANDLE, 1, &pipeline_info, NULL, &graphics_pipeline);
+            vk->getPipelineCache(), 1, &pipeline_info, NULL,
+            &graphics_pipeline);
         if (result != VK_SUCCESS)
         {
             throw std::runtime_error("vkCreateGraphicsPipelines failed for " +
@@ -1534,7 +1535,8 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         shader_stages[0].module = GEVulkanShaderManager::getShader(
             settings.m_material->m_skinning_vertex_shader);
         VkResult result = vkCreateGraphicsPipelines(vk->getDevice(),
-            VK_NULL_HANDLE, 1, &pipeline_info, NULL, &graphics_pipeline);
+            vk->getPipelineCache(), 1, &pipeline_info, NULL,
+            &graphics_pipeline);
         if (result != VK_SUCCESS)
         {
             throw std::runtime_error("vkCreateGraphicsPipelines failed for " +
@@ -1597,8 +1599,9 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
             {
                 glow_stages[0].module = GEVulkanShaderManager::getShader(vs);
                 VkPipeline glow_pipeline;
-                if (vkCreateGraphicsPipelines(vk->getDevice(), VK_NULL_HANDLE,
-                    1, &glow_info, NULL, &glow_pipeline) != VK_SUCCESS)
+                if (vkCreateGraphicsPipelines(vk->getDevice(),
+                    vk->getPipelineCache(), 1, &glow_info, NULL,
+                    &glow_pipeline) != VK_SUCCESS)
                 {
                     throw std::runtime_error("vkCreateGraphicsPipelines "
                         "failed for glow outline of " + shader_name);
@@ -1626,7 +1629,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         settings.m_material->m_fragment_shader);
 
     VkResult result = vkCreateGraphicsPipelines(vk->getDevice(),
-        VK_NULL_HANDLE, 1, &pipeline_info, NULL, &graphics_pipeline);
+        vk->getPipelineCache(), 1, &pipeline_info, NULL, &graphics_pipeline);
     if (result != VK_SUCCESS)
     {
         throw std::runtime_error("vkCreateGraphicsPipelines failed for " +
@@ -1640,7 +1643,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     shader_stages[0].module = GEVulkanShaderManager::getShader(
         settings.m_material->m_skinning_vertex_shader);
     result = vkCreateGraphicsPipelines(vk->getDevice(),
-        VK_NULL_HANDLE, 1, &pipeline_info, NULL, &graphics_pipeline);
+        vk->getPipelineCache(), 1, &pipeline_info, NULL, &graphics_pipeline);
     if (result != VK_SUCCESS)
     {
         throw std::runtime_error("vkCreateGraphicsPipelines failed for " +

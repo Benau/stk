@@ -1673,8 +1673,9 @@ void CIrrDeviceSDL::createGUIAndVulkanScene()
 	#endif
 
 	// create Scene manager
-	SceneManager = new GE::GEVulkanSceneManager(VideoDriver, FileSystem, CursorControl, GUIEnvironment);
-
+	auto* vksm = new GE::GEVulkanSceneManager(VideoDriver, FileSystem, CursorControl, GUIEnvironment);
+	SceneManager = vksm;
+	vksm->initPipelineCache();
 	setEventReceiver(UserReceiver);
 }
 

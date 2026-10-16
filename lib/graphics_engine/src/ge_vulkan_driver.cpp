@@ -526,8 +526,7 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
                 m_depth_texture(NULL), m_skybox_renderer(NULL),
                 m_mesh_texture_descriptor(NULL), m_rtt_texture(NULL),
                 m_prev_rtt_texture(NULL), m_separate_rtt_texture(NULL),
-                m_rtt_polycount(0), m_billboard_quad(NULL),
-                m_current_buffer_idx(0)
+                m_billboard_quad(NULL), m_current_buffer_idx(0)
 {
     m_vk.reset(new VK());
     m_physical_device = VK_NULL_HANDLE;
@@ -707,7 +706,6 @@ GEVulkanDriver::~GEVulkanDriver()
 // ----------------------------------------------------------------------------
 void GEVulkanDriver::destroyVulkan()
 {
-    clearDrawCallsCache();
     GECompressorASTC4x4::destroy();
     if (m_depth_texture)
     {
@@ -737,7 +735,6 @@ void GEVulkanDriver::destroyVulkan()
 
     if (m_irrlicht_device->getSceneManager())
     {
-        getGEConfig()->m_enable_draw_call_cache = false;
         m_irrlicht_device->getSceneManager()->clear();
         static_cast<GEVulkanSceneManager*>(
             m_irrlicht_device->getSceneManager())->resetDrawCalls();
@@ -1204,6 +1201,17 @@ void GEVulkanDriver::createDevice()
 
     if (m_present_family != m_graphics_family)
         vkGetDeviceQueue(m_vk->device, m_present_family, 0, &m_present_queue);
+
+    VkPipelineCacheCreateInfo cache_info = {};
+    cache_info.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    cache_info.initialDataSize = 0;
+    cache_info.pInitialData = NULL;
+    if (vkCreatePipelineCache(m_vk->device, &cache_info, NULL,
+        &m_vk->pipeline_cache) != VK_SUCCESS)
+    {
+        throw std::runtime_error("vkCreatePipelineCache failed");
+    }
 }   // createDevice
 
 // ----------------------------------------------------------------------------
@@ -1894,8 +1902,7 @@ bool GEVulkanDriver::beginScene(bool backBuffer, bool zBuffer, SColor color,
         buffer->updateVertexIndexBuffer(m_current_buffer_idx);
 
     m_clear_color = color;
-    PrimitivesDrawn = m_rtt_polycount;
-    m_rtt_polycount = 0;
+    PrimitivesDrawn = 0;
 
     if (m_rtt_texture && !m_rtt_texture->useSwapChainOutput())
     {
@@ -2956,7 +2963,6 @@ void GEVulkanDriver::updateDriver(bool scale_changed, bool pbr_changed,
     // Different FBO class (and SPLIT in shaders) if changed
     const bool deferred_split_changed =
         prev_deferred_split != getGEConfig()->m_deferred_split;
-    clearDrawCallsCache();
     if (scale_changed || pbr_changed || deferred_split_changed)
         destroySwapChainRelated(false/*handle_surface*/);
     bool reload_split_shader =
@@ -3014,7 +3020,6 @@ void GEVulkanDriver::reloadShaders()
 {
     waitIdle();
     setDisableWaitIdle(true);
-    clearDrawCallsCache();
     if (getGEConfig()->m_deferred_split != 0)
         destroySwapChainRelated(false/*handle_surface*/);
     GEVulkanShaderManager::loadAllShaders();
@@ -3026,29 +3031,6 @@ void GEVulkanDriver::reloadShaders()
     GEVulkan2dRenderer::init(this);
     setDisableWaitIdle(false);
 }   // reloadShaders
-
-// ----------------------------------------------------------------------------
-void GEVulkanDriver::clearDrawCallsCache()
-{
-    m_draw_calls_cache.clear();
-}   // clearDrawCallsCache
-
-// ----------------------------------------------------------------------------
-void GEVulkanDriver::addDrawCallToCache(std::unique_ptr<GEVulkanDrawCall>& dc)
-{
-    if (getGEConfig()->m_enable_draw_call_cache)
-        m_draw_calls_cache.push_back(std::move(dc));
-}   // addDrawCallToCache
-
-// ----------------------------------------------------------------------------
-std::unique_ptr<GEVulkanDrawCall> GEVulkanDriver::getDrawCallFromCache()
-{
-    if (!getGEConfig()->m_enable_draw_call_cache || m_draw_calls_cache.empty())
-        return std::unique_ptr<GEVulkanDrawCall>(new GEVulkanDrawCall);
-    auto dc = std::move(m_draw_calls_cache.back());
-    m_draw_calls_cache.pop_back();
-    return dc;
-}   // getDrawCallFromCache
 
 // ----------------------------------------------------------------------------
 void GEVulkanDriver::createBillboardQuad()
