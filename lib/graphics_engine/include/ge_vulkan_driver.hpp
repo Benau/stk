@@ -379,6 +379,8 @@ namespace GE
                                      VkImageTiling tiling,
                                      VkFormatFeatureFlags features);
         VmaAllocator getVmaAllocator() const         { return m_vk->allocator; }
+        VkPipelineCache getPipelineCache() const
+                                                { return m_vk->pipeline_cache; }
         GEVulkanMeshCache* getVulkanMeshCache() const;
         GEVulkanSkyBoxRenderer* getSkyBoxRenderer() const
                                                    { return m_skybox_renderer; }
@@ -392,11 +394,7 @@ namespace GE
         {
             return m_separate_rtt_texture ? m_prev_rtt_texture : m_rtt_texture;
         }
-        void addRTTPolyCount(unsigned count)       { m_rtt_polycount += count; }
         SDL_Window* getSDLWindow() const       { return m_params.m_sdl_window; }
-        void clearDrawCallsCache();
-        void addDrawCallToCache(std::unique_ptr<GEVulkanDrawCall>& dc);
-        std::unique_ptr<GEVulkanDrawCall> getDrawCallFromCache();
         GESPM* getBillboardQuad() const             { return m_billboard_quad; }
         int getCurrentBufferIdx() const         { return m_current_buffer_idx; }
         void addDynamicSPMBuffer(GEVulkanDynamicSPMBuffer* buffer)
@@ -448,6 +446,7 @@ namespace GE
             VkDebugUtilsMessengerEXT debug;
             VkSurfaceKHR surface;
             VkDevice device;
+            VkPipelineCache pipeline_cache;
             VmaAllocator allocator;
             VkSwapchainKHR swap_chain;
             std::vector<VkImage> swap_chain_images;
@@ -466,6 +465,7 @@ namespace GE
                 debug = VK_NULL_HANDLE;
                 surface = VK_NULL_HANDLE;
                 device = VK_NULL_HANDLE;
+                pipeline_cache = VK_NULL_HANDLE;
                 allocator = VK_NULL_HANDLE;
                 swap_chain = VK_NULL_HANDLE;
                 samplers = {{}};
@@ -500,6 +500,8 @@ namespace GE
                     vkDestroySwapchainKHR(device, swap_chain, NULL);
                 if (allocator != VK_NULL_HANDLE)
                     vmaDestroyAllocator(allocator);
+                if (pipeline_cache != VK_NULL_HANDLE)
+                    vkDestroyPipelineCache(device, pipeline_cache, NULL);
                 if (device != VK_NULL_HANDLE)
                     vkDestroyDevice(device, NULL);
                 if (surface != VK_NULL_HANDLE)
@@ -555,9 +557,7 @@ namespace GE
         GEVulkanFBOTexture* m_separate_rtt_texture;
 
         core::rect<s32> m_prev_viewport;
-        u32 m_rtt_polycount;
 
-        std::vector<std::unique_ptr<GEVulkanDrawCall> > m_draw_calls_cache;
         GESPM* m_billboard_quad;
         int m_current_buffer_idx;
         std::set<GEVulkanDynamicSPMBuffer*> m_dynamic_spm_buffers;

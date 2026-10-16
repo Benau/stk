@@ -23,7 +23,6 @@ GEConfig g_config =
     false,
     true,
     false,
-    false,
     true,
     0,
     false,
