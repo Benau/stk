@@ -249,7 +249,8 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
         }
         catch (const std::exception& e)
         {
-            printf("Failed to initialize ambient occlusion: %s\n", e.what());
+            GE::logMessage(GE::GLL_ERROR,
+                "Failed to initialize ambient occlusion: %s", e.what());
             m_ssao.reset();
         }
     }
@@ -263,7 +264,8 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
         }
         catch (const std::exception& e)
         {
-            printf("Failed to initialize glow outline: %s\n", e.what());
+            GE::logMessage(GE::GLL_ERROR,
+                "Failed to initialize glow outline: %s", e.what());
             m_glow_outline.reset();
         }
     }
@@ -276,7 +278,8 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
         }
         catch (const std::exception& e)
         {
-            printf("Failed to initialize light scattering: %s\n", e.what());
+            GE::logMessage(GE::GLL_ERROR,
+                "Failed to initialize light scattering: %s", e.what());
             m_light_scatter.reset();
         }
     }
@@ -289,7 +292,8 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
         }
         catch (const std::exception& e)
         {
-            printf("Failed to initialize bloom: %s\n", e.what());
+            GE::logMessage(GE::GLL_ERROR,
+                "Failed to initialize bloom: %s", e.what());
             m_bloom.reset();
         }
     }
@@ -905,7 +909,8 @@ void GEVulkanDeferredFBOSplit::generateHiZ(VkCommandBuffer cmd,
         }
         catch (std::exception& e)
         {
-            printf("Failed to prepare hiz depth: %s\n", e.what());
+            GE::logMessage(GE::GLL_ERROR,
+                "Failed to prepare hiz depth: %s", e.what());
             p[i].first->setHiZDepth(NULL);
             continue;
         }

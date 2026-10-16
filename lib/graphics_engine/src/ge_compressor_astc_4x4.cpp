@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <cassert>
-#include <cstdio>
 #include <vector>
 
 #ifdef ENABLE_LIBASTCENC
@@ -125,7 +124,8 @@ GECompressorASTC4x4::GECompressorASTC4x4(uint8_t* texture, unsigned channels,
         if (astcenc_compress_image(
             g_astc_contexts[GEVulkanCommandLoader::getLoaderId()], &img,
             &swizzle, cur_offset, cur_size, 0) != ASTCENC_SUCCESS)
-            printf("astcenc_compress_image failed!\n");
+            GE::logMessage(GE::GLL_ERROR,
+                "astcenc_compress_image failed!");
         compressed_levels.push_back({ level.m_dim, cur_size, cur_offset });
         cur_offset += cur_size;
     }

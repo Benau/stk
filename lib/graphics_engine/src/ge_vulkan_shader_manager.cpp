@@ -325,7 +325,7 @@ void GEVulkanShaderManager::loadAllShaders(const std::string& match_filename)
                 }
                 catch (std::exception& e)
                 {
-                    printf("%s", e.what());
+                    GE::logMessage(GE::GLL_ERROR, "%s", e.what());
                 }
                 holder->m_lock.unlock();
             });
@@ -443,7 +443,7 @@ void GEVulkanShaderManager::reloadShaders(bool pbr_changed,
                     }
                     catch (std::exception& e)
                     {
-                        printf("%s", e.what());
+                        GE::logMessage(GE::GLL_ERROR, "%s", e.what());
                     }
                     holder->m_lock.unlock();
                 });

@@ -137,8 +137,8 @@ void GEVulkanEnvironmentMap::load()
         if (vkCreateImageView(vk->getDevice(), &view_info, NULL, &view)
             != VK_SUCCESS)
         {
-            printf("vkCreateImageView failed for "
-                "GEVulkanEnvironmentMap::load");
+            GE::logMessage(GE::GLL_ERROR, "vkCreateImageView failed for "
+                "GEVulkanEnvironmentMap::load (diffuse_env_cubemap)");
             goto destroy;
         }
         image_views.push_back(view);
@@ -159,8 +159,8 @@ void GEVulkanEnvironmentMap::load()
         if (vkCreateImageView(vk->getDevice(), &view_info, NULL, &view)
             != VK_SUCCESS)
         {
-            printf("vkCreateImageView failed for "
-                "GEVulkanEnvironmentMap::load");
+            GE::logMessage(GE::GLL_ERROR, "vkCreateImageView failed for "
+                "GEVulkanEnvironmentMap::load (specular_env_cubemap)");
             goto destroy;
         }
         image_views.push_back(view);
@@ -169,15 +169,16 @@ void GEVulkanEnvironmentMap::load()
     if (vkCreateDescriptorSetLayout(vk->getDevice(), &setinfo, NULL,
         &layout) != VK_SUCCESS)
     {
-        printf("vkCreateDescriptorSetLayout failed for "
-            "GEVulkanEnvironmentMap::load");
+        GE::logMessage(GE::GLL_ERROR,
+            "vkCreateDescriptorSetLayout failed for GEVulkanEnvironmentMap::load");
         goto destroy;
     }
 
     if (vkCreateDescriptorPool(vk->getDevice(), &pool_info, NULL,
         &descriptor_pool) != VK_SUCCESS)
     {
-        printf("createDescriptorPool for GEVulkanEnvironmentMap::load");
+        GE::logMessage(GE::GLL_ERROR,
+            "vkCreateDescriptorPool failed for GEVulkanEnvironmentMap::load");
         goto destroy;
     }
 
@@ -190,8 +191,8 @@ void GEVulkanEnvironmentMap::load()
     if (vkAllocateDescriptorSets(vk->getDevice(), &alloc_info,
         descriptor_sets.data()) != VK_SUCCESS)
     {
-        printf("vkAllocateDescriptorSets failed for "
-            "GEVulkanEnvironmentMap::load");
+        GE::logMessage(GE::GLL_ERROR,
+            "vkAllocateDescriptorSets failed for GEVulkanEnvironmentMap::load");
         goto destroy;
     }
 
@@ -234,8 +235,8 @@ void GEVulkanEnvironmentMap::load()
     if (vkCreatePipelineLayout(vk->getDevice(), &pipeline_layout_info, NULL,
         &pipeline_layout) != VK_SUCCESS)
     {
-        printf("vkCreatePipelineLayout failed for "
-            "GEVulkanEnvironmentMap::load");
+        GE::logMessage(GE::GLL_ERROR,
+            "vkCreatePipelineLayout failed for GEVulkanEnvironmentMap::load");
         goto destroy;
     }
 
@@ -245,8 +246,8 @@ void GEVulkanEnvironmentMap::load()
     if (vkCreateComputePipelines(vk->getDevice(), vk->getPipelineCache(), 1,
         &compute_info, NULL, &diffuse_pipeline) != VK_SUCCESS)
     {
-        printf("vkCreateComputePipelines failed for "
-            "GEVulkanEnvironmentMap::load");
+        GE::logMessage(GE::GLL_ERROR,
+            "vkCreateComputePipelines failed for GEVulkanEnvironmentMap::load");
         goto destroy;
     }
 
@@ -255,8 +256,8 @@ void GEVulkanEnvironmentMap::load()
     if (vkCreateComputePipelines(vk->getDevice(), vk->getPipelineCache(), 1,
         &compute_info, NULL, &specular_pipeline) != VK_SUCCESS)
     {
-        printf("vkCreateComputePipelines failed for "
-            "GEVulkanEnvironmentMap::load");
+        GE::logMessage(GE::GLL_ERROR,
+            "vkCreateComputePipelines failed for GEVulkanEnvironmentMap::load");
         goto destroy;
     }
 

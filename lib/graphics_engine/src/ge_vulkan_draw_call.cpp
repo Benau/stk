@@ -2695,15 +2695,15 @@ bool GEVulkanDrawCall::doDepthOnlyRenderingFirst()
         switch (status)
         {
         case ENABLED:
-            printf("Enabled depth prepass.\n");
+            GE::logMessage(GE::GLL_INFO, "Enabled depth prepass.");
             break;
         case DISABLED_NOT_PBR:
-            printf("Disabled depth prepass because it will make non-PBR"
-                " rendering slower.\n");
+            GE::logMessage(GE::GLL_INFO, "Disabled depth prepass because it"
+                " will make non-PBR rendering slower.");
             break;
         case DISABLED_TILED_GPU:
-            printf("Disabled depth prepass because it isn't necessary for"
-                " tile-based GPU.\n");
+            GE::logMessage(GE::GLL_INFO, "Disabled depth prepass because it"
+                " isn't necessary for tile-based GPU.");
             break;
         default:
             break;

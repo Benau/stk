@@ -6,7 +6,6 @@
 #include "vulkan_wrapper.h"
 
 #include <array>
-#include <cstdio>
 #include <memory>
 
 namespace GE
@@ -71,11 +70,7 @@ public:
     }
     // ------------------------------------------------------------------------
     virtual void setProjectionMatrix(const irr::core::matrix4& projection,
-                                     bool isOrthogonal)
-    {
-        CCameraSceneNode::setProjectionMatrix(projection, isOrthogonal);
-        printf("Calling setProjectionMatrix directly will ignore reverse Z\n");
-    }
+                                     bool isOrthogonal);
 };   // GEVulkanCameraSceneNode
 
 // A snapshot of a GEVulkanCameraSceneNode which is taken every time
