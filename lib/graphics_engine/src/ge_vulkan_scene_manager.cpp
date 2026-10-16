@@ -1,4 +1,5 @@
 #include "ge_vulkan_scene_manager.hpp"
+#include "ge_vulkan_rt_scene.hpp"
 
 #include "../source/Irrlicht/os.h"
 
@@ -47,11 +48,14 @@ GEVulkanSceneManager::~GEVulkanSceneManager()
 // ----------------------------------------------------------------------------
 void GEVulkanSceneManager::clear()
 {
-    irr::scene::CSceneManager::clear();
     GEVulkanDriver* vk = static_cast<GEVulkanDriver*>(getVideoDriver());
     vk->waitIdle();
+    vk->setDisableWaitIdle(true);
+    vk->clearRTScene();
+    irr::scene::CSceneManager::clear();
     resetDrawCalls();
     vk->getMeshTextureDescriptor()->clear();
+    vk->setDisableWaitIdle(false);
 }   // clear
 
 // ----------------------------------------------------------------------------
