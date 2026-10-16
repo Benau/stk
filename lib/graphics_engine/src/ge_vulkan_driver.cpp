@@ -31,10 +31,6 @@
 #include "ISceneManager.h"
 #include "IrrlichtDevice.h"
 
-#ifdef __ANDROID__
-#include <android/log.h>
-#endif
-
 #ifdef _IRR_COMPILE_WITH_VULKAN_
 #include "SDL_vulkan.h"
 #include <algorithm>
@@ -61,20 +57,24 @@ extern "C" VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
         msg.find("BestPractices-PushConstants") != std::string::npos ||
         msg.find("TransitionUndefinedToReadOnly") != std::string::npos)
         return VK_FALSE;
-#ifdef __ANDROID__
-    android_LogPriority alp;
+
+    GE::GELogLevel level = GE::GLL_INFO;
     switch (message_severity)
     {
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT: alp = ANDROID_LOG_DEBUG;   break;
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT: alp = ANDROID_LOG_INFO;    break;
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT: alp = ANDROID_LOG_WARN;    break;
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT: alp = ANDROID_LOG_ERROR;   break;
-    default: alp = ANDROID_LOG_INFO;
+    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT:
+        level = GE::GLL_VERBOSE;
+        break;
+    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT:
+        level = GE::GLL_INFO;
+        break;
+    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT:
+        level = GE::GLL_WARNING;
+        break;
+    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT:
+        level = GE::GLL_ERROR;
+        break;
     }
-    __android_log_print(alp, "VALIDATION:", "%s", msg.c_str());
-#else
-    printf("%s\n", msg.c_str());
-#endif
+    GE::logMessage(level, msg.c_str());
     return VK_FALSE;
 };
 
@@ -2599,7 +2599,8 @@ void GEVulkanDriver::buildCommandBuffers()
 {
     if (m_separate_rtt_texture)
     {
-        printf("setRenderTarget(NULL) is not called before endScene\n");
+        GE::logMessage(GLL_WARNING,
+            "setRenderTarget(NULL) is not called before endScene");
         setRenderTarget(NULL, false, false, video::SColor(0));
     }
     GEVulkanSceneManager* sm = static_cast<GEVulkanSceneManager*>(

@@ -561,9 +561,9 @@ void GEVulkanTexture::reloadInternal(const core::dimension2du& max_size)
         max_size, &m_orig_size);
     if (texture_image == NULL)
     {
-        printf("Missing texture_image in getResizedImageFullPath when "
-            "reloadInternal for %s\n",
-            m_full_path.c_str());
+        GE::logMessage(GE::GLL_ERROR,
+            "Missing texture_image in getResizedImageFullPath when "
+            "reloadInternal for %s", m_full_path.c_str());
         if (!m_ondemand_loading)
             m_size = m_orig_size = core::dimension2du(2, 2);
         m_size_lock.unlock();
