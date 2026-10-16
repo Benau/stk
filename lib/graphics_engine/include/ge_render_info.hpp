@@ -31,6 +31,15 @@
 namespace GE
 {
 
+// How a node takes part in the ray traced scene (see GEVulkanRTScene), static
+// nodes never move and never change visibility after the scene is built
+enum GERayTracingType : unsigned char
+{
+    GRTT_NONE = 0,
+    GRTT_STATIC,
+    GRTT_DYNAMIC,
+};
+
 class GERenderInfo
 {
 private:
@@ -41,6 +50,8 @@ private:
     irr::video::SColor m_glow_outline_color;
 
     std::shared_ptr<bool> m_transparent;
+
+    GERayTracingType m_ray_tracing;
 public:
     // ------------------------------------------------------------------------
     GERenderInfo(float hue = 0.0f, bool transparent = false)
@@ -48,6 +59,7 @@ public:
         m_hue = hue;
         m_vertex_color = (irr::video::SColor)-1;
         m_glow_outline_color = (irr::video::SColor)0;
+        m_ray_tracing = GRTT_NONE;
         if (transparent)
             m_transparent = std::make_shared<bool>(true);
     }
@@ -62,6 +74,10 @@ public:
     }
     // ------------------------------------------------------------------------
     float getHue() const                                     { return m_hue; }
+    // ------------------------------------------------------------------------
+    void setRayTracingType(GERayTracingType type)     { m_ray_tracing = type; }
+    // ------------------------------------------------------------------------
+    GERayTracingType getRayTracingType() const        { return m_ray_tracing; }
     // ------------------------------------------------------------------------
     bool hasTransparencySetting() const
     {
