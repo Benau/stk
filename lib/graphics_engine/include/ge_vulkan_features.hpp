@@ -44,6 +44,15 @@ bool supportsShaderStorageImageExtendedFormats();
 bool supportsDynamicRendering();
 // ----------------------------------------------------------------------------
 bool supportsDynamicRenderingLocalRead();
+// ----------------------------------------------------------------------------
+// VK_KHR_ray_query with acceleration structures and buffer device address
+// (needs Vulkan 1.2 and bind mesh textures at once), used by the ray traced
+// reflections
+bool supportsRayQuery();
+// ----------------------------------------------------------------------------
+uint32_t getAccelerationStructureMaxGeometryCount();
+// ----------------------------------------------------------------------------
+uint32_t getAccelerationStructureScratchAlignment();
 };   // GEVulkanFeatures
 
 }

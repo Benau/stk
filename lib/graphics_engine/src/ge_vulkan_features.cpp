@@ -37,6 +37,9 @@ bool g_supports_astc_4x4 = false;
 bool g_supports_shader_storage_image_extended_format = false;
 bool g_supports_dynamic_rendering = false;
 bool g_supports_dynamic_rendering_local_read = false;
+bool g_supports_ray_query = false;
+uint32_t g_as_max_geometry_count = 0;
+uint32_t g_as_scratch_alignment = 256;
 }   // GEVulkanFeatures
 
 // ============================================================================
@@ -259,6 +262,67 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
     if (Android_Custom_Vulkan_Driver_In_Use() != NULL)
         g_supports_multi_draw_indirect = false;
 #endif
+
+    // Ray query needs Vulkan 1.2 (buffer device address and SPIR-V 1.4 are
+    // core), the mesh textures (bound at once) for hit shading, and a few
+    // descriptor sets for the ray traced pass
+    g_supports_ray_query = false;
+    if (vk->getPhysicalDeviceProperties().apiVersion >= VK_API_VERSION_1_2 &&
+        vkGetPhysicalDeviceFeatures2 && supportsBindMeshTexturesAtOnce() &&
+        g_supports_dynamic_rendering &&
+        vk->getPhysicalDeviceProperties().limits.maxBoundDescriptorSets >= 8)
+    {
+        bool has_as = false;
+        bool has_ray_query = false;
+        bool has_deferred_host_ops = false;
+        for (VkExtensionProperties& prop : extensions)
+        {
+            if (strcmp(prop.extensionName,
+                VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) == 0)
+                has_as = true;
+            else if (strcmp(prop.extensionName,
+                VK_KHR_RAY_QUERY_EXTENSION_NAME) == 0)
+                has_ray_query = true;
+            else if (strcmp(prop.extensionName,
+                VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME) == 0)
+                has_deferred_host_ops = true;
+        }
+        if (has_as && has_ray_query && has_deferred_host_ops)
+        {
+            VkPhysicalDeviceFeatures2 rt_features = {};
+            rt_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            VkPhysicalDeviceBufferDeviceAddressFeatures bda = {};
+            bda.sType =
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+            VkPhysicalDeviceAccelerationStructureFeaturesKHR as_features = {};
+            as_features.sType =
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+            VkPhysicalDeviceRayQueryFeaturesKHR ray_query_features = {};
+            ray_query_features.sType =
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+            rt_features.pNext = &bda;
+            bda.pNext = &as_features;
+            as_features.pNext = &ray_query_features;
+            vkGetPhysicalDeviceFeatures2(vk->getPhysicalDevice(), &rt_features);
+            g_supports_ray_query = bda.bufferDeviceAddress == VK_TRUE &&
+                as_features.accelerationStructure == VK_TRUE &&
+                ray_query_features.rayQuery == VK_TRUE;
+        }
+    }
+    if (g_supports_ray_query)
+    {
+        VkPhysicalDeviceProperties2 properties = {};
+        properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        VkPhysicalDeviceAccelerationStructurePropertiesKHR as_properties = {};
+        as_properties.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
+        properties.pNext = &as_properties;
+        vkGetPhysicalDeviceProperties2(vk->getPhysicalDevice(), &properties);
+        g_as_max_geometry_count = (uint32_t)std::min<uint64_t>(
+            as_properties.maxGeometryCount, 0xffffffffu);
+        g_as_scratch_alignment = std::max(1u,
+            as_properties.minAccelerationStructureScratchOffsetAlignment);
+    }
 }   // init
 
 // ----------------------------------------------------------------------------
@@ -308,6 +372,9 @@ void GEVulkanFeatures::printStats()
     os::Printer::log(
         "Vulkan supports dynamic rendering local read",
         g_supports_dynamic_rendering_local_read ? "true" : "false");
+    os::Printer::log(
+        "Vulkan supports ray query (VK_KHR_ray_query)",
+        g_supports_ray_query ? "true" : "false");
     os::Printer::log(
         "Vulkan descriptor can be partially bound",
         g_supports_partially_bound ? "true" : "false");
@@ -413,5 +480,23 @@ bool GEVulkanFeatures::supportsDynamicRenderingLocalRead()
 {
     return g_supports_dynamic_rendering_local_read;
 } // supportsDynamicRenderingLocalRead
+
+// ----------------------------------------------------------------------------
+bool GEVulkanFeatures::supportsRayQuery()
+{
+    return g_supports_ray_query;
+}   // supportsRayQuery
+
+// ----------------------------------------------------------------------------
+uint32_t GEVulkanFeatures::getAccelerationStructureMaxGeometryCount()
+{
+    return g_as_max_geometry_count;
+}   // getAccelerationStructureMaxGeometryCount
+
+// ----------------------------------------------------------------------------
+uint32_t GEVulkanFeatures::getAccelerationStructureScratchAlignment()
+{
+    return g_as_scratch_alignment;
+}   // getAccelerationStructureScratchAlignment
 
 }
