@@ -240,7 +240,8 @@ GEVulkanArrayTexture::GEVulkanArrayTexture(const std::vector<io::path>& list,
         io::IReadFile* file = io::createReadFile(fullpath);
         if (!file)
         {
-            printf("Missing file %s in GEVulkanArrayTexture, layer %d",
+            GE::logMessage(GE::GLL_ERROR,
+                "Missing file %s in GEVulkanArrayTexture, layer %u",
                 fullpath.c_str(), i);
             return;
         }
@@ -249,8 +250,9 @@ GEVulkanArrayTexture::GEVulkanArrayTexture(const std::vector<io::path>& list,
         if (!loader || !loader->getImageSize(file, &dim))
         {
             file->drop();
-            printf("Missing image loader for %s in "
-                "GEVulkanArrayTexture, layer %d", fullpath.c_str(), i);
+            GE::logMessage(GE::GLL_ERROR,
+                "Missing image loader for %s in "
+                "GEVulkanArrayTexture, layer %u", fullpath.c_str(), i);
             return;
         }
         file->drop();

@@ -24,6 +24,16 @@ GEVulkanCameraSceneNode::GEVulkanCameraSceneNode(irr::scene::ISceneNode* parent,
 }   // GEVulkanCameraSceneNode
 
 // ----------------------------------------------------------------------------
+void GEVulkanCameraSceneNode::setProjectionMatrix(
+                                          const irr::core::matrix4& projection,
+                                                             bool isOrthogonal)
+{
+    CCameraSceneNode::setProjectionMatrix(projection, isOrthogonal);
+    GE::logMessage(GE::GLL_WARNING,
+        "Calling setProjectionMatrix directly will ignore reverse Z");
+}   // setProjectionMatrix
+
+// ----------------------------------------------------------------------------
 GEVulkanCamera::GEVulkanCamera()
               : m_near(0.0f), m_far(0.0f),
                 m_ubo_padding(getPadding(getCameraUBOSize(),

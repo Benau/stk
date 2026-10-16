@@ -11,6 +11,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdarg>
+#include <cstdio>
+#include <iostream>
 #include <memory>
 
 namespace GE
@@ -47,6 +50,7 @@ std::chrono::steady_clock::time_point g_mono_start =
     std::chrono::steady_clock::now();
 std::unique_ptr<GEOcclusionCulling> g_occulsion_culling;
 std::array<float, 4> g_displace_direction = {};
+GELogCallback g_log_callback = NULL;
 
 void setVideoDriver(irr::video::IVideoDriver* driver)
 {
@@ -287,6 +291,41 @@ void refreshDeferredSplit()
     // passes, and sampled by the lighting pass
     if (g_config.m_ssao)
         g_config.m_deferred_split |= 1 << 4;
+}
+
+void setLogCallback(GELogCallback callback)
+{
+    g_log_callback = callback;
+}
+
+void logMessage(GELogLevel level, const char* format, ...)
+{
+    if (!format)
+        return;
+
+    va_list args;
+    va_start(args, format);
+
+    va_list args_copy;
+    va_copy(args_copy, args);
+    int length = std::vsnprintf(NULL, 0, format, args_copy);
+    va_end(args_copy);
+
+    if (length < 0)
+    {
+        va_end(args);
+        return;
+    }
+
+    std::string message(length + 1, '\0');
+    std::vsnprintf(&message[0], message.size(), format, args);
+    va_end(args);
+    message.resize(length);
+
+    if (g_log_callback)
+        g_log_callback(level, message.c_str());
+    else
+        std::cerr << "[GE] " << message << std::endl;
 }
 
 }

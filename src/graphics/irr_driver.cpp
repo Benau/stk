@@ -412,6 +412,24 @@ void IrrDriver::initDevice()
     std::string abs_shader_dir = file_manager->getFileSystem()
         ->getAbsolutePath(file_manager->getShadersDir().c_str()).c_str();
     GE::setShaderFolder(abs_shader_dir);
+    GE::setLogCallback([](GE::GELogLevel level, const char* message)
+    {
+        switch (level)
+        {
+        case GE::GLL_VERBOSE:
+            Log::verbose("GE", "%s", message);
+            break;
+        case GE::GLL_INFO:
+            Log::info("GE", "%s", message);
+            break;
+        case GE::GLL_WARNING:
+            Log::warn("GE", "%s", message);
+            break;
+        case GE::GLL_ERROR:
+            Log::error("GE", "%s", message);
+            break;
+        }
+    });
 #endif
     SIrrlichtCreationParameters params;
     core::stringw display_msg;

@@ -25,6 +25,13 @@ namespace GE
 class GEOcclusionCulling;
 class GESPMBuffer;
 class GEVulkanDriver;
+enum GELogLevel : unsigned
+{
+    GLL_VERBOSE,
+    GLL_INFO,
+    GLL_WARNING,
+    GLL_ERROR
+};
 enum GEAutoDeferredType : unsigned
 {
     GADT_DISABLED = 0,
@@ -167,6 +174,9 @@ void setAbsoluteRotationScale(const irr::core::matrix4& model_matrix,
 // derives from) needs to know it too before a virtual call is possible
 void refreshDeferredSplit();
 inline const char* getLightningIdent() { return "lightning_ident"; }
+typedef void (*GELogCallback)(GELogLevel level, const char* message);
+void setLogCallback(GELogCallback callback);
+void logMessage(GELogLevel level, const char* format, ...);
 
 }
 #endif
