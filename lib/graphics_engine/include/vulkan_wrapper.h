@@ -20,6 +20,57 @@ extern PFN_vkGetPhysicalDeviceMetalFeaturesMVK vkGetPhysicalDeviceMetalFeaturesM
 #if defined(MVK_VERSION) && MVK_VERSION >= MVK_MAKE_VERSION(1, 4, 0)
 #include <MoltenVK/mvk_deprecated_api.h>
 #endif
+
+// Link-only stubs, remove after ray tracing PR in MoltenVK is merged
+inline VKAPI_ATTR VkResult VKAPI_CALL
+vkCreateAccelerationStructureKHR(
+    VkDevice,
+    const VkAccelerationStructureCreateInfoKHR*,
+    const VkAllocationCallbacks*,
+    VkAccelerationStructureKHR* pAccelerationStructure)
+{
+    if (pAccelerationStructure)
+        *pAccelerationStructure = VK_NULL_HANDLE;
+    return VK_ERROR_EXTENSION_NOT_PRESENT;
+}
+
+inline VKAPI_ATTR void VKAPI_CALL
+vkDestroyAccelerationStructureKHR(
+    VkDevice, VkAccelerationStructureKHR,
+    const VkAllocationCallbacks*)
+{
+}
+
+inline VKAPI_ATTR void VKAPI_CALL
+vkCmdBuildAccelerationStructuresKHR(
+    VkCommandBuffer, uint32_t,
+    const VkAccelerationStructureBuildGeometryInfoKHR*,
+    const VkAccelerationStructureBuildRangeInfoKHR* const*)
+{
+}
+
+inline VKAPI_ATTR void VKAPI_CALL
+vkGetAccelerationStructureBuildSizesKHR(
+    VkDevice, VkAccelerationStructureBuildTypeKHR,
+    const VkAccelerationStructureBuildGeometryInfoKHR*,
+    const uint32_t*,
+    VkAccelerationStructureBuildSizesInfoKHR* pSizeInfo)
+{
+    if (pSizeInfo)
+    {
+        pSizeInfo->accelerationStructureSize = 0;
+        pSizeInfo->updateScratchSize = 0;
+        pSizeInfo->buildScratchSize = 0;
+    }
+}
+
+inline VKAPI_ATTR VkDeviceAddress VKAPI_CALL
+vkGetAccelerationStructureDeviceAddressKHR(
+    VkDevice, const VkAccelerationStructureDeviceAddressInfoKHR*)
+{
+    return 0;
+}
+
 #endif
 
 #endif

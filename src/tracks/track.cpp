@@ -105,8 +105,10 @@
 #ifndef SERVER_ONLY
 #include <ge_main.hpp>
 #include <ge_occlusion_culling.hpp>
+#include <ge_render_info.hpp>
 #include <ge_texture.hpp>
 #include <ge_vulkan_driver.hpp>
+#include <ge_vulkan_features.hpp>
 #endif
 
 using namespace irr;
@@ -327,7 +329,12 @@ void Track::cleanup()
     // The menus after the race have no fog
     if (!GUIEngine::isNoGraphics() && !CVS->isGLSL() &&
         irr_driver->getVideoDriver()->getDriverType() == video::EDT_VULKAN)
-        GE::getVKDriver()->setFogEnabled(false);
+    {
+        GE::GEVulkanDriver* vk = GE::getVKDriver();
+        vk->setFogEnabled(false);
+        // Clear the RT scene before STK does its mesh cleanup
+        vk->clearRTScene();
+    }
 #endif
     m_physical_object_uid = 0;
 #ifdef USE_RESIZE_CACHE
@@ -1368,6 +1375,16 @@ bool Track::loadMainTrack(const XMLNode &root)
         std::vector<std::array<btVector3, 3> > tris;
         convertTrackToBullet(scene_node, &tris);
         GE::getOcclusionCulling()->addOccluderMesh(tris);
+        // The track mesh is a static part of the ray traced scene, the scene
+        // is built after all nodes are loaded
+        if (GE::GEVulkanFeatures::supportsRayQuery())
+        {
+            std::shared_ptr<GE::GERenderInfo> rt_info =
+                std::make_shared<GE::GERenderInfo>();
+            rt_info->setRayTracingType(GE::GRTT_STATIC);
+            for (unsigned i = 0; i < scene_node->getMaterialCount(); i++)
+                scene_node->getMaterial(i).setRenderInfo(rt_info);
+        }
     }
 #endif
     m_all_nodes.push_back(scene_node);

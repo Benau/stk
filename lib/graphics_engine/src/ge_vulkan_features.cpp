@@ -269,7 +269,7 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
     g_supports_ray_query = false;
     if (vk->getPhysicalDeviceProperties().apiVersion >= VK_API_VERSION_1_2 &&
         vkGetPhysicalDeviceFeatures2 && supportsBindMeshTexturesAtOnce() &&
-        g_supports_dynamic_rendering &&
+        g_supports_dynamic_rendering && supportsComputeInMainQueue() &&
         vk->getPhysicalDeviceProperties().limits.maxBoundDescriptorSets >= 8)
     {
         bool has_as = false;

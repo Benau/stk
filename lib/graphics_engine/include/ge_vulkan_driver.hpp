@@ -33,6 +33,7 @@ namespace GE
     struct GEVulkanTargetGroup;
     class GEVulkanFBOTexture;
     class GEVulkanMeshCache;
+    class GEVulkanRTScene;
     class GEVulkanSkyBoxRenderer;
     class GEVulkanTextureDescriptor;
     enum GEVulkanSampler : unsigned
@@ -404,6 +405,7 @@ namespace GE
         void renderDrawCalls(const std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCamera*> >& p,
                              VkCommandBuffer cmd);
         void insertBufferBarrier(VkCommandBuffer cmd, bool has_indirect);
+        void clearRTScene();
         u32& getPrimitivesDrawn() { return PrimitivesDrawn; }
     private:
         struct SwapChainSupportDetails
@@ -552,6 +554,8 @@ namespace GE
         GEVulkanAttachmentTexture* m_depth_texture;
         GEVulkanSkyBoxRenderer* m_skybox_renderer;
         GEVulkanTextureDescriptor* m_mesh_texture_descriptor;
+
+        GEVulkanRTScene* m_rt_scene;
         GEVulkanFBOTexture* m_rtt_texture;
         GEVulkanFBOTexture* m_prev_rtt_texture;
         GEVulkanFBOTexture* m_separate_rtt_texture;
