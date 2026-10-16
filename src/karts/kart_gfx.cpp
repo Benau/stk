@@ -441,6 +441,12 @@ void KartGFX::updateTerrain(const ParticleKind *pk)
  */
 void KartGFX::update(float dt)
 {
+    // Switched on and off by the game, don't fade them in the Vulkan
+    // renderer (OpenGL renderer shows them instantly too)
+    IrrDriver::refreshLightNoFade(m_nitro_light);
+    IrrDriver::refreshLightNoFade(m_skidding_light_1);
+    IrrDriver::refreshLightNoFade(m_skidding_light_2);
+
     m_wheel_toggle = 1 - m_wheel_toggle;
 
 #ifndef SERVER_ONLY

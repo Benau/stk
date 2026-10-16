@@ -91,11 +91,27 @@ public:
 	//! Check whether this light casts shadows.
 	/** \return True if light would cast shadows, else false. */
 	virtual bool getCastShadow() const;
+
+	//! Refreshes the temporary no-fade override for this light.
+	/** The Vulkan renderer fades lights when they enter or leave its active
+	light set. Some gameplay-controlled lights, such as nitro and skid
+	lights, are switched on and off directly by the game and should change
+	immediately instead.
+
+	Call this regularly, typically every update, while the light should
+	skip fading. The override expires one second after the last call, so
+	normal fading resumes when updates stop. */
+	virtual void refreshNoFadeInOut();
+
+	//! Returns whether the temporary no-fade override is active.
+	virtual bool isNoFadeInOutActive() const;
 private:
 
 	video::SLight LightData;
 	core::aabbox3d<f32> BBox;
 	s32 DriverLightIndex;
+	// Time when the no-fade override was last refreshed, in milliseconds.
+	u32 LastFadeSet;
 	bool LightIsOn;
 	void doLightRecalc();
 };

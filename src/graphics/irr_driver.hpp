@@ -429,6 +429,16 @@ public:
     // ------------------------------------------------------------------------
     void clearLights();
     // ------------------------------------------------------------------------
+    /** For lights that the game toggles with setVisible(): the Vulkan renderer
+    *  should not fade them in and out. Call this regularly, typically every
+    *  update, while immediate visibility changes are desired; the override
+    *  expires one second after the last call.
+    *
+    *  Has no effect on the OpenGL renderer, whose fade-in state is stored on
+    *  the node and persists across visibility changes.
+    */
+    static void refreshLightNoFade(scene::ISceneNode* light);
+    // ------------------------------------------------------------------------
     SP::SPDynamicDrawCall* getSunInterposer() { return m_sun_interposer; }
     // ------------------------------------------------------------------------
     

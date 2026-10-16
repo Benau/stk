@@ -271,6 +271,7 @@ void Referee::selectReadySetGo(int rsg)
         m.SpecularColor = video::SColor(255, 255, 255, 255);
     }
 
+    IrrDriver::refreshLightNoFade(m_light);
     LightNode* lnode = dynamic_cast<LightNode*>(m_light);
     if (lnode != NULL)
     {
