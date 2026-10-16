@@ -612,6 +612,13 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
     allocator_create_info.physicalDevice = m_physical_device;
     allocator_create_info.device = m_vk->device;
     allocator_create_info.instance = m_vk->instance;
+    if (GEVulkanFeatures::supportsRayQuery())
+    {
+        // Buffers of acceleration structure inputs need their device address
+        allocator_create_info.flags |=
+            VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+        allocator_create_info.vulkanApiVersion = VK_API_VERSION_1_2;
+    }
 
 #if !defined(__APPLE__) || defined(DLOPEN_MOLTENVK)
     VmaVulkanFunctions vulkan_functions = {};
@@ -1168,6 +1175,32 @@ void GEVulkanDriver::createDevice()
     dynamic_rendering_local_read_features.dynamicRenderingLocalRead =
         GEVulkanFeatures::supportsDynamicRenderingLocalRead();
     dynamic_rendering_features.pNext = &dynamic_rendering_local_read_features;
+
+    // Ray query, buffer device address is needed for the acceleration
+    // structure build inputs and the hit shading
+    VkPhysicalDeviceBufferDeviceAddressFeatures buffer_device_address = {};
+    buffer_device_address.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR as_features = {};
+    as_features.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+    VkPhysicalDeviceRayQueryFeaturesKHR ray_query_features = {};
+    ray_query_features.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+    if (GEVulkanFeatures::supportsRayQuery())
+    {
+        buffer_device_address.bufferDeviceAddress = VK_TRUE;
+        as_features.accelerationStructure = VK_TRUE;
+        ray_query_features.rayQuery = VK_TRUE;
+        dynamic_rendering_local_read_features.pNext = &buffer_device_address;
+        buffer_device_address.pNext = &as_features;
+        as_features.pNext = &ray_query_features;
+        m_device_extensions.push_back(
+            VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+        m_device_extensions.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+        m_device_extensions.push_back(
+            VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+    }
 
     if (m_features.samplerAnisotropy == VK_TRUE)
         device_features.samplerAnisotropy = VK_TRUE;

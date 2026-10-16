@@ -100,6 +100,8 @@ void updatePredefines()
         oss << "#define BIND_TEXTURES_AT_ONCE\n";
     if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
         oss << "#define BIND_MESH_TEXTURES_AT_ONCE\n";
+    if (GEVulkanFeatures::supportsRayQuery())
+        oss << "#define RAY_QUERY_ENABLED\n";
 
     if (GEVulkanFeatures::supportsDescriptorIndexing())
     {
@@ -163,7 +165,16 @@ std::vector<uint32_t> compileShader(shaderc_shader_kind kind,
         }
         g_reload_lock.unlock();
     }
-    shader_data = g_predefines + shader_data;
+    // The keywords of ray query (rayQueryEXT) need GLSL 4.60
+    const std::string version_450 = "#version 450";
+    if (shader_data.find("GL_EXT_ray_query") != std::string::npos &&
+        g_predefines.compare(0, version_450.size(), version_450) == 0)
+    {
+        shader_data = "#version 460" +
+            g_predefines.substr(version_450.size()) + shader_data;
+    }
+    else
+        shader_data = g_predefines + shader_data;
 
     struct ShadercResources
     {
@@ -190,6 +201,12 @@ std::vector<uint32_t> compileShader(shaderc_shader_kind kind,
     };
 
     ShadercResources res;
+    // Ray query needs SPIR-V 1.4 (Vulkan 1.2), only for the shaders using it
+    if (shader_data.find("GL_EXT_ray_query") != std::string::npos)
+    {
+        shaderc_compile_options_set_target_env(res.options,
+            shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
+    }
     struct FileIncluder
     {
         std::vector<std::string> m_shader_fullpath;
