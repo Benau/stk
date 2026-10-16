@@ -19,6 +19,7 @@
 #include "ge_vulkan_features.hpp"
 #include "ge_vulkan_hiz_depth.hpp"
 #include "ge_vulkan_mesh_cache.hpp"
+#include "ge_vulkan_rt_scene.hpp"
 #include "ge_vulkan_scene_manager.hpp"
 #include "ge_vulkan_target_group.hpp"
 #include "ge_vulkan_shader_manager.hpp"
@@ -524,7 +525,7 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
               : CNullDriver(io, core::dimension2d<u32>(0, 0)),
                 m_params(params), m_irrlicht_device(device),
                 m_depth_texture(NULL), m_skybox_renderer(NULL),
-                m_mesh_texture_descriptor(NULL), m_rtt_texture(NULL),
+                m_mesh_texture_descriptor(NULL), m_rt_scene(NULL), m_rtt_texture(NULL),
                 m_prev_rtt_texture(NULL), m_separate_rtt_texture(NULL),
                 m_billboard_quad(NULL), m_current_buffer_idx(0)
 {
@@ -675,6 +676,8 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
             GEVulkanShaderManager::getSamplerSize(),
             GEVulkanShaderManager::getMeshTextureLayer(),
             GEVulkanFeatures::supportsBindMeshTexturesAtOnce());
+        if (GEVulkanFeatures::supportsRayQuery())
+            m_rt_scene = new GEVulkanRTScene(this);
         GECompressorASTC4x4::init();
         GECompressorBPTCBC7::init();
         GEMaterialManager::init();
@@ -751,6 +754,9 @@ void GEVulkanDriver::destroyVulkan()
             getVulkanMeshCache()->destroy();
     }
 
+    // Before the texture descriptor, it holds slots of it
+    delete m_rt_scene;
+    m_rt_scene = NULL;
     delete m_mesh_texture_descriptor;
     delete m_skybox_renderer;
     GEVulkan2dRenderer::destroy();
@@ -3007,6 +3013,8 @@ void GEVulkanDriver::updateDriver(bool scale_changed, bool pbr_changed,
     if (pbr_changed)
     {
         GEVulkanSampler sampler = m_mesh_texture_descriptor->getSamplerUse();
+        // The texture slots are reset, the scene has to be built again
+        clearRTScene();
         delete m_mesh_texture_descriptor;
         m_mesh_texture_descriptor = new GEVulkanTextureDescriptor(
             GEVulkanShaderManager::getSamplerSize(),
@@ -3143,6 +3151,13 @@ void GEVulkanDriver::insertBufferBarrier(VkCommandBuffer cmd,
             1, &barrier, 0, NULL, 0, NULL);
     }
 }   // insertBufferBarrier
+
+// ----------------------------------------------------------------------------
+void GEVulkanDriver::clearRTScene()
+{
+    if (m_rt_scene)
+        m_rt_scene->clear();
+}   // clearRTScene
 
 }
 
