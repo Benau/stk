@@ -173,8 +173,8 @@ void GEVulkanLightScatter::createPipeline()
         GEVulkanShaderManager::getShader("light_scatter.comp");
     pipeline_info.stage.pName = "main";
     pipeline_info.layout = m_pipeline_layout;
-    if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeline_info,
-        NULL, &m_pipeline) != VK_SUCCESS)
+    if (vkCreateComputePipelines(device, m_vk->getPipelineCache(), 1,
+        &pipeline_info, NULL, &m_pipeline) != VK_SUCCESS)
     {
         throw std::runtime_error("vkCreateComputePipelines failed for "
             "GEVulkanLightScatter");

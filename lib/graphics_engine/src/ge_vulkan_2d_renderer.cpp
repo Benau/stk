@@ -254,7 +254,8 @@ void GEVulkan2dRenderer::createGraphicsPipeline()
     pipeline_info.basePipelineHandle = VK_NULL_HANDLE;
 
     VkResult result = vkCreateGraphicsPipelines(g_vk->getDevice(),
-        VK_NULL_HANDLE, 1, &pipeline_info, NULL, &g_graphics_pipeline);
+        g_vk->getPipelineCache(), 1, &pipeline_info, NULL,
+        &g_graphics_pipeline);
 
     if (result != VK_SUCCESS)
         throw std::runtime_error("vkCreateGraphicsPipelines failed");

@@ -100,6 +100,8 @@ public:
     irr::scene::ISceneNode* getSkyBoxNode(irr::scene::ISceneNode* node);
     // ------------------------------------------------------------------------
     GEVulkanDrawCall* getActiveDrawCall() const;
+    // ------------------------------------------------------------------------
+    void initPipelineCache();
 };   // GEVulkanSceneManager
 
 }

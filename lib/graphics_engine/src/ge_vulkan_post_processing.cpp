@@ -307,8 +307,8 @@ void GEVulkanPostProcessing::createBlurPipelines(const char* shader,
 
     // On failure the driver sets the handles which it couldn't create to
     // VK_NULL_HANDLE and the others are valid, so keep them for the destroy
-    const VkResult result = vkCreateComputePipelines(device, VK_NULL_HANDLE,
-        count, infos.data(), NULL, created.data());
+    const VkResult result = vkCreateComputePipelines(device,
+        m_vk->getPipelineCache(), count, infos.data(), NULL, created.data());
     for (unsigned i = 0; i < count; i++)
         out->m_pipelines[modes[i]] = created[i];
     if (result != VK_SUCCESS)

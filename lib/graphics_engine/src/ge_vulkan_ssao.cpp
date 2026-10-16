@@ -297,8 +297,8 @@ void GEVulkanSSAO::createPipeline(const char* shader,
     pipeline_info.stage.module = GEVulkanShaderManager::getShader(shader);
     pipeline_info.stage.pName = "main";
     pipeline_info.layout = m_pipeline_layout;
-    if (vkCreateComputePipelines(m_vk->getDevice(), VK_NULL_HANDLE, 1,
-        &pipeline_info, NULL, pipeline) != VK_SUCCESS)
+    if (vkCreateComputePipelines(m_vk->getDevice(), m_vk->getPipelineCache(),
+        1, &pipeline_info, NULL, pipeline) != VK_SUCCESS)
     {
         throw std::runtime_error(std::string("vkCreateComputePipelines "
             "failed for GEVulkanSSAO ") + shader);
