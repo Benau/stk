@@ -38,16 +38,37 @@ enum GEAutoDeferredType : unsigned
     GADT_SINGLE_PASS,
     GADT_DISPLACE
 };
-enum GEScreenSpaceReflectionType : unsigned
+// Reflection of the solid (opaque) materials, shared numeric values with
+// SOLID_REFLECTION_* in constants_utils.glsl
+enum GESolidReflectionType : unsigned
 {
-    GSSRT_DISABLED = 0,
-    GSSRT_FAST,
-    GSSRT_HIZ,
-    GSSRT_HIZ100 = GSSRT_HIZ,
-    GSSRT_HIZ200,
-    GSSRT_HIZ400,
-    GSSRT_COUNT,
+    GSRT_DISABLED = 0,
+    // Screen space reflection of the previous frame (needs the split deferred
+    // FBO), FAST uses the depth buffer, HIZ* use the hierarchical depth
+    GSRT_SSR_FAST,
+    GSRT_SSR_HIZ100,
+    GSRT_SSR_HIZ200,
+    GSRT_SSR_HIZ400,
+    GSRT_RAY_QUERY,
+    GSRT_COUNT,
 };
+// Reflection of the displace (water) materials, shared numeric values with
+// DISPLACE_REFLECTION_* in constants_utils.glsl
+enum GEDisplaceReflectionType : unsigned
+{
+    GDRT_DISABLED = 0,
+    GDRT_SSR_FAST,
+    GDRT_SSR_HIZ100,
+    GDRT_SSR_HIZ200,
+    GDRT_SSR_HIZ400,
+    GDRT_COUNT,
+};
+inline bool isSolidReflectionSSR(GESolidReflectionType t)
+                { return t >= GSRT_SSR_FAST && t <= GSRT_SSR_HIZ400; }
+inline bool isSolidReflectionHiZ(GESolidReflectionType t)
+                { return t >= GSRT_SSR_HIZ100 && t <= GSRT_SSR_HIZ400; }
+inline bool isDisplaceReflectionHiZ(GEDisplaceReflectionType t)
+                { return t >= GDRT_SSR_HIZ100 && t <= GDRT_SSR_HIZ400; }
 enum GEShadowType : unsigned
 {
     GST_NONE = 0,
@@ -81,7 +102,8 @@ std::string m_bloom_blend_texture;
 // FBO and compute in the main queue, see GEVulkanSSAO)
 bool m_ssao;
 GEAutoDeferredType m_auto_deferred_type;
-GEScreenSpaceReflectionType m_screen_space_reflection_type;
+GESolidReflectionType m_solid_reflection;
+GEDisplaceReflectionType m_displace_reflection;
 std::unordered_set<std::string> m_ondemand_load_texture_paths;
 float m_render_scale;
 unsigned m_shadow_size;

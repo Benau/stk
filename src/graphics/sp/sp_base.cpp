@@ -247,8 +247,8 @@ void displaceShaderInit(SPShader* shader)
     static_cast<SPPerObjectUniform*>(shader)
         ->addAssignerFunction("u_ssr", [](SP::SPUniformAssigner* ua)->void
         {
-            ua->setValue(GE::getGEConfig()->m_screen_space_reflection_type !=
-                GE::GSSRT_DISABLED ? 1 : 0);
+            ua->setValue(GE::getGEConfig()->m_displace_reflection !=
+                GE::GDRT_DISABLED ? 1 : 0);
         });
 }   // displaceShaderInit
 

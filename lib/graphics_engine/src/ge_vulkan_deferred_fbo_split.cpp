@@ -206,7 +206,7 @@ void createSamplerDescriptor(GEVulkanDriver* vk, unsigned count,
 bool GEVulkanDeferredFBOSplit::needsSolidSSR()
 {
     return getGEConfig()->m_pbr &&
-        getGEConfig()->m_screen_space_reflection_type != GSSRT_DISABLED;
+        isSolidReflectionSSR(getGEConfig()->m_solid_reflection);
 }   // needsSolidSSR
 
 // ----------------------------------------------------------------------------
@@ -742,7 +742,7 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         vkCmdEndRenderPass(cmd);
     }
     // The depth is complete, the lighting and displace pass trace it
-    generateHiZ(cmd, p);
+    generateHiZ(cmd, has_displace_fbo, p);
     // Nothing is traced in the first frame, there is no output of the
     // previous one
     const bool solid_ssr = m_solid_ssr && m_solid_ssr_ready;
@@ -874,10 +874,11 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
 
 // ----------------------------------------------------------------------------
 void GEVulkanDeferredFBOSplit::generateHiZ(VkCommandBuffer cmd,
+    bool has_displace_fbo,
     const std::vector<std::pair<GEVulkanDrawCall*,
     GEVulkanCamera*> >& p)
 {
-    if (!GEVulkanHiZDepth::isEnabled())
+    if (!GEVulkanHiZDepth::isEnabled(has_displace_fbo))
     {
         for (auto& q : p)
             q.first->setHiZDepth(NULL);

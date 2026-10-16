@@ -613,27 +613,32 @@ bool OptionsScreenVideo::onEscapePressed()
 // --------------------------------------------------------------------------------------------
 void OptionsScreenVideo::setSSR()
 {
-    if (!UserConfigParams::m_ssr)
-        GE::getGEConfig()->m_screen_space_reflection_type = GE::GSSRT_DISABLED;
-    else
+    GE::GESolidReflectionType solid = GE::GSRT_DISABLED;
+    GE::GEDisplaceReflectionType displace = GE::GDRT_DISABLED;
+    if (UserConfigParams::m_ssr)
     {
-        int val = UserConfigParams::m_geometry_level;
-        switch (val)
+        switch (UserConfigParams::m_geometry_level)
         {
         case 3:
-            GE::getGEConfig()->m_screen_space_reflection_type = GE::GSSRT_HIZ100;
+            solid = GE::GSRT_SSR_HIZ100;
+            displace = GE::GDRT_SSR_HIZ100;
             break;
         case 4:
-            GE::getGEConfig()->m_screen_space_reflection_type = GE::GSSRT_HIZ200;
+            solid = GE::GSRT_SSR_HIZ200;
+            displace = GE::GDRT_SSR_HIZ200;
             break;
         case 5:
-            GE::getGEConfig()->m_screen_space_reflection_type = GE::GSSRT_HIZ400;
+            solid = GE::GSRT_SSR_HIZ400;
+            displace = GE::GDRT_SSR_HIZ400;
             break;
         default:
-            GE::getGEConfig()->m_screen_space_reflection_type = GE::GSSRT_FAST;
+            solid = GE::GSRT_SSR_FAST;
+            displace = GE::GDRT_SSR_FAST;
             break;
         }
     }
+    GE::getGEConfig()->m_solid_reflection = solid;
+    GE::getGEConfig()->m_displace_reflection = displace;
 }   // setSSR
 
 #endif // ifndef SERVER_ONLY

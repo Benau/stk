@@ -15,9 +15,11 @@
 namespace GE
 {
 // ----------------------------------------------------------------------------
-bool GEVulkanHiZDepth::isEnabled()
+bool GEVulkanHiZDepth::isEnabled(bool has_displace_fbo)
 {
-    return getGEConfig()->m_screen_space_reflection_type >= GSSRT_HIZ &&
+    return (isSolidReflectionHiZ(getGEConfig()->m_solid_reflection) ||
+        (has_displace_fbo &&
+        isDisplaceReflectionHiZ(getGEConfig()->m_displace_reflection))) &&
         GEVulkanFeatures::supportsComputeInMainQueue();
 }   // isEnabled
 

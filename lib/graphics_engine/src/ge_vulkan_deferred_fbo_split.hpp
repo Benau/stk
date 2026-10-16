@@ -102,7 +102,7 @@ private:
     // no previous tonemap output to sample
     bool m_solid_ssr_ready;
     // ------------------------------------------------------------------------
-    void generateHiZ(VkCommandBuffer cmd,
+    void generateHiZ(VkCommandBuffer cmd, bool has_displace_fbo,
                      const std::vector<std::pair<GEVulkanDrawCall*,
                      GEVulkanCamera*> >& p);
 public:
