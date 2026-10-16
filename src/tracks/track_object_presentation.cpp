@@ -1096,7 +1096,12 @@ void TrackObjectPresentationLight::setEnergy(float energy)
 void TrackObjectPresentationLight::setEnable(bool enabled)
 {
     if (m_node != NULL)
+    {
+        // Switched by scripts or the track, so it should appear / disappear
+        // instantly (like the OpenGL renderer) instead of fading
+        IrrDriver::refreshLightNoFade(m_node);
         m_node->setVisible(enabled);
+    }
 }   // setEnable
 
 // ----------------------------------------------------------------------------

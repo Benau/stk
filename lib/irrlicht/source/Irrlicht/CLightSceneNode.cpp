@@ -17,7 +17,8 @@ namespace scene
 //! constructor
 CLightSceneNode::CLightSceneNode(ISceneNode* parent, ISceneManager* mgr, s32 id,
 		const core::vector3df& position, video::SColorf color, f32 radius)
-: ILightSceneNode(parent, mgr, id, position), DriverLightIndex(-1), LightIsOn(true)
+: ILightSceneNode(parent, mgr, id, position), DriverLightIndex(-1), LastFadeSet(0),
+  LightIsOn(true)
 {
 	#ifdef _DEBUG
 	setDebugName("CLightSceneNode");
@@ -269,6 +270,32 @@ ISceneNode* CLightSceneNode::clone(ISceneNode* newParent, ISceneManager* newMana
 		nb->drop();
 	return nb;
 }
+
+
+//! Refreshes the temporary no-fade override for this light.
+/** The Vulkan renderer fades lights when they enter or leave its active
+light set. Some gameplay-controlled lights, such as nitro and skid
+lights, are switched on and off directly by the game and should change
+immediately instead.
+
+Call this regularly, typically every update, while the light should
+skip fading. The override expires one second after the last call, so
+normal fading resumes when updates stop. */
+void CLightSceneNode::refreshNoFadeInOut()
+{
+	LastFadeSet = os::Timer::getTime();
+}
+
+
+//! Returns whether the temporary no-fade override is active.
+bool CLightSceneNode::isNoFadeInOutActive() const
+{
+	if (LastFadeSet == 0)
+		return false;
+	// Same as LIGHT_FADE_TIME in GEVulkanLightHandler
+	return os::Timer::getTime() - LastFadeSet < 1000;
+}
+
 
 } // end namespace scene
 } // end namespace irr

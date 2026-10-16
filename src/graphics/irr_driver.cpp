@@ -2448,6 +2448,14 @@ bool IrrDriver::OnEvent(const irr::SEvent &event)
 }   // OnEvent
 
 // --------------------------------------------------------------------------------------------
+void IrrDriver::refreshLightNoFade(scene::ISceneNode* light)
+{
+    scene::ILightSceneNode* ln = dynamic_cast<scene::ILightSceneNode*>(light);
+    if (ln != NULL)
+        ln->refreshNoFadeInOut();
+}   // refreshLightNoFade
+
+// --------------------------------------------------------------------------------------------
 scene::ISceneNode *IrrDriver::addLight(const core::vector3df &pos,
                                        float energy, float radius,
                                        float r, float g, float b,

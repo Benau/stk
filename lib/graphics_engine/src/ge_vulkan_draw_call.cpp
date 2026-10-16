@@ -2779,7 +2779,10 @@ void GEVulkanDrawCall::addLightNode(irr::scene::ILightSceneNode* node)
     {
         const video::SLight& l = node->getLightData();
         if (m_culling_tool->isCulled(l.Position, l.Radius))
+        {
+            m_light_handler->touchLightNode(node);
             return;
+        }
         m_light_handler->addLightNode(node);
     }
 }   // addLightNode
