@@ -52,9 +52,9 @@ private:
 public:
     // ------------------------------------------------------------------------
     // True if the HiZ screen space reflection is selected (the types of
-    // GEScreenSpaceReflectionType from GSSRT_HIZ100 and the device can run
-    // compute shaders), otherwise it uses GSSRT_FAST (the depth buffer only)
-    static bool isEnabled();
+    // the solid or displace reflection is a HiZ type and the device can run
+    // compute shaders), otherwise they use the FAST type (the depth buffer only)
+    static bool isEnabled(bool has_displace_fbo = true);
     // ------------------------------------------------------------------------
     GEVulkanHiZDepth(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------

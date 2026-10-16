@@ -14,6 +14,11 @@ layout(push_constant) uniform Constants
 
 #include "utils/camera.glsl"
 #include "utils/constants_utils.glsl"
+// Iteration limit of the hiz trace (0 uses the depth buffer)
+const uint u_hiz_iterations =
+    u_displace_reflection == DISPLACE_REFLECTION_SSR_HIZ400 ? 400u :
+    u_displace_reflection == DISPLACE_REFLECTION_SSR_HIZ200 ? 200u :
+    u_displace_reflection == DISPLACE_REFLECTION_SSR_HIZ100 ? 100u : 0u;
 #include "utils/sample_mesh_texture.glsl"
 #include "../utils/displace_utils.frag"
 
@@ -35,7 +40,7 @@ void main()
     vec2 mask = getDisplaceShift(horiz, vert);
     mask = (mask + 1.0) * 0.5;
     o_displace_mask = mask;
-    if (u_ssr)
+    if (u_displace_reflection != DISPLACE_REFLECTION_DISABLED)
     {
         float alpha = sampleMeshTexture0(f_material_id, f_uv).a;
         if (alpha == 0.0)

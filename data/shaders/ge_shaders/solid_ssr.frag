@@ -24,6 +24,11 @@ layout(location = 0) out vec4 o_color;
 
 #include "utils/camera.glsl"
 #include "utils/constants_utils.glsl"
+// Iteration limit of the hiz trace (0 uses the depth buffer)
+const uint u_hiz_iterations =
+    u_solid_reflection == SOLID_REFLECTION_SSR_HIZ400 ? 400u :
+    u_solid_reflection == SOLID_REFLECTION_SSR_HIZ200 ? 200u :
+    u_solid_reflection == SOLID_REFLECTION_SSR_HIZ100 ? 100u : 0u;
 #include "utils/pbr_utils.glsl"
 #include "utils/unproject_position.glsl"
 #include "../utils/decodeNormal.frag"

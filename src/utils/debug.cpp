@@ -106,7 +106,8 @@ enum DebugMenuCommand
     DEBUG_FONT_RELOAD,
     DEBUG_GE_PBR,
     DEBUG_GE_IBL,
-    DEBUG_GE_SSR,
+    DEBUG_GE_SR,
+    DEBUG_GE_DR,
     DEBUG_SP_RESET,
     DEBUG_SP_TOGGLE_CULLING,
     DEBUG_SP_WN_VIZ,
@@ -415,16 +416,31 @@ bool handleContextMenuAction(s32 cmd_id)
         break;
     }
 #endif
-    case DEBUG_GE_SSR:
+    case DEBUG_GE_SR:
 #ifndef SERVER_ONLY
     {
         GE::GEVulkanDriver* vk = GE::getVKDriver();
         if (vk)
         {
-            GE::getGEConfig()->m_screen_space_reflection_type =
-                GE::GEScreenSpaceReflectionType(
-                (GE::getGEConfig()->m_screen_space_reflection_type + 1) %
-                GE::GSSRT_COUNT);
+            unsigned next = (unsigned(GE::getGEConfig()->m_solid_reflection) + 1) %
+                GE::GSRT_COUNT;
+            GE::getGEConfig()->m_solid_reflection =
+                GE::GESolidReflectionType(next);
+            vk->updateDriver(true/*scale_changed*/);
+        }
+        break;
+    }
+#endif
+    case DEBUG_GE_DR:
+#ifndef SERVER_ONLY
+    {
+        GE::GEVulkanDriver* vk = GE::getVKDriver();
+        if (vk)
+        {
+            unsigned next = (unsigned(GE::getGEConfig()->m_displace_reflection) + 1) %
+                GE::GDRT_COUNT;
+            GE::getGEConfig()->m_displace_reflection =
+                GE::GEDisplaceReflectionType(next);
             vk->updateDriver(true/*scale_changed*/);
         }
         break;
@@ -1357,7 +1373,8 @@ bool onEvent(const SEvent &event)
             sub = mnu->getSubMenu(7);
             sub->addItem(L"Toggle GE PBR", DEBUG_GE_PBR);
             sub->addItem(L"Toggle GE IBL", DEBUG_GE_IBL);
-            sub->addItem(L"Toggle GE SSR", DEBUG_GE_SSR);
+            sub->addItem(L"Toggle GE Solid Reflection", DEBUG_GE_SR);
+            sub->addItem(L"Toggle GE Displace Reflection", DEBUG_GE_DR);
 
             mnu->addItem(L"Keypress actions >",-1,true, true);
             sub = mnu->getSubMenu(8);

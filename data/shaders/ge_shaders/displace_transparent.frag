@@ -24,7 +24,7 @@ void main()
     vec3 mixed_color = color.xyz;
     float alpha = color.w;
     mixed_color = convertColor(mixed_color);
-    if (u_ssr)
+    if (u_displace_reflection != DISPLACE_REFLECTION_DISABLED)
     {
         float alpha = sampleMeshTexture0(f_material_id, f_uv).a;
         if (alpha == 0.0)
