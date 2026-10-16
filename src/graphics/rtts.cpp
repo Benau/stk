@@ -198,7 +198,7 @@ RTT::RTT(unsigned int width, unsigned int height, float rtt_scale,
 
         somevector.clear();
         somevector.push_back(m_render_target_textures[RTT_R]);
-        if (GE::getGEConfig()->m_screen_space_reflection_type != GE::GSSRT_DISABLED)
+        if (GE::getGEConfig()->m_displace_reflection != GE::GDRT_DISABLED)
             somevector.push_back(m_render_target_textures[RTT_DIFFUSE]);
         m_frame_buffers[FBO_DISPLACE_SSR] = new FrameBuffer(somevector, m_depth_stencil_tex, res.Width, res.Height);
 

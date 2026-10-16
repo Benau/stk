@@ -5,8 +5,22 @@ const uint GST_COMBINED = GST_SUN | GST_POINTLIGHT;
 layout (constant_id = 0) const bool u_ibl = true;
 layout (constant_id = 1) const float u_specular_levels_minus_one = 0.0;
 layout (constant_id = 2) const bool u_deferred = false;
-layout (constant_id = 3) const bool u_ssr = false;
-layout (constant_id = 4) const uint u_hiz_iterations = 0;
+// Of GESolidReflectionType, FAST samples the depth buffer, HIZ* the hiz depth
+// (the number is its iteration limit)
+const uint SOLID_REFLECTION_DISABLED = 0;
+const uint SOLID_REFLECTION_SSR_FAST = 1;
+const uint SOLID_REFLECTION_SSR_HIZ100 = 2;
+const uint SOLID_REFLECTION_SSR_HIZ200 = 3;
+const uint SOLID_REFLECTION_SSR_HIZ400 = 4;
+const uint SOLID_REFLECTION_RAY_QUERY = 5;
+// Of GEDisplaceReflectionType
+const uint DISPLACE_REFLECTION_DISABLED = 0;
+const uint DISPLACE_REFLECTION_SSR_FAST = 1;
+const uint DISPLACE_REFLECTION_SSR_HIZ100 = 2;
+const uint DISPLACE_REFLECTION_SSR_HIZ200 = 3;
+const uint DISPLACE_REFLECTION_SSR_HIZ400 = 4;
+layout (constant_id = 3) const uint u_solid_reflection = 0;
+layout (constant_id = 4) const uint u_displace_reflection = 0;
 layout (constant_id = 5) const uint u_shadow_size = 0;
 layout (constant_id = 6) const uint u_shadow_type = 0;
 layout (constant_id = 7) const uint u_point_shadow_limit = 0;

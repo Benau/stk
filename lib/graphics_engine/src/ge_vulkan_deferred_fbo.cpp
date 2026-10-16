@@ -76,7 +76,7 @@ GEVulkanDeferredFBO::GEVulkanDeferredFBO(GEVulkanDriver* vk,
             size, displace_mask_format, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
             VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 
-        if (getGEConfig()->m_screen_space_reflection_type != GSSRT_DISABLED)
+        if (getGEConfig()->m_displace_reflection != GDRT_DISABLED)
         {
             m_attachments[GVDFT_DISPLACE_SSR] =
                 new GEVulkanAttachmentTexture(vk, size,

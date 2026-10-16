@@ -414,7 +414,7 @@ void LightingPasses::renderEnvMap(GLuint normal_depth_texture,
             ssao_texture,
             diffuse_color_texture);
         IBLShader::getInstance()->setUniforms(int(
-            GE::getGEConfig()->m_screen_space_reflection_type != GE::GSSRT_DISABLED));
+            GE::getGEConfig()->m_solid_reflection != GE::GSRT_DISABLED));
     }
 
     glDrawArrays(GL_TRIANGLES, 0, 3);

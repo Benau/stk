@@ -303,11 +303,14 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
             ModalDialog::dismiss();
             OptionsScreenVideo::getInstance()->updateGfxSlider();
             OptionsScreenVideo::getInstance()->updateBlurSlider();
-            GE::GEScreenSpaceReflectionType prev_gssrt = GE::getGEConfig()->m_screen_space_reflection_type;
+            GE::GESolidReflectionType prev_solid = GE::getGEConfig()->m_solid_reflection;
+            GE::GEDisplaceReflectionType prev_displace = GE::getGEConfig()->m_displace_reflection;
             OptionsScreenVideo::setSSR();
             if (GE::getDriver()->getDriverType() == video::EDT_VULKAN)
             {
-                bool need_recreate_swapchain = GE::getGEConfig()->m_screen_space_reflection_type != prev_gssrt;
+                bool need_recreate_swapchain =
+                    GE::getGEConfig()->m_solid_reflection != prev_solid ||
+                    GE::getGEConfig()->m_displace_reflection != prev_displace;
                 if (need_recreate_swapchain || pbr_changed || ibl_changed ||
                     glow_changed || light_scatter_changed || bloom_changed ||
                     ssao_changed ||

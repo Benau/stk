@@ -34,7 +34,8 @@ GEConfig g_config =
     "",
     false,
     GADT_DISABLED,
-    GSSRT_DISABLED,
+    GSRT_DISABLED,
+    GDRT_DISABLED,
     {},
     1.0f,
     0,
@@ -284,8 +285,10 @@ void refreshDeferredSplit()
         g_config.m_deferred_split |= 1 << 2;
     // The solid materials reflect the output of the tonemap pass of the
     // previous frame (the OpenGL renderer also needs the passes to be
-    // separated), and the HiZ depth is generated after the g-buffer
-    if (g_config.m_screen_space_reflection_type != GSSRT_DISABLED)
+    // separated), and the HiZ depth is generated after the g-buffer. The
+    // FAST displace reflection only samples the depth buffer
+    if (isSolidReflectionSSR(g_config.m_solid_reflection) ||
+        isDisplaceReflectionHiZ(g_config.m_displace_reflection))
         g_config.m_deferred_split |= 1 << 3;
     // The ambient occlusion is computed between the g-buffer and the lighting
     // passes, and sampled by the lighting pass
