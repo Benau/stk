@@ -45,6 +45,11 @@ private:
     GEGlobalLightBuffer* getGlobalLightPtr() const;
     // ------------------------------------------------------------------------
     GELight* getRenderingLightsPtr() const;
+    // ------------------------------------------------------------------------
+    // Picks the lights to render from the submitted ones, with fading
+    void selectLights(const irr::core::vector3df& cam_pos);
+    // ------------------------------------------------------------------------
+    static unsigned getFadeExtraSlot();
 
 public:
     // ------------------------------------------------------------------------
@@ -59,6 +64,10 @@ public:
     // ------------------------------------------------------------------------
     void addLightNode(irr::scene::ILightSceneNode* node);
     // ------------------------------------------------------------------------
+    // For lights that exist but are not submitted this frame (frustum culled),
+    // so their fade state is kept and keeps advancing
+    void touchLightNode(irr::scene::ILightSceneNode* node);
+    // ------------------------------------------------------------------------
     // Raw GPU buffer pointer – only the first getSize() bytes are valid data.
     void* getData()                                 { return m_buffer.data(); }
     // ------------------------------------------------------------------------
@@ -68,6 +77,11 @@ public:
     // Total allocated buffer size – use this for Vulkan descriptor ranges and
     // dynamic-buffer allocation so the full max-light slot is always reserved.
     static size_t getMaxSize();
+    // ------------------------------------------------------------------------
+    // Size of the light array in the GPU buffer and MAX_RENDERING_LIGHT in
+    // the shaders: m_max_pointlights plus a few extra slots so lights that
+    // are fading out can stay in while the selected set is already full.
+    static unsigned getMaxRenderingLights();
     // ------------------------------------------------------------------------
     unsigned getLightCount() const;
     // ------------------------------------------------------------------------
