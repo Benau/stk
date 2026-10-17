@@ -19,6 +19,7 @@ namespace GE
 class GEVulkanDriver;
 class GEVulkanDynamicBuffer;
 class GEVulkanMeshCache;
+class GESPMBuffer;
 
 // Shading of a ray hit, shared with RT_SHADING_* in the ray traced shaders
 enum GERTShadingType : uint32_t
@@ -87,6 +88,16 @@ enum GERTGeometryFlag : uint32_t
 // every frame the instances changed. When the mesh cache is created again (a
 // mesh is added or removed) all of them are created again, as the offsets and
 // the buffer are new
+//
+// The nodes with GRTT_DYNAMIC and skinning (animated meshes) are all joined in
+// a single BLAS of world space triangles with a geometry for each of their
+// mesh buffers (so a duplicated mesh is animated separately), which is a TLAS
+// instance too. Every frame the joint matrices of the nodes are written to a
+// buffer of the scene (GEVulkanAnimatedMeshSceneNode::getSkinningMatrices,
+// like the raster pass does for its draw call), a compute shader
+// (skin_rt.comp) skins the bind pose vertices of the mesh cache with them, and
+// the BLAS is updated (refit). If the set of the geometries changes, a new BLAS
+// is created and built instead
 class GEVulkanRTScene
 {
 public:
@@ -96,7 +107,13 @@ public:
         MAX_INSTANCES = 256,
         // GERTGeometry of all the dynamic instances of a frame, after the
         // ones of the static BLAS
-        MAX_DYNAMIC_GEOMETRIES = 1024
+        MAX_DYNAMIC_GEOMETRIES = 1024,
+        // The skinned (world space) vertices of the skinned BLAS (and of the
+        // one it replaces for some frames), after the data of the static BLAS
+        // in the data buffer
+        SKIN_DATA_BYTES = 4 * 1024 * 1024,
+        // Joint matrices of all the skinned nodes of a frame
+        MAX_SKINNING_MATRICES = 1024
     };
 private:
     GEVulkanDriver* m_vk;
@@ -175,6 +192,16 @@ private:
         // Slots of the mesh texture descriptor used by the dynamic
         // instances, alive until this index is used again
         std::vector<std::shared_ptr<int> > m_slots;
+        // What skin_rt.comp does for this index (the skinned BLAS is updated)
+        struct SkinDispatch
+        {
+            // Same as the absolute transformation of the node
+            float m_world[16];
+            // The first joint matrix of the node in m_skinning_data
+            int m_skinning_offset;
+        };
+        bool m_skin_active;
+        std::vector<SkinDispatch> m_skin_dispatches;
         // ------------------------------------------------------------------
         TopLevel()
         {
@@ -187,6 +214,7 @@ private:
             m_geometry_static = true;
             m_dirty = false;
             m_cache_version = 0;
+            m_skin_active = false;
             m_instance_buffer = VK_NULL_HANDLE;
             m_instance_memory = VK_NULL_HANDLE;
             m_instance_mapped = NULL;
@@ -246,6 +274,81 @@ private:
 
     std::map<MeshKey, std::unique_ptr<MeshBLAS> > m_mesh_blas;
 
+    // The skinned geometries of a frame in a single BLAS. The set is a list of
+    // mesh buffers (the same one can be in it many times, for many nodes), a
+    // different list is another set
+    struct SkinSet
+    {
+        // Not grabbed, a mesh is not gone without the mesh cache changed
+        std::vector<GESPMBuffer*> m_buffers;
+        // The baked fields (offsets, shading type, flags) of each geometry
+        std::vector<GERTGeometry> m_infos;
+        // Of each geometry: the first word in the mesh cache of the bind pose
+        // vertices (position, normal, color, uv) and of the joints and
+        // weights, the first word in the data buffer of the output vertices
+        // (GERTVertex), and the vertex count
+        std::vector<uint32_t> m_source_words;
+        std::vector<uint32_t> m_skin_words;
+        std::vector<uint32_t> m_dst_words;
+        std::vector<uint32_t> m_vertex_counts;
+        std::vector<VkAccelerationStructureGeometryKHR> m_as_geometries;
+        std::vector<VkAccelerationStructureBuildRangeInfoKHR> m_as_ranges;
+        VkDeviceSize m_scratch_size;
+        VmaVirtualAllocation m_allocation;
+        VkBuffer m_blas_buffer;
+        VmaAllocation m_blas_memory;
+        VkAccelerationStructureKHR m_blas;
+        VkDeviceAddress m_address;
+        // Built once, then updated
+        bool m_built;
+        uint64_t m_last_used_frame;
+        // ------------------------------------------------------------------
+        SkinSet()
+        {
+            m_scratch_size = 0;
+            m_allocation = VK_NULL_HANDLE;
+            m_blas_buffer = VK_NULL_HANDLE;
+            m_blas_memory = VK_NULL_HANDLE;
+            m_blas = VK_NULL_HANDLE;
+            m_address = 0;
+            m_built = false;
+            m_last_used_frame = 0;
+        }
+    };
+
+    std::unique_ptr<SkinSet> m_skin_set;
+
+    // Replaced sets, destroyed when the frames which can use them are done
+    std::vector<std::unique_ptr<SkinSet> > m_retired_skin_sets;
+
+    // The output vertices of the sets, after the static data in the data buffer
+    VkDeviceSize m_skin_region_offset;
+
+    VmaVirtualBlock m_skin_block;
+
+    // The joint matrices of the skinned nodes, one host buffer for each buffer
+    // index (written directly, like the geometries), the first matrix is the
+    // identity as in the one of the draw calls (a joint with a negative index)
+    std::unique_ptr<GEVulkanDynamicBuffer> m_skinning_data;
+
+    // The buffers of the last set which can't be created, not to try it
+    // again every frame
+    std::vector<GESPMBuffer*> m_skin_failed_buffers;
+
+    // Compute pipeline of skin_rt.comp, created when it's first needed
+    VkDescriptorSetLayout m_skin_layout;
+
+    VkDescriptorPool m_skin_pool;
+
+    // One for each buffer index (the skinning matrices buffer changes)
+    std::vector<VkDescriptorSet> m_skin_descriptor_sets;
+
+    VkPipelineLayout m_skin_pipeline_layout;
+
+    VkPipeline m_skin_pipeline;
+
+    bool m_skin_pipeline_failed;
+
     // Created but not built (in the next buildTopLevel)
     std::vector<MeshBLAS*> m_pending_blas;
 
@@ -265,9 +368,11 @@ private:
     uint32_t m_triangle_count;
 
     // ------------------------------------------------------------------------
+    // buffer_size is the size of the buffer if it's more than size (the rest is
+    // not written)
     bool createDeviceBuffer(const void* data, VkDeviceSize size,
                             VkBufferUsageFlags usage, VkBuffer& buffer,
-                            VmaAllocation& memory);
+                            VmaAllocation& memory, VkDeviceSize buffer_size = 0);
     // ------------------------------------------------------------------------
     VkDeviceAddress getAddress(VkBuffer buffer) const;
     // ------------------------------------------------------------------------
@@ -300,6 +405,20 @@ private:
     void destroyMeshBLAS(MeshBLAS* blas);
     // ------------------------------------------------------------------------
     void destroyUnusedMeshBLAS();
+    // ------------------------------------------------------------------------
+    bool createSkinPipeline();
+    // ------------------------------------------------------------------------
+    // Returns NULL if it can't be created
+    std::unique_ptr<SkinSet> createSkinSet(
+        const std::vector<GESPMBuffer*>& buffers,
+        const std::vector<uint32_t>& shading_types,
+        GEVulkanMeshCache* mesh_cache);
+    // ------------------------------------------------------------------------
+    // The buffer of the joint matrices and its descriptors of the compute
+    // shader
+    bool createSkinningData();
+    // ------------------------------------------------------------------------
+    void destroySkinSet(SkinSet* set);
     // ------------------------------------------------------------------------
     void updateDescriptorSet();
     // ------------------------------------------------------------------------
@@ -349,18 +468,19 @@ public:
     // - all GERTGeometry, with the uv shift (texture matrix), hue and custom
     //   vertex color refreshed from the materials of the nodes, so animated
     //   textures and color changes are seen in the reflection
-    // - the instances (the static BLAS and one for each node with
-    //   GRTT_DYNAMIC found under root), the BLAS of new meshes are created
-    //   (not built, see buildTopLevel)
+    // - the instances (the static BLAS, one for each node with GRTT_DYNAMIC
+    //   found under root, and the skinned BLAS), the BLAS of new meshes and
+    //   a new skinned BLAS are created (not built, see buildTopLevel)
+    // - the joint matrices of the skinned nodes
     // Only if GEConfig::m_dynamic_ray_tracing is true, otherwise the buffers
     // are restored (once) to what the build wrote. Nothing is written if not
     // isReady(). root is not changed
     void update(irr::scene::ISceneNode* root);
     // ------------------------------------------------------------------------
-    // Record the builds of the new BLAS and the TLAS of the current buffer
-    // index if its instances changed in update, outside any render pass and
-    // before the ray tracing pass. The TLAS is visible to the fragment shaders
-    // after it
+    // Record the skinning and the update of the skinned BLAS, the builds of the
+    // new BLAS and the TLAS of the current buffer index if its instances
+    // changed in update, outside any render pass and before the ray tracing
+    // pass. The TLAS is visible to the fragment shaders after it
     void buildTopLevel(VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
     uint32_t getGeometryCount() const              { return m_geometry_count; }
