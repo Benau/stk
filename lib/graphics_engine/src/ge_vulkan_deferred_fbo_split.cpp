@@ -210,6 +210,14 @@ bool GEVulkanDeferredFBOSplit::needsSolidSSR()
 }   // needsSolidSSR
 
 // ----------------------------------------------------------------------------
+bool GEVulkanDeferredFBOSplit::needsSolidRT()
+{
+    return getGEConfig()->m_pbr &&
+        getGEConfig()->m_solid_reflection == GSRT_RAY_QUERY &&
+        GEVulkanFeatures::supportsRayQuery();
+}   // needsSolidRT
+
+// ----------------------------------------------------------------------------
 bool GEVulkanDeferredFBOSplit::resolveSwapchainOutput(GEVulkanDriver* vk,
                                             const core::dimension2d<u32>& size,
                                             bool swapchain_output)
@@ -231,6 +239,7 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
                           resolveSwapchainOutput(vk, size, swapchain_output)),
                           m_bloom_blend_texture(NULL),
                           m_solid_ssr(needsSolidSSR()),
+                          m_solid_rt(needsSolidRT()),
                           m_solid_ssr_ready(false)
 {
     // GEVulkanDeferredFBO creates attachments with sampled usage and no input
@@ -776,6 +785,8 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
             // glow outline is above it
             if (solid_ssr)
                 q.first->renderSolidSSR(m_vk, cmd);
+            else if (m_solid_rt)
+                q.first->renderSolidRT(m_vk, cmd);
             // Above everything which is lit, the glow outline is not over the
             // meshes
             if (has_glow_outline || has_light_scatter)
@@ -937,6 +948,7 @@ VkRenderPass GEVulkanDeferredFBOSplit::getRenderPassForPipeline(
     case GVPT_DEFERRED_LIGHTING:
     case GVPT_SKYBOX:
     case GVPT_SOLID_SSR:
+    case GVPT_SOLID_RT:
     case GVPT_LIGHTING_COMPOSITE:
         return getRTTRenderPass(GVDSP_LIGHTING);
     case GVPT_DEFERRED_CONVERT_COLOR:

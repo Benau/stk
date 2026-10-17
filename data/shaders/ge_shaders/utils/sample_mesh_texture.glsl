@@ -1,5 +1,9 @@
 #ifdef BIND_MESH_TEXTURES_AT_ONCE
-layout(binding = 0) uniform sampler2D f_mesh_textures[];
+// The includer can change the set (the ray traced pass has it as set 4)
+#ifndef MESH_TEXTURES_SET
+#define MESH_TEXTURES_SET 0
+#endif
+layout(set = MESH_TEXTURES_SET, binding = 0) uniform sampler2D f_mesh_textures[];
 
 vec4 sampleMeshTexture0(int material_id, vec2 uv)
 {

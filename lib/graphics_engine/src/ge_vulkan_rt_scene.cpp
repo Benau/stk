@@ -15,7 +15,9 @@
 #include "ISceneNode.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 
 namespace GE
@@ -96,6 +98,9 @@ void collectNode(irr::scene::ISceneNode* node, std::vector<RTSource>& sources)
 GEVulkanRTScene::GEVulkanRTScene(GEVulkanDriver* vk)
 {
     m_vk = vk;
+    m_descriptor_layout = VK_NULL_HANDLE;
+    m_descriptor_pool = VK_NULL_HANDLE;
+    m_descriptor_set = VK_NULL_HANDLE;
     m_data_buffer = VK_NULL_HANDLE;
     m_data_memory = VK_NULL_HANDLE;
     m_geometry_buffer = VK_NULL_HANDLE;
@@ -108,7 +113,96 @@ GEVulkanRTScene::GEVulkanRTScene(GEVulkanDriver* vk)
     m_tlas = VK_NULL_HANDLE;
     m_geometry_count = 0;
     m_triangle_count = 0;
+
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings = {};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    for (auto& b : bindings)
+    {
+        b.descriptorCount = 1;
+        b.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo layout_info = {};
+    layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layout_info.bindingCount = bindings.size();
+    layout_info.pBindings = bindings.data();
+    if (vkCreateDescriptorSetLayout(m_vk->getDevice(), &layout_info, NULL,
+        &m_descriptor_layout) != VK_SUCCESS)
+    {
+        throw std::runtime_error(
+            "vkCreateDescriptorSetLayout failed for GEVulkanRTScene");
+    }
+    std::array<VkDescriptorPoolSize, 2> sizes = {};
+    sizes[0].type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    sizes[0].descriptorCount = 1;
+    sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    sizes[1].descriptorCount = 2;
+    VkDescriptorPoolCreateInfo pool_info = {};
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.poolSizeCount = sizes.size();
+    pool_info.pPoolSizes = sizes.data();
+    pool_info.maxSets = 1;
+    if (vkCreateDescriptorPool(m_vk->getDevice(), &pool_info, NULL,
+        &m_descriptor_pool) != VK_SUCCESS)
+    {
+        throw std::runtime_error(
+            "vkCreateDescriptorPool failed for GEVulkanRTScene");
+    }
+    VkDescriptorSetAllocateInfo alloc_info = {};
+    alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc_info.descriptorPool = m_descriptor_pool;
+    alloc_info.descriptorSetCount = 1;
+    alloc_info.pSetLayouts = &m_descriptor_layout;
+    if (vkAllocateDescriptorSets(m_vk->getDevice(), &alloc_info,
+        &m_descriptor_set) != VK_SUCCESS)
+    {
+        throw std::runtime_error(
+            "vkAllocateDescriptorSets failed for GEVulkanRTScene");
+    }
 }   // GEVulkanRTScene
+
+// ----------------------------------------------------------------------------
+GEVulkanRTScene::~GEVulkanRTScene()
+{
+    clear();
+    m_vk->waitIdle();
+    vkDestroyDescriptorPool(m_vk->getDevice(), m_descriptor_pool, NULL);
+    vkDestroyDescriptorSetLayout(m_vk->getDevice(), m_descriptor_layout, NULL);
+}   // ~GEVulkanRTScene
+
+// ----------------------------------------------------------------------------
+// Nothing uses the set while the scene is built (clear waits for the device)
+void GEVulkanRTScene::updateDescriptorSet()
+{
+    VkWriteDescriptorSetAccelerationStructureKHR as_write = {};
+    as_write.sType =
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+    as_write.accelerationStructureCount = 1;
+    as_write.pAccelerationStructures = &m_tlas;
+    VkDescriptorBufferInfo data_info = { m_data_buffer, 0, VK_WHOLE_SIZE };
+    VkDescriptorBufferInfo geometry_info =
+        { m_geometry_buffer, 0, VK_WHOLE_SIZE };
+    std::array<VkWriteDescriptorSet, 3> writes = {};
+    for (unsigned i = 0; i < writes.size(); i++)
+    {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = m_descriptor_set;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+    }
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    writes[0].pNext = &as_write;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[1].pBufferInfo = &data_info;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[2].pBufferInfo = &geometry_info;
+    vkUpdateDescriptorSets(m_vk->getDevice(), writes.size(), writes.data(), 0,
+        NULL);
+}   // updateDescriptorSet
 
 // ----------------------------------------------------------------------------
 void GEVulkanRTScene::clear()
@@ -443,7 +537,9 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
         info.m_uv_shift[0] = texture_matrix[8];
         info.m_uv_shift[1] = texture_matrix[9];
         info.m_hue = ri->getHue();
-        info.m_vertex_color = ri->getVertexColor().color;
+        // Same as the custom vertex color of ObjectData (the PBR is enabled)
+        info.m_vertex_color =
+            srgb255ToLinearFromSColor(ri->getVertexColor()).color;
 
         const irr::video::S3DVertexSkinnedMesh* src =
             static_cast<const irr::video::S3DVertexSkinnedMesh*>(
@@ -538,6 +634,7 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
     }
     m_geometry_count = (uint32_t)infos.size();
     m_triangle_count = triangles;
+    updateDescriptorSet();
     GE::logMessage(GLL_INFO, "GEVulkanRTScene: built %d geometries",
         m_geometry_count);
     return true;
