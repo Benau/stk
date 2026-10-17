@@ -32,6 +32,7 @@ GEConfig g_config =
     false,
     false,
     false,
+    false,
     "",
     false,
     GADT_DISABLED,

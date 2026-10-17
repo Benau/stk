@@ -2652,7 +2652,8 @@ void GEVulkanDrawCall::renderSolidRT(GEVulkanDriver* vk, VkCommandBuffer cmd)
         *pl[GVPT_SOLID_RT]);
     // The scene
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_solid_rt_layout, 0, 1, rt_scene->getDescriptorSet(), 0, NULL);
+        m_solid_rt_layout, 0, 1,
+        rt_scene->getDescriptorSet(vk->getCurrentBufferIdx()), 0, NULL);
     // Camera
     int current_buffer_idx = vk->getCurrentBufferIdx();
     std::vector<uint32_t> dynamic_offsets = getDefaultDynamicOffsets();

@@ -93,6 +93,10 @@ bool m_light_scatter;
 // Bloom of the finished hdr color (needs the split deferred FBO and compute in
 // the main queue, see GEVulkanBloom)
 bool m_bloom;
+// The static nodes of the ray traced scene are checked every frame for a
+// changed texture matrix, hue and vertex color (GEVulkanRTScene::update), also
+// for moving and animated meshes later
+bool m_dynamic_ray_tracing;
 // Full path of an optional texture (lens dust for example) which the widest
 // blur of the bloom is multiplied by and added to it, mapped on the whole
 // viewport. Empty if there is none. It's loaded (and owned) by the deferred FBO

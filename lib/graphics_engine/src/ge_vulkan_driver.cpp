@@ -1984,10 +1984,17 @@ bool GEVulkanDriver::endScene()
             break;
         }
     }
-    if (in_game && GEVulkanDeferredFBOSplit::needsSolidRT() && m_rt_scene &&
-        !m_rt_scene->isReady())
+    if (in_game && GEVulkanDeferredFBOSplit::needsSolidRT() && m_rt_scene)
     {
-        m_rt_scene->build(sm->getRootSceneNode());
+        if (!m_rt_scene->isReady())
+            m_rt_scene->build(sm->getRootSceneNode());
+        else if (getGEConfig()->m_dynamic_ray_tracing)
+        {
+            // Writes the GERTGeometry directly into the host buffer of this
+            // frame, so it must be before the fence is waited like
+            // GEVulkanDrawCall::generate (a build writes all buffers)
+            m_rt_scene->update();
+        }
     }
 
     GEVulkan2dRenderer::updateTextureDescriptor();
