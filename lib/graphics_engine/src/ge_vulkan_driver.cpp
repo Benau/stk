@@ -1973,6 +1973,23 @@ bool GEVulkanDriver::endScene()
         return false;
     }
 
+    GEVulkanSceneManager* sm = static_cast<GEVulkanSceneManager*>(
+        m_irrlicht_device->getSceneManager());
+    bool in_game = false;
+    for (GEVulkanTargetGroup* g : sm->getFrameGroups())
+    {
+        if (g->m_target == m_rtt_texture)
+        {
+            in_game = true;
+            break;
+        }
+    }
+    if (in_game && GEVulkanDeferredFBOSplit::needsSolidRT() && m_rt_scene &&
+        !m_rt_scene->isReady())
+    {
+        m_rt_scene->build(sm->getRootSceneNode());
+    }
+
     GEVulkan2dRenderer::updateTextureDescriptor();
     m_mesh_texture_descriptor->updateDescriptor();
     if (m_vk->in_flight_fences.empty() || vkWaitForFences(m_vk->device, 1,

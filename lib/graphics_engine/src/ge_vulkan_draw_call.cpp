@@ -21,6 +21,7 @@
 #include "ge_vulkan_light_handler.hpp"
 #include "ge_vulkan_mesh_cache.hpp"
 #include "ge_vulkan_mesh_scene_node.hpp"
+#include "ge_vulkan_rt_scene.hpp"
 #include "ge_vulkan_scene_manager.hpp"
 #include "ge_vulkan_shader_manager.hpp"
 #include "ge_vulkan_skybox_renderer.hpp"
@@ -274,6 +275,7 @@ GEVulkanDrawCall::GEVulkanDrawCall()
     m_env_descriptor_set = VK_NULL_HANDLE;
     m_pipeline_layout = VK_NULL_HANDLE;
     m_skybox_layout = VK_NULL_HANDLE;
+    m_solid_rt_layout = VK_NULL_HANDLE;
     m_has_skybox = false;
     GEVulkanDriver* vk = static_cast<GEVulkanDriver*>(getDriver());
     m_texture_descriptor = vk->getMeshTextureDescriptor();
@@ -305,6 +307,8 @@ GEVulkanDrawCall::~GEVulkanDrawCall()
         m_graphics_pipelines.clear();
         vkDestroyPipelineLayout(vk->getDevice(), m_pipeline_layout, NULL);
         vkDestroyPipelineLayout(vk->getDevice(), m_skybox_layout, NULL);
+        if (m_solid_rt_layout != VK_NULL_HANDLE)
+            vkDestroyPipelineLayout(vk->getDevice(), m_solid_rt_layout, NULL);
         for (VkPipelineLayout layout : m_deferred_layouts)
         {
             if (layout != VK_NULL_HANDLE)
@@ -945,6 +949,36 @@ void GEVulkanDrawCall::createPipelineLayout(GEVulkanDriver* vk)
             "vkCreatePipelineLayout failed for m_pipeline_layout");
     }
     m_texture_descriptor_set_layout = tdsl;
+
+    // The ray traced reflection of the solid materials (the scene needs the
+    // mesh textures for the hits), the pass is created with the lighting pass
+    if (m_solid_rt_layout != VK_NULL_HANDLE)
+    {
+        vkDestroyPipelineLayout(vk->getDevice(), m_solid_rt_layout, NULL);
+        m_solid_rt_layout = VK_NULL_HANDLE;
+    }
+    GEVulkanFBOTexture* rtt = vk->getRTTTexture();
+    if (!isShadow() && getGEConfig()->m_pbr && vk->getRTScene() && rtt &&
+        rtt->isSplit() &&
+        static_cast<GEVulkanDeferredFBOSplit*>(rtt)->hasSolidRT())
+    {
+        std::vector<VkDescriptorSetLayout> rt_layouts =
+        {
+            vk->getRTScene()->getDescriptorSetLayout(),
+            m_data_layout,
+            rtt->getDescriptorSetLayout(GVDFP_HDR),
+            vk->getSkyBoxRenderer()->getEnvDescriptorSetLayout(),
+            *tdsl
+        };
+        pipeline_layout_info.setLayoutCount = rt_layouts.size();
+        pipeline_layout_info.pSetLayouts = rt_layouts.data();
+        if (vkCreatePipelineLayout(vk->getDevice(), &pipeline_layout_info,
+            NULL, &m_solid_rt_layout) != VK_SUCCESS)
+        {
+            throw std::runtime_error(
+                "vkCreatePipelineLayout failed for m_solid_rt_layout");
+        }
+    }
 }   // createPipelineLayout
 
 // ----------------------------------------------------------------------------
@@ -1124,6 +1158,18 @@ void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
         settings.m_shader_name = "solid_ssr";
         settings.m_pipeline_type = GVPT_SOLID_SSR;
         settings.m_custom_pl = m_deferred_layouts[GVDFP_SOLID_SSR];
+        createPipeline(vk, settings, dp_cache);
+        def_mat.m_alphablend = false;
+    }
+
+    if (m_solid_rt_layout != VK_NULL_HANDLE)
+    {
+        def_mat.m_alphablend = true;
+        def_mat.m_fragment_shader = "solid_rt.frag";
+        settings.loadMaterial(def_mat);
+        settings.m_shader_name = "solid_rt";
+        settings.m_pipeline_type = GVPT_SOLID_RT;
+        settings.m_custom_pl = m_solid_rt_layout;
         createPipeline(vk, settings, dp_cache);
         def_mat.m_alphablend = false;
     }
@@ -2604,6 +2650,39 @@ void GEVulkanDrawCall::renderSolidSSR(GEVulkanDriver* vk, VkCommandBuffer cmd)
         NULL);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }   // renderSolidSSR
+
+// ----------------------------------------------------------------------------
+void GEVulkanDrawCall::renderSolidRT(GEVulkanDriver* vk, VkCommandBuffer cmd)
+{
+    GEVulkanRTScene* rt_scene = vk->getRTScene();
+    if (m_solid_rt_layout == VK_NULL_HANDLE || !rt_scene ||
+        !rt_scene->isReady() || m_visible_nodes.empty())
+        return;
+    auto& pl = m_graphics_pipelines.at("solid_rt").m_pipelines;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        *pl[GVPT_SOLID_RT]);
+    // The scene
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_solid_rt_layout, 0, 1, rt_scene->getDescriptorSet(), 0, NULL);
+    // Camera
+    int current_buffer_idx = vk->getCurrentBufferIdx();
+    std::vector<uint32_t> dynamic_offsets = getDefaultDynamicOffsets();
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_solid_rt_layout, 1, 1, &m_data_descriptor_sets[current_buffer_idx],
+        dynamic_offsets.size(), dynamic_offsets.data());
+    // g-buffer (the normal has the gloss)
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_solid_rt_layout, 2, 1,
+        vk->getRTTTexture()->getDescriptorSet(GVDFP_HDR), 0, NULL);
+    // Environment (not used yet, a miss keeps the lit specular IBL)
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_solid_rt_layout, 3, 1, getEnvDescriptorSet(vk), 0, NULL);
+    // Textures of the hits
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_solid_rt_layout, 4, 1, m_texture_descriptor->getDescriptorSet(), 0,
+        NULL);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+}   // renderSolidRT
 
 // ----------------------------------------------------------------------------
 bool GEVulkanDrawCall::hasLightScatter() const

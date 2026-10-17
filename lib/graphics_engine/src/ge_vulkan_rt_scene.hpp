@@ -72,6 +72,14 @@ private:
 
     VmaAllocation m_geometry_memory;
 
+    // Set 0 of the ray traced pass: the TLAS, the data buffer and the geometry
+    // buffer (see solid_rt.frag), updated after the scene is built
+    VkDescriptorSetLayout m_descriptor_layout;
+
+    VkDescriptorPool m_descriptor_pool;
+
+    VkDescriptorSet m_descriptor_set;
+
     VkBuffer m_blas_buffer;
 
     VmaAllocation m_blas_memory;
@@ -105,6 +113,8 @@ private:
     bool createScratchBuffer(VkDeviceSize size, VkBuffer& buffer,
         VmaAllocation& memory, VkDeviceAddress& aligned_address);
     // ------------------------------------------------------------------------
+    void updateDescriptorSet();
+    // ------------------------------------------------------------------------
     bool buildAccelerationStructures(
         const std::vector<VkAccelerationStructureGeometryKHR>& geometries,
         const std::vector<VkAccelerationStructureBuildRangeInfoKHR>& ranges);
@@ -112,7 +122,7 @@ public:
     // ------------------------------------------------------------------------
     GEVulkanRTScene(GEVulkanDriver* vk);
     // ------------------------------------------------------------------------
-    ~GEVulkanRTScene()                                            { clear(); }
+    ~GEVulkanRTScene();
     // ------------------------------------------------------------------------
     // Collect the static nodes under root and build the scene, it waits for
     // the device so call it when loading, returns true if something was built
@@ -124,6 +134,13 @@ public:
     bool isReady() const                   { return m_tlas != VK_NULL_HANDLE; }
     // ------------------------------------------------------------------------
     VkAccelerationStructureKHR getTLAS() const               { return m_tlas; }
+    // ------------------------------------------------------------------------
+    VkDescriptorSetLayout getDescriptorSetLayout() const
+                                                { return m_descriptor_layout; }
+    // ------------------------------------------------------------------------
+    // Valid to bind if isReady()
+    const VkDescriptorSet* getDescriptorSet() const
+                                                  { return &m_descriptor_set; }
     // ------------------------------------------------------------------------
     VkBuffer getDataBuffer() const                    { return m_data_buffer; }
     // ------------------------------------------------------------------------

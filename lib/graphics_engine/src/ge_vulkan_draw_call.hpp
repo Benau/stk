@@ -90,6 +90,9 @@ enum GEVulkanPipelineType : unsigned
     // Fullscreen draw in the lighting pass which blends the reflection of the
     // solid materials over them, see solid_ssr.frag
     GVPT_SOLID_SSR,
+    // Same as above, but the reflection is traced in the ray traced scene,
+    // see solid_rt.frag
+    GVPT_SOLID_RT,
 };
 
 struct GEMaterial;
@@ -262,6 +265,10 @@ protected:
 
     VkPipelineLayout m_pipeline_layout, m_skybox_layout;
 
+    // Layout of GVPT_SOLID_RT, NULL if the FBO has no ray traced reflection,
+    // it has the mesh textures so it's created with m_pipeline_layout
+    VkPipelineLayout m_solid_rt_layout;
+
     std::vector<VkPipelineLayout> m_deferred_layouts;
 
     std::unordered_map<std::string, PipelineData> m_graphics_pipelines;
@@ -429,6 +436,11 @@ public:
     // over the lit hdr, in the lighting pass, only if the FBO has it
     // (GEVulkanDeferredFBOSplit::hasSolidSSR)
     void renderSolidSSR(GEVulkanDriver* vk, VkCommandBuffer cmd);
+    // ------------------------------------------------------------------------
+    // Same for the reflection of the ray traced scene (GVPT_SOLID_RT), only if
+    // the FBO has it (GEVulkanDeferredFBOSplit::hasSolidRT) and the scene is
+    // built
+    void renderSolidRT(GEVulkanDriver* vk, VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
     unsigned getPolyCount() const
     {

@@ -385,6 +385,8 @@ namespace GE
         GEVulkanMeshCache* getVulkanMeshCache() const;
         GEVulkanSkyBoxRenderer* getSkyBoxRenderer() const
                                                    { return m_skybox_renderer; }
+        // NULL if ray query is not supported
+        GEVulkanRTScene* getRTScene() const               { return m_rt_scene; }
         GEVulkanTextureDescriptor* getMeshTextureDescriptor() const
                                            { return m_mesh_texture_descriptor; }
         GEVulkanFBOTexture* getRTTTexture() const      { return m_rtt_texture; }
