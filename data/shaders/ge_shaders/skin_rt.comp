@@ -1,0 +1,91 @@
+// Skins the bind pose vertices of a geometry of the skinned BLAS of
+// GEVulkanRTScene into world space GERTVertex (one thread for every vertex),
+// before the BLAS is updated. The joint matrices are the ones of the pose of
+// the node (GEVulkanAnimatedMeshSceneNode::getSkinningMatrices) like the ones
+// spm_skinning.vert gets from the skinning buffer of the draw call, so the pose
+// is the same.
+//
+// Set 0 binding 0 is the joint matrices of the scene (GEVulkanRTScene), binding
+// 1 the mesh cache of the driver (GEVulkanMeshCache), which has the bind pose:
+// 8 words for each vertex (position, packed normal, linear color, 2 half uvs,
+// tangent), and 4 words for each vertex of a mesh buffer with skinning, which
+// are 4 s16 joints and 4 half weights. Binding 2 is the data buffer of
+// GEVulkanRTScene, where the output vertices (8 words of GERTVertex: position,
+// color, normal, 2 half uvs) are written
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std140) readonly buffer SkinningMatrices
+{
+    mat4 m_mat[];
+} u_skinning_matrices;
+
+layout(set = 0, binding = 1, std430) readonly buffer RTMeshCache
+{
+    uint u_mesh_cache[];
+};
+
+layout(set = 0, binding = 2, std430) writeonly buffer RTData
+{
+    uint u_rt_data[];
+};
+
+layout(push_constant, std430) uniform PushConstants
+{
+    // The absolute transformation of the node (the memory of an irrlicht
+    // matrix is a column major one of column vectors)
+    mat4 m_world;
+    // First word of the static part of the first vertex in the mesh cache
+    uint m_source_word;
+    // First word of the joints and weights of the first vertex
+    uint m_skin_word;
+    // First word of the first output vertex in the data buffer
+    uint m_dst_word;
+    uint m_vertex_count;
+    // The first joint matrix of the node
+    int m_skinning_offset;
+} pc;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.m_vertex_count)
+        return;
+
+    uint s = pc.m_source_word + i * 8u;
+    vec3 position = vec3(uintBitsToFloat(u_mesh_cache[s]),
+        uintBitsToFloat(u_mesh_cache[s + 1u]),
+        uintBitsToFloat(u_mesh_cache[s + 2u]));
+    // A2B10G10R10 snorm, x is the lowest bits
+    uint packed_normal = u_mesh_cache[s + 3u];
+    vec3 normal = max(vec3(float(int(packed_normal << 22u) >> 22),
+        float(int(packed_normal << 12u) >> 22),
+        float(int(packed_normal << 2u) >> 22)) / 511.0, vec3(-1.0));
+
+    uint k = pc.m_skin_word + i * 4u;
+    uint joints_01 = u_mesh_cache[k];
+    uint joints_23 = u_mesh_cache[k + 1u];
+    ivec4 joint = ivec4(int(joints_01 << 16u) >> 16, int(joints_01) >> 16,
+        int(joints_23 << 16u) >> 16, int(joints_23) >> 16);
+    vec2 weight_01 = unpackHalf2x16(u_mesh_cache[k + 2u]);
+    vec2 weight_23 = unpackHalf2x16(u_mesh_cache[k + 3u]);
+
+    mat4 joint_matrix =
+        weight_01.x * u_skinning_matrices.m_mat[max(joint[0] + pc.m_skinning_offset, 0)] +
+        weight_01.y * u_skinning_matrices.m_mat[max(joint[1] + pc.m_skinning_offset, 0)] +
+        weight_23.x * u_skinning_matrices.m_mat[max(joint[2] + pc.m_skinning_offset, 0)] +
+        weight_23.y * u_skinning_matrices.m_mat[max(joint[3] + pc.m_skinning_offset, 0)];
+    vec3 world_position =
+        (pc.m_world * (joint_matrix * vec4(position, 1.0))).xyz;
+    vec3 world_normal = normalize(
+        mat3(pc.m_world) * (joint_matrix * vec4(normal, 0.0)).xyz);
+
+    uint d = pc.m_dst_word + i * 8u;
+    u_rt_data[d] = floatBitsToUint(world_position.x);
+    u_rt_data[d + 1u] = floatBitsToUint(world_position.y);
+    u_rt_data[d + 2u] = floatBitsToUint(world_position.z);
+    u_rt_data[d + 3u] = u_mesh_cache[s + 4u];
+    u_rt_data[d + 4u] = floatBitsToUint(world_normal.x);
+    u_rt_data[d + 5u] = floatBitsToUint(world_normal.y);
+    u_rt_data[d + 6u] = floatBitsToUint(world_normal.z);
+    u_rt_data[d + 7u] = u_mesh_cache[s + 5u];
+}

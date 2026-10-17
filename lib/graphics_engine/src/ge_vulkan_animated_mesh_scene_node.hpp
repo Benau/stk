@@ -87,6 +87,12 @@ public:
                                                         { return m_abs_scale; }
     // ------------------------------------------------------------------------
     unsigned getSkinningOffset() const            { return m_skinning_offset; }
+    // ------------------------------------------------------------------------
+    // Writes the joint matrices of the current pose (the ones OnAnimate writes
+    // to the skinning buffer of the active draw call) to dest, which has the
+    // joint count of the mesh (GESPM::getJointCount) matrices. Nothing is
+    // written if the mesh is not skinned
+    void getSkinningMatrices(irr::core::matrix4* dest) const;
 };   // GEVulkanAnimatedMeshSceneNode
 
 }

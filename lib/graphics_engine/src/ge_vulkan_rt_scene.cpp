@@ -3,6 +3,7 @@
 #include "ge_main.hpp"
 #include "ge_material_manager.hpp"
 #include "ge_render_info.hpp"
+#include "ge_spm.hpp"
 #include "ge_spm_buffer.hpp"
 #include "ge_vulkan_animated_mesh_scene_node.hpp"
 #include "ge_vulkan_command_loader.hpp"
@@ -10,6 +11,7 @@
 #include "ge_vulkan_dynamic_buffer.hpp"
 #include "ge_vulkan_features.hpp"
 #include "ge_vulkan_mesh_cache.hpp"
+#include "ge_vulkan_shader_manager.hpp"
 #include "ge_vulkan_texture_descriptor.hpp"
 #include "mini_glm.hpp"
 
@@ -19,6 +21,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <set>
 #include <stdexcept>
 #include <string>
 
@@ -157,6 +160,79 @@ void collectDynamicNode(irr::scene::ISceneNode* node,
         collectDynamicNode(children[i], sources);
 }   // collectDynamicNode
 
+// ----------------------------------------------------------------------------
+// A geometry (mesh buffer with skinning) of an animated node with GRTT_DYNAMIC
+struct SkinSource
+{
+    irr::scene::ISceneNode* m_node;
+    GESPMBuffer* m_buffer;
+    unsigned m_material_index;
+    uint32_t m_shading_type;
+};   // SkinSource
+
+// ----------------------------------------------------------------------------
+void collectSkinnedNode(irr::scene::ISceneNode* node,
+                        std::vector<SkinSource>& sources)
+{
+    if (node->isVisible() && node->getType() == irr::scene::ESNT_ANIMATED_MESH &&
+        node->isTrulyVisible())
+    {
+        irr::scene::IMesh* mesh =
+            static_cast<GEVulkanAnimatedMeshSceneNode*>(node)->getMesh();
+        if (mesh && !static_cast<GESPM*>(mesh)->isStatic())
+        {
+            for (unsigned i = 0; i < mesh->getMeshBufferCount(); i++)
+            {
+                irr::scene::IMeshBuffer* b = mesh->getMeshBuffer(i);
+                if (b->getVertexType() != irr::video::EVT_SKINNED_MESH ||
+                    i >= node->getMaterialCount())
+                    continue;
+                GESPMBuffer* buffer = static_cast<GESPMBuffer*>(b);
+                if (!buffer->hasSkinning())
+                    continue;
+                const std::shared_ptr<GERenderInfo>& ri =
+                    node->getMaterial(i).getRenderInfo();
+                if (!ri || ri->getRayTracingType() != GRTT_DYNAMIC)
+                    continue;
+                if (buffer->isDynamic() || buffer->getVertexCount() == 0 ||
+                    buffer->getIndexCount() < 3)
+                    continue;
+                uint32_t type = 0;
+                const GEMaterial* material = GEMaterialManager::getMaterial(
+                    node->getMaterialType(i));
+                if (!getShadingType(material, &type))
+                    continue;
+                sources.push_back({ node, buffer, i, type });
+            }
+        }
+    }
+    const irr::core::array<irr::scene::ISceneNode*>& children =
+        node->getChildren();
+    for (irr::u32 i = 0; i < children.size(); i++)
+        collectSkinnedNode(children[i], sources);
+}   // collectSkinnedNode
+
+// ----------------------------------------------------------------------------
+// What changes of a geometry of a dynamic node (the material id of the mesh
+// textures, uv shift, hue and custom vertex color), the slot is kept alive
+void setDynamicMaterial(GERTGeometry& info, irr::scene::ISceneNode* node,
+                        unsigned material_index, GEVulkanTextureDescriptor* td,
+                        std::vector<std::shared_ptr<int> >& slots)
+{
+    irr::video::SMaterial& m = node->getMaterial(material_index);
+    std::shared_ptr<int> slot = td->getTextureID(m,
+        GEMaterialManager::getMaterial(node->getMaterialType(material_index)));
+    slots.push_back(slot);
+    info.m_material_id = (uint32_t)*slot;
+    const irr::video::SMaterial& cm = m;
+    const irr::core::matrix4& texture_matrix = cm.getTextureMatrix(0);
+    info.m_uv_shift[0] = texture_matrix[8];
+    info.m_uv_shift[1] = texture_matrix[9];
+    const std::shared_ptr<GERenderInfo>& ri = m.getRenderInfo();
+    info.m_hue = ri->getHue() > 0.0f ? ri->getHue() : 0.0f;
+    info.m_vertex_color = srgb255ToLinearFromSColor(ri->getVertexColor()).color;
+}   // setDynamicMaterial
+
 }   // anonymous namespace
 
 // ----------------------------------------------------------------------------
@@ -175,6 +251,13 @@ GEVulkanRTScene::GEVulkanRTScene(GEVulkanDriver* vk)
     m_cache_version = 0;
     m_frame_counter = 0;
     m_warned_dynamic_limit = false;
+    m_skin_layout = VK_NULL_HANDLE;
+    m_skin_pool = VK_NULL_HANDLE;
+    m_skin_pipeline_layout = VK_NULL_HANDLE;
+    m_skin_pipeline = VK_NULL_HANDLE;
+    m_skin_pipeline_failed = false;
+    m_skin_region_offset = 0;
+    m_skin_block = VK_NULL_HANDLE;
     m_geometry_count = 0;
     m_triangle_count = 0;
 
@@ -240,6 +323,19 @@ GEVulkanRTScene::~GEVulkanRTScene()
 {
     clear();
     m_vk->waitIdle();
+    if (m_skin_pipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(m_vk->getDevice(), m_skin_pipeline, NULL);
+    if (m_skin_pipeline_layout != VK_NULL_HANDLE)
+    {
+        vkDestroyPipelineLayout(m_vk->getDevice(), m_skin_pipeline_layout,
+            NULL);
+    }
+    if (m_skin_pool != VK_NULL_HANDLE)
+        vkDestroyDescriptorPool(m_vk->getDevice(), m_skin_pool, NULL);
+    if (m_skin_layout != VK_NULL_HANDLE)
+    {
+        vkDestroyDescriptorSetLayout(m_vk->getDevice(), m_skin_layout, NULL);
+    }
     vkDestroyDescriptorPool(m_vk->getDevice(), m_descriptor_pool, NULL);
     vkDestroyDescriptorSetLayout(m_vk->getDevice(), m_descriptor_layout, NULL);
 }   // ~GEVulkanRTScene
@@ -318,7 +414,8 @@ void GEVulkanRTScene::writeMeshCacheDescriptor(unsigned buffer_idx,
 // ----------------------------------------------------------------------------
 void GEVulkanRTScene::clear()
 {
-    if (m_top_levels.empty() && m_mesh_blas.empty() &&
+    if (m_top_levels.empty() && m_mesh_blas.empty() && !m_skin_set &&
+        m_retired_skin_sets.empty() &&
         m_blas == VK_NULL_HANDLE &&
         m_data_buffer == VK_NULL_HANDLE && !m_geometry_data &&
         m_geometry_sources.empty() && m_texture_ids.empty())
@@ -327,6 +424,19 @@ void GEVulkanRTScene::clear()
     VmaAllocator allocator = m_vk->getVmaAllocator();
     // The device is idle, so the BLAS of the meshes can go too
     m_pending_blas.clear();
+    if (m_skin_set)
+        destroySkinSet(m_skin_set.get());
+    m_skin_set.reset();
+    for (auto& set : m_retired_skin_sets)
+        destroySkinSet(set.get());
+    m_retired_skin_sets.clear();
+    m_skin_failed_buffers.clear();
+    // After the sets, which free their output vertices
+    if (m_skin_block != VK_NULL_HANDLE)
+        vmaDestroyVirtualBlock(m_skin_block);
+    m_skin_block = VK_NULL_HANDLE;
+    m_skin_region_offset = 0;
+    m_skinning_data.reset();
     while (!m_mesh_blas.empty())
         destroyMeshBLAS(m_mesh_blas.begin()->second.get());
     m_cache_version = 0;
@@ -380,7 +490,8 @@ VkDeviceAddress GEVulkanRTScene::getAddress(VkBuffer buffer) const
 bool GEVulkanRTScene::createDeviceBuffer(const void* data, VkDeviceSize size,
                                          VkBufferUsageFlags usage,
                                          VkBuffer& buffer,
-                                         VmaAllocation& memory)
+                                         VmaAllocation& memory,
+                                         VkDeviceSize buffer_size)
 {
     VkBuffer staging_buffer = VK_NULL_HANDLE;
     VmaAllocation staging_memory = VK_NULL_HANDLE;
@@ -408,8 +519,8 @@ bool GEVulkanRTScene::createDeviceBuffer(const void* data, VkDeviceSize size,
     VmaAllocationCreateInfo local_info = {};
     local_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     local_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-    bool ok = m_vk->createBuffer(size, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        local_info, buffer, memory);
+    bool ok = m_vk->createBuffer(buffer_size > size ? buffer_size : size,
+        usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT, local_info, buffer, memory);
     if (ok)
         m_vk->copyBuffer(staging_buffer, buffer, size);
     vmaDestroyBuffer(m_vk->getVmaAllocator(), staging_buffer, staging_memory);
@@ -813,7 +924,292 @@ void GEVulkanRTScene::destroyUnusedMeshBLAS()
     }
     for (MeshBLAS* blas : unused)
         destroyMeshBLAS(blas);
+    // The skinned BLAS, a replaced one is in the frames in flight too
+    if (m_skin_set && m_frame_counter - m_skin_set->m_last_used_frame > grace)
+    {
+        destroySkinSet(m_skin_set.get());
+        m_skin_set.reset();
+    }
+    for (auto it = m_retired_skin_sets.begin();
+        it != m_retired_skin_sets.end();)
+    {
+        if (m_frame_counter - (*it)->m_last_used_frame > grace)
+        {
+            destroySkinSet(it->get());
+            it = m_retired_skin_sets.erase(it);
+        }
+        else
+            it++;
+    }
 }   // destroyUnusedMeshBLAS
+
+// ----------------------------------------------------------------------------
+bool GEVulkanRTScene::createSkinPipeline()
+{
+    if (m_skin_pipeline != VK_NULL_HANDLE)
+        return true;
+    if (m_skin_pipeline_failed)
+        return false;
+    m_skin_pipeline_failed = true;
+    VkDevice device = m_vk->getDevice();
+    // The joint matrices, the mesh cache and the data buffer (output)
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings = {};
+    for (unsigned i = 0; i < bindings.size(); i++)
+    {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo layout_info = {};
+    layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layout_info.bindingCount = bindings.size();
+    layout_info.pBindings = bindings.data();
+    if (vkCreateDescriptorSetLayout(device, &layout_info, NULL,
+        &m_skin_layout) != VK_SUCCESS)
+        return false;
+
+    const unsigned set_count = GEVulkanDriver::getMaxFrameInFlight() + 1;
+    VkDescriptorPoolSize size = {};
+    size.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    size.descriptorCount = set_count * 3;
+    VkDescriptorPoolCreateInfo pool_info = {};
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.poolSizeCount = 1;
+    pool_info.pPoolSizes = &size;
+    pool_info.maxSets = set_count;
+    if (vkCreateDescriptorPool(device, &pool_info, NULL, &m_skin_pool) !=
+        VK_SUCCESS)
+        return false;
+    std::vector<VkDescriptorSetLayout> layouts(set_count, m_skin_layout);
+    m_skin_descriptor_sets.resize(set_count, VK_NULL_HANDLE);
+    VkDescriptorSetAllocateInfo alloc_info = {};
+    alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc_info.descriptorPool = m_skin_pool;
+    alloc_info.descriptorSetCount = set_count;
+    alloc_info.pSetLayouts = layouts.data();
+    if (vkAllocateDescriptorSets(device, &alloc_info,
+        m_skin_descriptor_sets.data()) != VK_SUCCESS)
+        return false;
+
+    VkPushConstantRange push_constant = {};
+    push_constant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    push_constant.offset = 0;
+    // mat4 and 5 words (see skin_rt.comp)
+    push_constant.size = sizeof(float) * 16 + sizeof(uint32_t) * 5;
+    VkPipelineLayoutCreateInfo pipeline_layout_info = {};
+    pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipeline_layout_info.setLayoutCount = 1;
+    pipeline_layout_info.pSetLayouts = &m_skin_layout;
+    pipeline_layout_info.pushConstantRangeCount = 1;
+    pipeline_layout_info.pPushConstantRanges = &push_constant;
+    if (vkCreatePipelineLayout(device, &pipeline_layout_info, NULL,
+        &m_skin_pipeline_layout) != VK_SUCCESS)
+        return false;
+
+    VkComputePipelineCreateInfo pipeline_info = {};
+    pipeline_info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipeline_info.stage.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    pipeline_info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    pipeline_info.stage.module = GEVulkanShaderManager::getShader("skin_rt.comp");
+    pipeline_info.stage.pName = "main";
+    pipeline_info.layout = m_skin_pipeline_layout;
+    if (pipeline_info.stage.module == VK_NULL_HANDLE ||
+        vkCreateComputePipelines(device, m_vk->getPipelineCache(), 1,
+        &pipeline_info, NULL, &m_skin_pipeline) != VK_SUCCESS)
+    {
+        m_skin_pipeline = VK_NULL_HANDLE;
+        return false;
+    }
+    m_skin_pipeline_failed = false;
+    return true;
+}   // createSkinPipeline
+
+// ----------------------------------------------------------------------------
+bool GEVulkanRTScene::createSkinningData()
+{
+    if (m_skinning_data)
+        return true;
+    const size_t size = MAX_SKINNING_MATRICES * sizeof(irr::core::matrix4);
+    std::unique_ptr<GEVulkanDynamicBuffer> data(new GEVulkanDynamicBuffer(
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, size,
+        GEVulkanDriver::getMaxFrameInFlight() + 1, 0));
+    irr::core::matrix4 identity;
+    for (unsigned i = 0; i < data->getHostBuffer().size(); i++)
+    {
+        if (data->getHostBuffer()[i] == VK_NULL_HANDLE ||
+            data->getMappedAddr()[i] == NULL)
+            return false;
+        // Only the first matrix is never written again
+        memcpy(data->getMappedAddr()[i], identity.pointer(), sizeof(identity));
+        vmaFlushAllocation(m_vk->getVmaAllocator(), data->getHostMemory()[i],
+            0, sizeof(identity));
+        VkDescriptorBufferInfo info =
+            { data->getHostBuffer()[i], 0, VK_WHOLE_SIZE };
+        VkWriteDescriptorSet write = {};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = m_skin_descriptor_sets[i];
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &info;
+        vkUpdateDescriptorSets(m_vk->getDevice(), 1, &write, 0, NULL);
+    }
+    m_skinning_data = std::move(data);
+    return true;
+}   // createSkinningData
+
+// ----------------------------------------------------------------------------
+std::unique_ptr<GEVulkanRTScene::SkinSet> GEVulkanRTScene::createSkinSet(
+                                const std::vector<GESPMBuffer*>& buffers,
+                                const std::vector<uint32_t>& shading_types,
+                                GEVulkanMeshCache* mesh_cache)
+{
+    std::unique_ptr<SkinSet> ret;
+    if (!createSkinPipeline() || !createSkinningData() ||
+        m_skin_block == VK_NULL_HANDLE)
+        return ret;
+
+    std::unique_ptr<SkinSet> set(new SkinSet());
+    set->m_buffers = buffers;
+    set->m_last_used_frame = m_frame_counter;
+
+    // Only the output vertices are new, the bind pose and the indices are used
+    // from the mesh cache
+    VkDeviceSize out_bytes = 0;
+    for (GESPMBuffer* b : buffers)
+        out_bytes += (VkDeviceSize)b->getVertexCount() * sizeof(GERTVertex);
+    VmaVirtualAllocationCreateInfo alloc_info = {};
+    alloc_info.size = out_bytes;
+    alloc_info.alignment = sizeof(GERTVertex);
+    VkDeviceSize offset = 0;
+    if (vmaVirtualAllocate(m_skin_block, &alloc_info, &set->m_allocation,
+        &offset) != VK_SUCCESS)
+    {
+        set->m_allocation = VK_NULL_HANDLE;
+        GE::logMessage(GLL_WARNING, "GEVulkanRTScene: no space for the "
+            "skinned meshes (SKIN_DATA_BYTES)");
+        destroySkinSet(set.get());
+        return ret;
+    }
+    // From the start of the data buffer
+    const VkDeviceSize base_offset = m_skin_region_offset + offset;
+    const VkDeviceAddress data_address = getAddress(m_data_buffer);
+    const VkDeviceAddress cache_address = getAddress(mesh_cache->getBuffer());
+    const size_t bone_pitch = sizeof(int16_t) * 8;
+    VkDeviceSize out_prefix = 0;
+    for (unsigned g = 0; g < buffers.size(); g++)
+    {
+        GESPMBuffer* b = buffers[g];
+        const uint32_t vertex_count = b->getVertexCount();
+        const uint32_t index_count = b->getIndexCount() / 3 * 3;
+
+        GERTGeometry info = {};
+        info.m_vertex_offset = (uint32_t)((base_offset + out_prefix) /
+            sizeof(GERTVertex));
+        info.m_index_offset = (uint32_t)(mesh_cache->getIBOOffset() /
+            sizeof(uint16_t) + b->getIBOOffset());
+        info.m_shading_type = shading_types[g];
+        info.m_flags = GRTGF_CACHE_INDEX;
+        set->m_infos.push_back(info);
+        // The static part of a vertex is 8 words in the mesh cache, the joints
+        // and weights (4 words) are after the indices, indexed by the vertex
+        // index of the mesh buffer like the vertex binding (see
+        // GEVulkanMeshCache::updateCache)
+        set->m_source_words.push_back((uint32_t)(b->getVBOOffset() *
+            sizeof(GERTVertex) / sizeof(uint32_t)));
+        set->m_skin_words.push_back((uint32_t)((mesh_cache->
+            getSkinningVBOOffset() + b->getVBOOffset() * bone_pitch) /
+            sizeof(uint32_t)));
+        set->m_dst_words.push_back((uint32_t)((base_offset + out_prefix) /
+            sizeof(uint32_t)));
+        set->m_vertex_counts.push_back(vertex_count);
+
+        VkAccelerationStructureGeometryKHR geometry = {};
+        geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+        geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+        geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+        geometry.geometry.triangles.sType =
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+        geometry.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+        geometry.geometry.triangles.vertexData.deviceAddress = data_address +
+            (VkDeviceAddress)info.m_vertex_offset * sizeof(GERTVertex);
+        geometry.geometry.triangles.vertexStride = sizeof(GERTVertex);
+        geometry.geometry.triangles.maxVertex = vertex_count - 1;
+        geometry.geometry.triangles.indexType = VK_INDEX_TYPE_UINT16;
+        geometry.geometry.triangles.indexData.deviceAddress = cache_address +
+            (VkDeviceAddress)info.m_index_offset * sizeof(uint16_t);
+        set->m_as_geometries.push_back(geometry);
+        VkAccelerationStructureBuildRangeInfoKHR range = {};
+        range.primitiveCount = index_count / 3;
+        set->m_as_ranges.push_back(range);
+        out_prefix += (VkDeviceSize)vertex_count * sizeof(GERTVertex);
+    }
+
+    // Updated every frame, so the build is made for it
+    VkAccelerationStructureBuildGeometryInfoKHR build_info = {};
+    build_info.sType =
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+    build_info.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    build_info.flags = VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR |
+        VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
+    build_info.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    build_info.geometryCount = (uint32_t)set->m_as_geometries.size();
+    build_info.pGeometries = set->m_as_geometries.data();
+    std::vector<uint32_t> primitive_counts;
+    for (const auto& range : set->m_as_ranges)
+        primitive_counts.push_back(range.primitiveCount);
+    VkAccelerationStructureBuildSizesInfoKHR sizes = {};
+    sizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+    vkGetAccelerationStructureBuildSizesKHR(m_vk->getDevice(),
+        VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &build_info,
+        primitive_counts.data(), &sizes);
+    if (!createAccelerationStructure(
+        VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+        sizes.accelerationStructureSize, set->m_blas_buffer,
+        set->m_blas_memory, set->m_blas))
+    {
+        GE::logMessage(GLL_ERROR,
+            "GEVulkanRTScene: creating the skinned BLAS failed");
+        if (set->m_blas != VK_NULL_HANDLE)
+        {
+            vkDestroyAccelerationStructureKHR(m_vk->getDevice(), set->m_blas,
+                NULL);
+        }
+        set->m_blas = VK_NULL_HANDLE;
+        destroySkinSet(set.get());
+        return ret;
+    }
+    set->m_scratch_size = std::max(sizes.buildScratchSize,
+        sizes.updateScratchSize);
+    VkAccelerationStructureDeviceAddressInfoKHR address_info = {};
+    address_info.sType =
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+    address_info.accelerationStructure = set->m_blas;
+    set->m_address = vkGetAccelerationStructureDeviceAddressKHR(
+        m_vk->getDevice(), &address_info);
+    return set;
+}   // createSkinSet
+
+// ----------------------------------------------------------------------------
+// The device must not use it
+void GEVulkanRTScene::destroySkinSet(SkinSet* set)
+{
+    if (set->m_blas != VK_NULL_HANDLE)
+        vkDestroyAccelerationStructureKHR(m_vk->getDevice(), set->m_blas, NULL);
+    if (set->m_blas_buffer != VK_NULL_HANDLE)
+    {
+        vmaDestroyBuffer(m_vk->getVmaAllocator(), set->m_blas_buffer,
+            set->m_blas_memory);
+    }
+    if (set->m_allocation != VK_NULL_HANDLE && m_skin_block)
+        vmaVirtualFree(m_skin_block, set->m_allocation);
+    set->m_buffers.clear();
+    set->m_blas = VK_NULL_HANDLE;
+    set->m_blas_buffer = VK_NULL_HANDLE;
+    set->m_allocation = VK_NULL_HANDLE;
+}   // destroySkinSet
 
 // ----------------------------------------------------------------------------
 void GEVulkanRTScene::update(irr::scene::ISceneNode* root)
@@ -843,6 +1239,13 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root)
         m_pending_blas.clear();
         while (!m_mesh_blas.empty())
             destroyMeshBLAS(m_mesh_blas.begin()->second.get());
+        if (m_skin_set)
+            destroySkinSet(m_skin_set.get());
+        m_skin_set.reset();
+        for (auto& set : m_retired_skin_sets)
+            destroySkinSet(set.get());
+        m_retired_skin_sets.clear();
+        m_skin_failed_buffers.clear();
         m_cache_version = cache_version;
     }
     if (t.m_cache_version != cache_version)
@@ -854,6 +1257,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root)
 
     if (!dynamic)
     {
+        t.m_skin_active = false;
         // Back to what the build wrote, once for each buffer index
         if (!t.m_geometry_static)
         {
@@ -957,22 +1361,121 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root)
         for (unsigned g = 0; g < blas->m_infos.size(); g++)
         {
             GERTGeometry info = blas->m_infos[g];
-            const unsigned material_index = s.m_buffers[g];
-            irr::video::SMaterial& m = node->getMaterial(material_index);
-            std::shared_ptr<int> slot = td->getTextureID(m,
-                GEMaterialManager::getMaterial(
-                node->getMaterialType(material_index)));
-            t.m_slots.push_back(slot);
-            info.m_material_id = (uint32_t)*slot;
-            const irr::video::SMaterial& cm = m;
-            const irr::core::matrix4& texture_matrix = cm.getTextureMatrix(0);
-            info.m_uv_shift[0] = texture_matrix[8];
-            info.m_uv_shift[1] = texture_matrix[9];
-            const std::shared_ptr<GERenderInfo>& ri = m.getRenderInfo();
-            info.m_hue = ri->getHue() > 0.0f ? ri->getHue() : 0.0f;
-            info.m_vertex_color =
-                srgb255ToLinearFromSColor(ri->getVertexColor()).color;
+            setDynamicMaterial(info, node, s.m_buffers[g], td, t.m_slots);
             mapped_addr[geometry_count++] = info;
+        }
+    }
+
+    // The skinned nodes, all in the BLAS of the current set
+    t.m_skin_active = false;
+    t.m_skin_dispatches.clear();
+    std::vector<SkinSource> skins;
+    if (root)
+        collectSkinnedNode(root, skins);
+    if (!skins.empty())
+    {
+        std::vector<GESPMBuffer*> buffers;
+        std::vector<uint32_t> shading_types;
+        for (const SkinSource& s : skins)
+        {
+            buffers.push_back(s.m_buffer);
+            shading_types.push_back(s.m_shading_type);
+        }
+        if ((!m_skin_set || m_skin_set->m_buffers != buffers) &&
+            m_skin_failed_buffers != buffers)
+        {
+            std::unique_ptr<SkinSet> set =
+                createSkinSet(buffers, shading_types, mesh_cache);
+            if (set)
+            {
+                if (m_skin_set)
+                {
+                    // The frames in flight can use it
+                    m_retired_skin_sets.push_back(std::move(m_skin_set));
+                }
+                m_skin_set = std::move(set);
+                m_skin_failed_buffers.clear();
+            }
+            else
+                m_skin_failed_buffers = buffers;
+        }
+        if (m_skin_set && m_skin_set->m_buffers == buffers &&
+            instance_count < m_instance_capacity &&
+            geometry_count - static_count + buffers.size() <=
+            MAX_DYNAMIC_GEOMETRIES)
+        {
+            // The joint matrices of every node (once for its geometries), in
+            // the buffer of this frame, the first one is the identity
+            irr::core::matrix4* matrices = (irr::core::matrix4*)
+                m_skinning_data->getMappedAddr()[buffer_idx];
+            unsigned matrix_count = 1;
+            bool matrices_ok = true;
+            std::vector<TopLevel::SkinDispatch> dispatches;
+            irr::scene::ISceneNode* last_node = NULL;
+            int last_offset = 0;
+            for (const SkinSource& s : skins)
+            {
+                if (s.m_node != last_node)
+                {
+                    GEVulkanAnimatedMeshSceneNode* node =
+                        static_cast<GEVulkanAnimatedMeshSceneNode*>(s.m_node);
+                    const unsigned joint_count = static_cast<GESPM*>(
+                        node->getMesh())->getJointCount();
+                    if (matrix_count + joint_count > MAX_SKINNING_MATRICES)
+                    {
+                        matrices_ok = false;
+                        break;
+                    }
+                    last_node = s.m_node;
+                    last_offset = (int)matrix_count;
+                    node->getSkinningMatrices(matrices + matrix_count);
+                    matrix_count += joint_count;
+                }
+                TopLevel::SkinDispatch dispatch;
+                memcpy(dispatch.m_world, s.m_node->getAbsoluteTransformation()
+                    .pointer(), sizeof(dispatch.m_world));
+                dispatch.m_skinning_offset = last_offset;
+                dispatches.push_back(dispatch);
+            }
+            if (matrix_count > 1)
+            {
+                vmaFlushAllocation(allocator,
+                    m_skinning_data->getHostMemory()[buffer_idx], 0,
+                    matrix_count * sizeof(irr::core::matrix4));
+            }
+            if (!matrices_ok)
+            {
+                GE::logMessage(GLL_WARNING, "GEVulkanRTScene: too many "
+                    "joints (MAX_SKINNING_MATRICES), skinned nodes are not "
+                    "traced");
+            }
+            else
+            {
+                m_skin_set->m_last_used_frame = m_frame_counter;
+                // World space already, so the transform is the identity
+                VkAccelerationStructureInstanceKHR instance = {};
+                instance.transform.matrix[0][0] = 1.0f;
+                instance.transform.matrix[1][1] = 1.0f;
+                instance.transform.matrix[2][2] = 1.0f;
+                instance.instanceCustomIndex = (uint32_t)geometry_count;
+                instance.mask = 0xFF;
+                instance.instanceShaderBindingTableRecordOffset = 0;
+                instance.flags =
+                    VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR |
+                    VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR;
+                instance.accelerationStructureReference = m_skin_set->m_address;
+                instances[instance_count++] = instance;
+                for (unsigned g = 0; g < skins.size(); g++)
+                {
+                    GERTGeometry info = m_skin_set->m_infos[g];
+                    setDynamicMaterial(info, skins[g].m_node,
+                        skins[g].m_material_index, td, t.m_slots);
+                    mapped_addr[geometry_count++] = info;
+                }
+                t.m_skin_dispatches = dispatches;
+                // Updated every frame, so the TLAS is built every frame too
+                t.m_skin_active = true;
+            }
         }
     }
     vmaFlushAllocation(allocator, m_geometry_data->getHostMemory()[buffer_idx],
@@ -1001,15 +1504,19 @@ void GEVulkanRTScene::buildTopLevel(VkCommandBuffer cmd)
     if (!t.m_dirty)
         return;
     t.m_dirty = false;
+    SkinSet* skin_set = t.m_skin_active && m_skin_set &&
+        m_skin_pipeline != VK_NULL_HANDLE ? m_skin_set.get() : NULL;
 
     const VkDeviceSize alignment =
         GEVulkanFeatures::getAccelerationStructureScratchAlignment();
     auto align = [alignment](VkDeviceSize size)
         { return (size + alignment - 1) / alignment * alignment; };
-    // The TLAS first, then the BLAS of the new meshes
+    // The TLAS first, then the BLAS of the new meshes, then the skinned one
     VkDeviceSize needed = align(m_tlas_scratch_size);
     for (MeshBLAS* blas : m_pending_blas)
         needed += align(blas->m_build_scratch_size);
+    if (skin_set)
+        needed += align(skin_set->m_scratch_size);
     if (t.m_scratch_size < needed)
     {
         // The previous frame which used this index is finished
@@ -1032,7 +1539,83 @@ void GEVulkanRTScene::buildTopLevel(VkCommandBuffer cmd)
 
     VkMemoryBarrier barrier = {};
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    if (!m_pending_blas.empty())
+    if (skin_set)
+    {
+        // Skin the bind pose to the output vertices of the BLAS. The queue
+        // executes the previous frame before this one, but the ray queries
+        // of its fragment shaders (using the BLAS and the vertices) can be
+        // still running
+        barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
+            VK_ACCESS_SHADER_WRITE_BIT |
+            VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+            VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        barrier.dstAccessMask = barrier.srcAccessMask;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1,
+            &barrier, 0, NULL, 0, NULL);
+
+        // Binding 0 (the joint matrices of this index) never changes
+        VkDescriptorSet set =
+            m_skin_descriptor_sets[m_vk->getCurrentBufferIdx()];
+        VkDescriptorBufferInfo cache_info = { getMeshCacheDescriptorBuffer(
+            m_vk->getVulkanMeshCache()), 0, VK_WHOLE_SIZE };
+        VkDescriptorBufferInfo data_info = { m_data_buffer, 0, VK_WHOLE_SIZE };
+        std::array<VkWriteDescriptorSet, 2> writes = {};
+        for (unsigned i = 0; i < writes.size(); i++)
+        {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = set;
+            writes[i].dstBinding = i + 1;
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        }
+        writes[0].pBufferInfo = &cache_info;
+        writes[1].pBufferInfo = &data_info;
+        // This set is not used by the previous frames in flight
+        vkUpdateDescriptorSets(m_vk->getDevice(), writes.size(),
+            writes.data(), 0, NULL);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_skin_pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            m_skin_pipeline_layout, 0, 1, &set, 0, NULL);
+        for (unsigned g = 0; g < t.m_skin_dispatches.size(); g++)
+        {
+            struct
+            {
+                float m_world[16];
+                uint32_t m_source_word;
+                uint32_t m_skin_word;
+                uint32_t m_dst_word;
+                uint32_t m_vertex_count;
+                int32_t m_skinning_offset;
+            } pc;
+            static_assert(sizeof(pc) == sizeof(float) * 16 + 5 * 4,
+                "same as the push constants of skin_rt.comp");
+            memcpy(pc.m_world, t.m_skin_dispatches[g].m_world,
+                sizeof(pc.m_world));
+            pc.m_source_word = skin_set->m_source_words[g];
+            pc.m_skin_word = skin_set->m_skin_words[g];
+            pc.m_dst_word = skin_set->m_dst_words[g];
+            pc.m_vertex_count = skin_set->m_vertex_counts[g];
+            pc.m_skinning_offset = t.m_skin_dispatches[g].m_skinning_offset;
+            vkCmdPushConstants(cmd, m_skin_pipeline_layout,
+                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+            vkCmdDispatch(cmd, (pc.m_vertex_count + 63) / 64, 1, 1);
+        }
+        // The builds read the output vertices
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+            VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+            VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1,
+            &barrier, 0, NULL, 0, NULL);
+    }
+
+    if (!m_pending_blas.empty() || skin_set)
     {
         std::vector<VkAccelerationStructureBuildGeometryInfoKHR> infos;
         std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> ranges;
@@ -1055,9 +1638,32 @@ void GEVulkanRTScene::buildTopLevel(VkCommandBuffer cmd)
             infos.push_back(info);
             ranges.push_back(blas->m_as_ranges.data());
         }
+        m_pending_blas.clear();
+        if (skin_set)
+        {
+            // The first time it's built, then it's updated (refit), with
+            // the same flags
+            VkAccelerationStructureBuildGeometryInfoKHR info = {};
+            info.sType =
+                VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+            info.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+            info.flags = VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR |
+                VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
+            info.mode = skin_set->m_built ?
+                VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR :
+                VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+            info.srcAccelerationStructure =
+                skin_set->m_built ? skin_set->m_blas : VK_NULL_HANDLE;
+            info.dstAccelerationStructure = skin_set->m_blas;
+            info.geometryCount = (uint32_t)skin_set->m_as_geometries.size();
+            info.pGeometries = skin_set->m_as_geometries.data();
+            info.scratchData.deviceAddress = scratch;
+            infos.push_back(info);
+            ranges.push_back(skin_set->m_as_ranges.data());
+            skin_set->m_built = true;
+        }
         vkCmdBuildAccelerationStructuresKHR(cmd, (uint32_t)infos.size(),
             infos.data(), ranges.data());
-        m_pending_blas.clear();
         // The TLAS build reads them (and uses the same scratch buffer)
         barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
         barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR |
@@ -1077,11 +1683,15 @@ void GEVulkanRTScene::buildTopLevel(VkCommandBuffer cmd)
     const VkAccelerationStructureBuildRangeInfoKHR* range_ptr = &range;
     vkCmdBuildAccelerationStructuresKHR(cmd, 1, &info, &range_ptr);
 
-    // The ray queries of the fragment shaders
-    barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-    barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+    // The ray queries of the fragment shaders, which read the skinned
+    // vertices (the output of the compute shader) too
+    barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR |
+        VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+        VK_ACCESS_SHADER_READ_BIT;
     vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, NULL, 0,
         NULL);
 }   // buildTopLevel
@@ -1193,11 +1803,25 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
     memcpy(data.data(), vertices.data(), (size_t)vertex_bytes);
     memcpy(data.data() + vertex_bytes, indices.data(), (size_t)index_bytes);
 
+    // The output vertices of the skinned nodes are after the static data,
+    // aligned to the vertex (offsets of GERTGeometry are in units of
+    // GERTVertex), only if the mesh cache is used
+    VkDeviceSize data_buffer_size = 0;
+    if (GEVulkanFeatures::supportsBaseVertexRendering())
+    {
+        m_skin_region_offset = (data.size() + sizeof(GERTVertex) - 1) /
+            sizeof(GERTVertex) * sizeof(GERTVertex);
+        data_buffer_size = m_skin_region_offset + SKIN_DATA_BYTES;
+        VmaVirtualBlockCreateInfo block_info = {};
+        block_info.size = SKIN_DATA_BYTES;
+        if (vmaCreateVirtualBlock(&block_info, &m_skin_block) != VK_SUCCESS)
+            m_skin_block = VK_NULL_HANDLE;
+    }
     if (!createDeviceBuffer(data.data(), data.size(),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        m_data_buffer, m_data_memory) ||
+        m_data_buffer, m_data_memory, data_buffer_size) ||
         !createGeometryData(infos))
     {
         GE::logMessage(GLL_ERROR,

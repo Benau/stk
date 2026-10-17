@@ -156,6 +156,17 @@ void GEVulkanAnimatedMeshSceneNode::OnAnimate(irr::u32 time_ms)
 }   // OnAnimate
 
 // ----------------------------------------------------------------------------
+void GEVulkanAnimatedMeshSceneNode::getSkinningMatrices(
+                                            irr::core::matrix4* dest) const
+{
+    GESPM* spm = static_cast<GESPM*>(Mesh);
+    if (!spm || spm->isStatic())
+        return;
+    spm->getSkinningMatrices(getFrameNr(), dest, m_saved_transition_frame,
+        TransitingBlend);
+}   // getSkinningMatrices
+
+// ----------------------------------------------------------------------------
 irr::scene::IBoneSceneNode* GEVulkanAnimatedMeshSceneNode::getJointNode(const irr::c8* joint_name)
 {
     auto ret = m_joint_nodes.find(joint_name);
