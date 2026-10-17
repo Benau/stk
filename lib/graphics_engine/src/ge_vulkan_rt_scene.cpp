@@ -106,9 +106,7 @@ GEVulkanRTScene::GEVulkanRTScene(GEVulkanDriver* vk)
     m_blas_buffer = VK_NULL_HANDLE;
     m_blas_memory = VK_NULL_HANDLE;
     m_blas = VK_NULL_HANDLE;
-    m_tlas_buffer = VK_NULL_HANDLE;
-    m_tlas_memory = VK_NULL_HANDLE;
-    m_tlas = VK_NULL_HANDLE;
+    m_instance_capacity = 1;
     m_geometry_count = 0;
     m_triangle_count = 0;
 
@@ -179,15 +177,15 @@ GEVulkanRTScene::~GEVulkanRTScene()
 // Nothing uses the sets while the scene is built (clear waits for the device)
 void GEVulkanRTScene::updateDescriptorSet()
 {
-    VkWriteDescriptorSetAccelerationStructureKHR as_write = {};
-    as_write.sType =
-        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
-    as_write.accelerationStructureCount = 1;
-    as_write.pAccelerationStructures = &m_tlas;
     VkDescriptorBufferInfo data_info = { m_data_buffer, 0, VK_WHOLE_SIZE };
     for (unsigned set = 0; set < m_descriptor_sets.size(); set++)
     {
-        // Each set reads the host buffer of the same index
+        // Each set reads the TLAS and the host buffer of the same index
+        VkWriteDescriptorSetAccelerationStructureKHR as_write = {};
+        as_write.sType =
+            VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+        as_write.accelerationStructureCount = 1;
+        as_write.pAccelerationStructures = &m_top_levels[set].m_tlas;
         VkDescriptorBufferInfo geometry_info =
             { m_geometry_data->getHostBuffer()[set], 0, VK_WHOLE_SIZE };
         std::array<VkWriteDescriptorSet, 3> writes = {};
@@ -213,16 +211,27 @@ void GEVulkanRTScene::updateDescriptorSet()
 // ----------------------------------------------------------------------------
 void GEVulkanRTScene::clear()
 {
-    if (m_tlas == VK_NULL_HANDLE && m_blas == VK_NULL_HANDLE &&
+    if (m_top_levels.empty() && m_blas == VK_NULL_HANDLE &&
         m_data_buffer == VK_NULL_HANDLE && !m_geometry_data &&
         m_geometry_sources.empty() && m_texture_ids.empty())
         return;
     m_vk->waitIdle();
     VmaAllocator allocator = m_vk->getVmaAllocator();
-    if (m_tlas != VK_NULL_HANDLE)
-        vkDestroyAccelerationStructureKHR(m_vk->getDevice(), m_tlas, NULL);
-    if (m_tlas_buffer != VK_NULL_HANDLE)
-        vmaDestroyBuffer(allocator, m_tlas_buffer, m_tlas_memory);
+    for (TopLevel& t : m_top_levels)
+    {
+        if (t.m_tlas != VK_NULL_HANDLE)
+            vkDestroyAccelerationStructureKHR(m_vk->getDevice(), t.m_tlas, NULL);
+        if (t.m_tlas_buffer != VK_NULL_HANDLE)
+            vmaDestroyBuffer(allocator, t.m_tlas_buffer, t.m_tlas_memory);
+        if (t.m_instance_buffer != VK_NULL_HANDLE)
+        {
+            if (t.m_instance_mapped)
+                vmaUnmapMemory(allocator, t.m_instance_memory);
+            vmaDestroyBuffer(allocator, t.m_instance_buffer,
+                t.m_instance_memory);
+        }
+    }
+    m_top_levels.clear();
     if (m_blas != VK_NULL_HANDLE)
         vkDestroyAccelerationStructureKHR(m_vk->getDevice(), m_blas, NULL);
     if (m_blas_buffer != VK_NULL_HANDLE)
@@ -235,9 +244,9 @@ void GEVulkanRTScene::clear()
         source.m_node->drop();
     m_geometry_sources.clear();
     m_geometry_infos.clear();
-    m_tlas = m_blas = VK_NULL_HANDLE;
-    m_tlas_buffer = m_blas_buffer = m_data_buffer = VK_NULL_HANDLE;
-    m_tlas_memory = m_blas_memory = m_data_memory = VK_NULL_HANDLE;
+    m_blas = VK_NULL_HANDLE;
+    m_blas_buffer = m_data_buffer = VK_NULL_HANDLE;
+    m_blas_memory = m_data_memory = VK_NULL_HANDLE;
     m_texture_ids.clear();
     m_geometry_count = 0;
     m_triangle_count = 0;
@@ -334,6 +343,29 @@ bool GEVulkanRTScene::createScratchBuffer(VkDeviceSize size, VkBuffer& buffer,
 }   // createScratchBuffer
 
 // ----------------------------------------------------------------------------
+VkAccelerationStructureInstanceKHR GEVulkanRTScene::getStaticInstance() const
+{
+    VkAccelerationStructureDeviceAddressInfoKHR address_info = {};
+    address_info.sType =
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+    address_info.accelerationStructure = m_blas;
+    VkAccelerationStructureInstanceKHR instance = {};
+    instance.transform.matrix[0][0] = 1.0f;
+    instance.transform.matrix[1][1] = 1.0f;
+    instance.transform.matrix[2][2] = 1.0f;
+    instance.instanceCustomIndex = 0;
+    instance.mask = 0xFF;
+    instance.instanceShaderBindingTableRecordOffset = 0;
+    instance.flags =
+        VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR |
+        VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR;
+    instance.accelerationStructureReference =
+        vkGetAccelerationStructureDeviceAddressKHR(m_vk->getDevice(),
+        &address_info);
+    return instance;
+}   // getStaticInstance
+
+// ----------------------------------------------------------------------------
 bool GEVulkanRTScene::buildAccelerationStructures(
     const std::vector<VkAccelerationStructureGeometryKHR>& geometries,
     const std::vector<VkAccelerationStructureBuildRangeInfoKHR>& ranges)
@@ -373,51 +405,36 @@ bool GEVulkanRTScene::buildAccelerationStructures(
         blas_scratch_memory, blas_info.scratchData.deviceAddress))
         return false;
 
-    // TLAS with a single identity instance of the BLAS, the triangles are in
-    // world space already
-    VkAccelerationStructureDeviceAddressInfoKHR address_info = {};
-    address_info.sType =
-        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
-    address_info.accelerationStructure = m_blas;
-    VkAccelerationStructureInstanceKHR instance = {};
-    instance.transform.matrix[0][0] = 1.0f;
-    instance.transform.matrix[1][1] = 1.0f;
-    instance.transform.matrix[2][2] = 1.0f;
-    instance.instanceCustomIndex = 0;
-    instance.mask = 0xFF;
-    instance.instanceShaderBindingTableRecordOffset = 0;
-    instance.flags =
-        VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR |
-        VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR;
-    instance.accelerationStructureReference =
-        vkGetAccelerationStructureDeviceAddressKHR(device, &address_info);
-
-    VkBuffer instance_buffer = VK_NULL_HANDLE;
-    VmaAllocation instance_memory = VK_NULL_HANDLE;
+    // One TLAS (and instance buffer) for each buffer index, all with the same
+    // single instance of the BLAS for now
+    VkAccelerationStructureInstanceKHR instance = getStaticInstance();
+    const unsigned top_level_count = GEVulkanDriver::getMaxFrameInFlight() + 1;
+    m_top_levels.resize(top_level_count);
     VmaAllocationCreateInfo instance_alloc = {};
     instance_alloc.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
     instance_alloc.flags =
         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
         VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
     instance_alloc.preferredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    if (!m_vk->createBuffer(sizeof(instance),
-        VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, instance_alloc,
-        instance_buffer, instance_memory))
+    const VkDeviceSize instance_bytes =
+        (VkDeviceSize)m_instance_capacity * sizeof(instance);
+    bool ok = true;
+    for (TopLevel& t : m_top_levels)
     {
-        vmaDestroyBuffer(allocator, blas_scratch, blas_scratch_memory);
-        return false;
+        if (!m_vk->createBuffer(instance_bytes,
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
+            | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, instance_alloc,
+            t.m_instance_buffer, t.m_instance_memory) ||
+            vmaMapMemory(allocator, t.m_instance_memory,
+            &t.m_instance_mapped) != VK_SUCCESS)
+        {
+            t.m_instance_mapped = NULL;
+            ok = false;
+            break;
+        }
+        memcpy(t.m_instance_mapped, &instance, sizeof(instance));
+        vmaFlushAllocation(allocator, t.m_instance_memory, 0, instance_bytes);
     }
-    void* mapped = NULL;
-    if (vmaMapMemory(allocator, instance_memory, &mapped) != VK_SUCCESS)
-    {
-        vmaDestroyBuffer(allocator, instance_buffer, instance_memory);
-        vmaDestroyBuffer(allocator, blas_scratch, blas_scratch_memory);
-        return false;
-    }
-    memcpy(mapped, &instance, sizeof(instance));
-    vmaUnmapMemory(allocator, instance_memory);
-    vmaFlushAllocation(allocator, instance_memory, 0, sizeof(instance));
 
     VkAccelerationStructureGeometryKHR tlas_geometry = {};
     tlas_geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
@@ -426,8 +443,6 @@ bool GEVulkanRTScene::buildAccelerationStructures(
     tlas_geometry.geometry.instances.sType =
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
     tlas_geometry.geometry.instances.arrayOfPointers = VK_FALSE;
-    tlas_geometry.geometry.instances.data.deviceAddress =
-        getAddress(instance_buffer);
     VkAccelerationStructureBuildGeometryInfoKHR tlas_info = {};
     tlas_info.sType =
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
@@ -436,51 +451,64 @@ bool GEVulkanRTScene::buildAccelerationStructures(
     tlas_info.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
     tlas_info.geometryCount = 1;
     tlas_info.pGeometries = &tlas_geometry;
-    const uint32_t instance_count = 1;
     VkAccelerationStructureBuildSizesInfoKHR tlas_sizes = {};
     tlas_sizes.sType =
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
     vkGetAccelerationStructureBuildSizesKHR(device,
         VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &tlas_info,
-        &instance_count, &tlas_sizes);
+        &m_instance_capacity, &tlas_sizes);
 
     VkBuffer tlas_scratch = VK_NULL_HANDLE;
     VmaAllocation tlas_scratch_memory = VK_NULL_HANDLE;
-    bool ok = createAccelerationStructure(
-        VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
-        tlas_sizes.accelerationStructureSize, m_tlas_buffer, m_tlas_memory,
-        m_tlas) && createScratchBuffer(tlas_sizes.buildScratchSize,
-        tlas_scratch, tlas_scratch_memory, tlas_info.scratchData.deviceAddress);
     if (ok)
     {
-        tlas_info.dstAccelerationStructure = m_tlas;
-
+        for (TopLevel& t : m_top_levels)
+        {
+            if (!createAccelerationStructure(
+                VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
+                tlas_sizes.accelerationStructureSize, t.m_tlas_buffer,
+                t.m_tlas_memory, t.m_tlas))
+            {
+                ok = false;
+                break;
+            }
+        }
+    }
+    ok = ok && createScratchBuffer(tlas_sizes.buildScratchSize, tlas_scratch,
+        tlas_scratch_memory, tlas_info.scratchData.deviceAddress);
+    if (ok)
+    {
         VkCommandBuffer cmd = GEVulkanCommandLoader::beginSingleTimeCommands();
         const VkAccelerationStructureBuildRangeInfoKHR* blas_ranges =
             ranges.data();
         vkCmdBuildAccelerationStructuresKHR(cmd, 1, &blas_info, &blas_ranges);
 
-        // The TLAS build reads the BLAS
+        // The TLAS builds read the BLAS, and they share the scratch buffer
         VkMemoryBarrier barrier = {};
         barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         barrier.srcAccessMask =
             VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-        barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-        vkCmdPipelineBarrier(cmd,
-            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
-            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1,
-            &barrier, 0, NULL, 0, NULL);
-
+        barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR |
+            VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
         VkAccelerationStructureBuildRangeInfoKHR tlas_range = {};
-        tlas_range.primitiveCount = instance_count;
+        tlas_range.primitiveCount = 1;
         const VkAccelerationStructureBuildRangeInfoKHR* tlas_range_ptr =
             &tlas_range;
-        vkCmdBuildAccelerationStructuresKHR(cmd, 1, &tlas_info,
-            &tlas_range_ptr);
+        for (TopLevel& t : m_top_levels)
+        {
+            vkCmdPipelineBarrier(cmd,
+                VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+                VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, 0, 1,
+                &barrier, 0, NULL, 0, NULL);
+            tlas_geometry.geometry.instances.data.deviceAddress =
+                getAddress(t.m_instance_buffer);
+            tlas_info.dstAccelerationStructure = t.m_tlas;
+            vkCmdBuildAccelerationStructuresKHR(cmd, 1, &tlas_info,
+                &tlas_range_ptr);
+        }
         // The submit waits for the fence
         GEVulkanCommandLoader::endSingleTimeCommands(cmd);
     }
-    vmaDestroyBuffer(allocator, instance_buffer, instance_memory);
     vmaDestroyBuffer(allocator, blas_scratch, blas_scratch_memory);
     if (tlas_scratch != VK_NULL_HANDLE)
         vmaDestroyBuffer(allocator, tlas_scratch, tlas_scratch_memory);

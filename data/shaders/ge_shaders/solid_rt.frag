@@ -1,8 +1,9 @@
 // Ray traced reflection of the solid materials (GEVulkanDrawCall::
 // renderSolidRT), a fullscreen draw at the end of the lighting pass like
 // solid_ssr.frag, but the reflected ray is traced in the ray traced scene
-// (GEVulkanRTScene, one acceleration structure of the static nodes in world
-// space) instead of the screen, so it has no history and no screen edges.
+// (GEVulkanRTScene, an acceleration structure of the static nodes in world
+// space and instances of other ones) instead of the screen, so it has no
+// history and no screen edges.
 //
 // The hit is lit like solid.frag + deferred_pbr.frag: albedo of the mesh
 // textures (with the hue, vertex color and uv shift of the node, which are
@@ -13,6 +14,12 @@
 // IBL (same as solid_ssr.frag), a not glossy pixel is discarded, so the
 // specular IBL which is already in the lit color stays (the output is
 // premultiplied, blended by m_alphablend: src + dst * (1 - alpha)).
+//
+// The index of the geometry of a hit is the custom index of its instance (the
+// first GERTGeometry of the instance) plus the geometry index of the hit in
+// the BLAS of the instance. Vertices of an instance which is not in world space
+// are in the space of its BLAS, so the normal is transformed to world space by
+// the world to object matrix of the hit.
 //
 // Set 0 is the one of GEVulkanRTScene (acceleration structure, data buffer,
 // geometry buffer), set 1 the camera and the global light, set 2 GVDFP_HDR
@@ -107,7 +114,7 @@ float getSunShadow(vec3 position, vec3 normal, vec3 sun_direction)
 // The lit (hdr) color of the closest hit, the values of the hit are
 // parameters because a ray query can't be one
 vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
-              vec3 ray_origin, vec3 ray_direction)
+              mat3 world_to_object, vec3 ray_origin, vec3 ray_direction)
 {
     vec3 bary = vec3(1.0 - b.x - b.y, b.x, b.y);
 
@@ -129,6 +136,8 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
         getRTVertexNormal(idx.x, geometry.m_vertex_offset) * bary.x +
         getRTVertexNormal(idx.y, geometry.m_vertex_offset) * bary.y +
         getRTVertexNormal(idx.z, geometry.m_vertex_offset) * bary.z);
+    // The inverse transpose of object to world (row vector times matrix)
+    normal = normalize(normal * world_to_object);
     vec3 eyedir = -ray_direction;
     // Two sided
     if (dot(normal, eyedir) < 0.0)
@@ -230,11 +239,14 @@ void main()
 
     // Glossy 0.5 - 1.0 to 0.0 - 1.0
     float weight = (specval - 0.5) * 2.0;
-    vec3 hit_color = shadeHit(
-        uint(rayQueryGetIntersectionGeometryIndexEXT(ray_query, true)),
+    uint geometry_index =
+        uint(rayQueryGetIntersectionInstanceCustomIndexEXT(ray_query, true)) +
+        uint(rayQueryGetIntersectionGeometryIndexEXT(ray_query, true));
+    vec3 hit_color = shadeHit(geometry_index,
         uint(rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true)),
         rayQueryGetIntersectionBarycentricsEXT(ray_query, true),
-        rayQueryGetIntersectionTEXT(ray_query, true), world_position,
-        world_reflection);
+        rayQueryGetIntersectionTEXT(ray_query, true),
+        mat3(rayQueryGetIntersectionWorldToObjectEXT(ray_query, true)),
+        world_position, world_reflection);
     o_color = vec4(hit_color * weight, weight);
 }

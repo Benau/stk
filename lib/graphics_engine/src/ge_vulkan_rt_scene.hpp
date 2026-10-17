@@ -106,11 +106,35 @@ private:
 
     VkAccelerationStructureKHR m_blas;
 
-    VkBuffer m_tlas_buffer;
+    // The top level acceleration structure of a buffer index (frames in
+    // flight + 1 of them, same as m_geometry_data), with the host visible
+    // buffer of its VkAccelerationStructureInstanceKHR array which is written
+    // directly (never read) before the fence is waited, so a frame never
+    // touches what the gpu is still reading
+    struct TopLevel
+    {
+        VkBuffer m_instance_buffer;
+        VmaAllocation m_instance_memory;
+        void* m_instance_mapped;
+        VkBuffer m_tlas_buffer;
+        VmaAllocation m_tlas_memory;
+        VkAccelerationStructureKHR m_tlas;
+        // ------------------------------------------------------------------
+        TopLevel()
+        {
+            m_instance_buffer = VK_NULL_HANDLE;
+            m_instance_memory = VK_NULL_HANDLE;
+            m_instance_mapped = NULL;
+            m_tlas_buffer = VK_NULL_HANDLE;
+            m_tlas_memory = VK_NULL_HANDLE;
+            m_tlas = VK_NULL_HANDLE;
+        }
+    };
 
-    VmaAllocation m_tlas_memory;
+    std::vector<TopLevel> m_top_levels;
 
-    VkAccelerationStructureKHR m_tlas;
+    // Number of instances the instance buffers and the TLAS can hold
+    uint32_t m_instance_capacity;
 
     // Keep the slots of the mesh texture descriptor alive
     std::vector<std::shared_ptr<int> > m_texture_ids;
@@ -141,6 +165,10 @@ private:
     bool buildAccelerationStructures(
         const std::vector<VkAccelerationStructureGeometryKHR>& geometries,
         const std::vector<VkAccelerationStructureBuildRangeInfoKHR>& ranges);
+    // ------------------------------------------------------------------------
+    // The instance of the static BLAS (identity, world space triangles, custom
+    // index 0 which is the first GERTGeometry of the BLAS)
+    VkAccelerationStructureInstanceKHR getStaticInstance() const;
 public:
     // ------------------------------------------------------------------------
     GEVulkanRTScene(GEVulkanDriver* vk);
@@ -154,9 +182,14 @@ public:
     // Wait for the device and destroy everything
     void clear();
     // ------------------------------------------------------------------------
-    bool isReady() const                   { return m_tlas != VK_NULL_HANDLE; }
+    bool isReady() const
+    {
+        return !m_top_levels.empty() &&
+            m_top_levels[0].m_tlas != VK_NULL_HANDLE;
+    }
     // ------------------------------------------------------------------------
-    VkAccelerationStructureKHR getTLAS() const               { return m_tlas; }
+    VkAccelerationStructureKHR getTLAS(unsigned buffer_idx) const
+                                    { return m_top_levels[buffer_idx].m_tlas; }
     // ------------------------------------------------------------------------
     VkDescriptorSetLayout getDescriptorSetLayout() const
                                                 { return m_descriptor_layout; }
