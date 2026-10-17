@@ -1988,12 +1988,14 @@ bool GEVulkanDriver::endScene()
     {
         if (!m_rt_scene->isReady())
             m_rt_scene->build(sm->getRootSceneNode());
-        else if (getGEConfig()->m_dynamic_ray_tracing)
+        else
         {
-            // Writes the GERTGeometry directly into the host buffer of this
-            // frame, so it must be before the fence is waited like
-            // GEVulkanDrawCall::generate (a build writes all buffers)
-            m_rt_scene->update();
+            // Writes the GERTGeometry and the instances directly into the host
+            // buffers of this frame, so it must be before the fence is waited
+            // like GEVulkanDrawCall::generate (a build writes all buffers).
+            // It does nothing if m_dynamic_ray_tracing is false (after
+            // restoring what the build wrote)
+            m_rt_scene->update(sm->getRootSceneNode());
         }
     }
 
@@ -2719,6 +2721,10 @@ void GEVulkanDriver::buildCommandBuffers()
                 sfbo->render(getCurrentCommandBuffer(), p.second);
         }
     }
+    // The TLAS of the ray traced reflection (the new BLAS and the dynamic
+    // instances), it's outside any render pass
+    if (m_rt_scene)
+        m_rt_scene->buildTopLevel(getCurrentCommandBuffer());
 
     // Clear values and render pass info of the current m_rtt_texture
     auto fill_render_pass_info = [this](VkRenderPassBeginInfo& info,

@@ -5,18 +5,20 @@
 #include "vulkan_wrapper.h"
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <vector>
 
 namespace irr
 {
-    namespace scene { class ISceneNode; }
+    namespace scene { class IMesh; class ISceneNode; }
 }
 
 namespace GE
 {
 class GEVulkanDriver;
 class GEVulkanDynamicBuffer;
+class GEVulkanMeshCache;
 
 // Shading of a ray hit, shared with RT_SHADING_* in the ray traced shaders
 enum GERTShadingType : uint32_t
@@ -54,14 +56,48 @@ struct GERTGeometry
     float m_hue;
     // SColor of the custom vertex color of the render info
     uint32_t m_vertex_color;
+    // GERTGeometryFlag
+    uint32_t m_flags;
 };
 
-// All the static nodes (those with GERTT_STATIC in the render info of the
+enum GERTGeometryFlag : uint32_t
+{
+    // The vertices are in the mesh cache of the driver (m_vertex_offset is a
+    // vertex index of GEVulkanMeshCache), not in the data buffer
+    GRTGF_CACHE_VERTEX = 1,
+    // The indices are 16 bit ones in the mesh cache (m_index_offset is a
+    // 16 bit index from the start of the mesh cache buffer)
+    GRTGF_CACHE_INDEX = 2
+};
+
+// All the static nodes (those with GRTT_STATIC in the render info of the
 // materials) are joined into a single bottom level acceleration structure of
 // world space triangles, which is shared by all cameras. The scene should be
-// built after the nodes are added and cleared before the scene is cleared
+// built after the nodes are added and cleared before the scene is cleared.
+//
+// If GEConfig::m_dynamic_ray_tracing is true (and the mesh cache of the driver
+// is used, GEVulkanFeatures::supportsBaseVertexRendering), the nodes with
+// GRTT_DYNAMIC (and no skinning) are found every frame (update), each unique
+// mesh of them has its own BLAS in the model space, which is built from the
+// vertices and indices of the mesh cache (no copy of them, the shader reads
+// them there too). It's created once when it's first seen, and destroyed some
+// frames after the last node using it is gone, so a node which is added,
+// removed or uses another mesh by setMesh only changes the instances. Every
+// node is an instance of it in the TLAS with its transform. The TLAS is built
+// every frame the instances changed. When the mesh cache is created again (a
+// mesh is added or removed) all of them are created again, as the offsets and
+// the buffer are new
 class GEVulkanRTScene
 {
+public:
+    enum
+    {
+        // Instances of a TLAS, the first one is the static BLAS
+        MAX_INSTANCES = 256,
+        // GERTGeometry of all the dynamic instances of a frame, after the
+        // ones of the static BLAS
+        MAX_DYNAMIC_GEOMETRIES = 1024
+    };
 private:
     GEVulkanDriver* m_vk;
 
@@ -119,9 +155,38 @@ private:
         VkBuffer m_tlas_buffer;
         VmaAllocation m_tlas_memory;
         VkAccelerationStructureKHR m_tlas;
+        // Scratch of the builds recorded for this index (the TLAS and the
+        // new BLAS), grown when needed
+        VkBuffer m_scratch_buffer;
+        VmaAllocation m_scratch_memory;
+        VkDeviceSize m_scratch_size;
+        VkDeviceAddress m_scratch_address;
+        // Instances written to m_instance_buffer
+        uint32_t m_instance_count;
+        // The instance buffer / the geometry buffer has only what the build
+        // has (the static BLAS), so the dynamic ray tracing was off
+        bool m_instance_static;
+        bool m_geometry_static;
+        // The TLAS has to be built again with the instance buffer
+        bool m_dirty;
+        // GEVulkanMeshCache::getUpdateCount of the mesh cache buffer in the
+        // descriptor set of this index
+        uint64_t m_cache_version;
+        // Slots of the mesh texture descriptor used by the dynamic
+        // instances, alive until this index is used again
+        std::vector<std::shared_ptr<int> > m_slots;
         // ------------------------------------------------------------------
         TopLevel()
         {
+            m_scratch_buffer = VK_NULL_HANDLE;
+            m_scratch_memory = VK_NULL_HANDLE;
+            m_scratch_size = 0;
+            m_scratch_address = 0;
+            m_instance_count = 1;
+            m_instance_static = true;
+            m_geometry_static = true;
+            m_dirty = false;
+            m_cache_version = 0;
             m_instance_buffer = VK_NULL_HANDLE;
             m_instance_memory = VK_NULL_HANDLE;
             m_instance_mapped = NULL;
@@ -135,6 +200,62 @@ private:
 
     // Number of instances the instance buffers and the TLAS can hold
     uint32_t m_instance_capacity;
+
+    // The scratch size of building a TLAS with m_instance_capacity instances
+    VkDeviceSize m_tlas_scratch_size;
+
+    // Model space BLAS of a mesh, only the geometries (mesh buffers) in
+    // m_buffer_mask are in it, the same mesh used with other materials is
+    // another one. The mesh is not grabbed, they are all destroyed when the
+    // mesh cache changes (which is when a mesh is gone)
+    struct MeshKey
+    {
+        irr::scene::IMesh* m_mesh;
+        uint64_t m_buffer_mask;
+        bool operator<(const MeshKey& o) const
+        {
+            return m_mesh != o.m_mesh ? m_mesh < o.m_mesh :
+                m_buffer_mask < o.m_buffer_mask;
+        }
+    };
+
+    struct MeshBLAS
+    {
+        // The baked fields (offsets in the mesh cache, shading type and flags)
+        // of each geometry
+        std::vector<GERTGeometry> m_infos;
+        std::vector<VkAccelerationStructureGeometryKHR> m_as_geometries;
+        std::vector<VkAccelerationStructureBuildRangeInfoKHR> m_as_ranges;
+        VkDeviceSize m_build_scratch_size;
+        VkBuffer m_blas_buffer;
+        VmaAllocation m_blas_memory;
+        VkAccelerationStructureKHR m_blas;
+        VkDeviceAddress m_address;
+        uint64_t m_last_used_frame;
+        // ------------------------------------------------------------------
+        MeshBLAS()
+        {
+            m_build_scratch_size = 0;
+            m_blas_buffer = VK_NULL_HANDLE;
+            m_blas_memory = VK_NULL_HANDLE;
+            m_blas = VK_NULL_HANDLE;
+            m_address = 0;
+            m_last_used_frame = 0;
+        }
+    };
+
+    std::map<MeshKey, std::unique_ptr<MeshBLAS> > m_mesh_blas;
+
+    // Created but not built (in the next buildTopLevel)
+    std::vector<MeshBLAS*> m_pending_blas;
+
+    // GEVulkanMeshCache::getUpdateCount of the mesh cache the BLAS were
+    // created with
+    uint64_t m_cache_version;
+
+    uint64_t m_frame_counter;
+
+    bool m_warned_dynamic_limit;
 
     // Keep the slots of the mesh texture descriptor alive
     std::vector<std::shared_ptr<int> > m_texture_ids;
@@ -159,6 +280,26 @@ private:
     // ------------------------------------------------------------------------
     // Keep infos (after all offsets are final) and write it to all buffers
     bool createGeometryData(const std::vector<GERTGeometry>& infos);
+    // ------------------------------------------------------------------------
+    void setupTopLevelBuild(const TopLevel& top_level,
+        VkAccelerationStructureGeometryKHR& geometry,
+        VkAccelerationStructureBuildGeometryInfoKHR& info) const;
+    // ------------------------------------------------------------------------
+    MeshBLAS* getMeshBLAS(irr::scene::IMesh* mesh, uint64_t buffer_mask,
+                          const std::vector<unsigned>& buffer_indices,
+                          const std::vector<uint32_t>& shading_types,
+                          GEVulkanMeshCache* mesh_cache);
+    // ------------------------------------------------------------------------
+    // The mesh cache buffer, or the data buffer which is not read (if there is
+    // no mesh cache buffer) for the descriptor set
+    VkBuffer getMeshCacheDescriptorBuffer(GEVulkanMeshCache* mesh_cache) const;
+    // ------------------------------------------------------------------------
+    void writeMeshCacheDescriptor(unsigned buffer_idx,
+                                  GEVulkanMeshCache* mesh_cache);
+    // ------------------------------------------------------------------------
+    void destroyMeshBLAS(MeshBLAS* blas);
+    // ------------------------------------------------------------------------
+    void destroyUnusedMeshBLAS();
     // ------------------------------------------------------------------------
     void updateDescriptorSet();
     // ------------------------------------------------------------------------
@@ -202,14 +343,25 @@ public:
     VkBuffer getDataBuffer() const                    { return m_data_buffer; }
     // ------------------------------------------------------------------------
     // Once per frame in GEVulkanDriver::endScene before the fence is waited
-    // (like GEVulkanDrawCall::generate, so the buffer of
-    // GEVulkanDriver::getCurrentBufferIdx() is not used by the gpu): write all
-    // GERTGeometry of this frame directly into the mapped host buffer, with
-    // the uv shift (texture matrix), hue and custom vertex color refreshed
-    // from the materials of the nodes, so animated textures and color changes
-    // of the static nodes are seen in the reflection. The acceleration
-    // structures are never touched. Nothing is written if not isReady()
-    void update();
+    // (like GEVulkanDrawCall::generate, so the buffers of
+    // GEVulkanDriver::getCurrentBufferIdx() are not used by the gpu), writes
+    // directly into the mapped host buffers of this frame:
+    // - all GERTGeometry, with the uv shift (texture matrix), hue and custom
+    //   vertex color refreshed from the materials of the nodes, so animated
+    //   textures and color changes are seen in the reflection
+    // - the instances (the static BLAS and one for each node with
+    //   GRTT_DYNAMIC found under root), the BLAS of new meshes are created
+    //   (not built, see buildTopLevel)
+    // Only if GEConfig::m_dynamic_ray_tracing is true, otherwise the buffers
+    // are restored (once) to what the build wrote. Nothing is written if not
+    // isReady(). root is not changed
+    void update(irr::scene::ISceneNode* root);
+    // ------------------------------------------------------------------------
+    // Record the builds of the new BLAS and the TLAS of the current buffer
+    // index if its instances changed in update, outside any render pass and
+    // before the ray tracing pass. The TLAS is visible to the fragment shaders
+    // after it
+    void buildTopLevel(VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
     uint32_t getGeometryCount() const              { return m_geometry_count; }
     // ------------------------------------------------------------------------

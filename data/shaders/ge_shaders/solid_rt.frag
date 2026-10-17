@@ -21,8 +21,14 @@
 // are in the space of its BLAS, so the normal is transformed to world space by
 // the world to object matrix of the hit.
 //
+// The vertices and indices of a geometry are in the data buffer (8 words of
+// GERTVertex, 32 bit indices) or, if the geometry is of a dynamic node, in the
+// mesh cache of the driver (GEVulkanMeshCache, the same as the raster pass uses:
+// 8 words of position, packed normal, linear vertex color, 2 half uvs and
+// tangent, 16 bit indices), see m_flags.
+//
 // Set 0 is the one of GEVulkanRTScene (acceleration structure, data buffer,
-// geometry buffer), set 1 the camera and the global light, set 2 GVDFP_HDR
+// geometry buffer, mesh cache), set 1 the camera and the global light, set 2 GVDFP_HDR
 // (g-buffer, same as lighting), set 3 the environment and set 4 the mesh
 // textures
 #extension GL_EXT_ray_query : require
@@ -43,13 +49,20 @@ struct RTGeometry
     uint m_index_offset;
     uint m_material_id;
     uint m_shading_type;
-    vec2 m_uv_shift;
+    float m_uv_shift_x;
+    float m_uv_shift_y;
     float m_hue;
     uint m_vertex_color;
+    uint m_flags;
 };
 layout(set = 0, binding = 2, std430) readonly buffer RTGeometries
 {
     RTGeometry u_rt_geometries[];
+};
+// The mesh cache of the driver, vertices, then indices
+layout(set = 0, binding = 3, std430) readonly buffer RTMeshCache
+{
+    uint u_mesh_cache[];
 };
 layout(set = 2, binding = 1) uniform sampler2D u_normal;
 layout(set = 2, binding = 2) uniform sampler2D u_depth;
@@ -73,28 +86,52 @@ layout(location = 0) out vec4 o_color;
 
 const uint RT_SHADING_SOLID = 0;
 const uint RT_VERTEX_WORDS = 8;
+// Same as GERTGeometry flags
+const uint RT_GEOMETRY_CACHE_VERTEX = 1;
+const uint RT_GEOMETRY_CACHE_INDEX = 2;
 
 const float RT_RAY_MIN = 0.02;
 const float RT_RAY_MAX = 2000.0;
 
-vec4 getRTVertexColor(uint vertex_index, uint geometry_vertex_offset)
+uint getRTIndex(RTGeometry geometry, uint i)
 {
-    return getVertexColor(
-        u_rt_data[(geometry_vertex_offset + vertex_index) * RT_VERTEX_WORDS + 3]);
+    uint at = geometry.m_index_offset + i;
+    if ((geometry.m_flags & RT_GEOMETRY_CACHE_INDEX) == 0u)
+        return u_rt_data[at];
+    uint word = u_mesh_cache[at >> 1u];
+    return (at & 1u) == 0u ? (word & 0xFFFFu) : (word >> 16u);
 }
 
-vec2 getRTVertexUV(uint vertex_index, uint geometry_vertex_offset)
+vec4 getRTVertexColor(RTGeometry geometry, uint vertex_index)
 {
-    return unpackHalf2x16(
-        u_rt_data[(geometry_vertex_offset + vertex_index) * RT_VERTEX_WORDS + 7]);
+    uint base = (geometry.m_vertex_offset + vertex_index) * RT_VERTEX_WORDS;
+    if ((geometry.m_flags & RT_GEOMETRY_CACHE_VERTEX) != 0u)
+        return getVertexColor(u_mesh_cache[base + 4u]);
+    return getVertexColor(u_rt_data[base + 3u]);
 }
 
-vec3 getRTVertexNormal(uint vertex_index, uint geometry_vertex_offset)
+vec2 getRTVertexUV(RTGeometry geometry, uint vertex_index)
 {
-    uint base = (geometry_vertex_offset + vertex_index) * RT_VERTEX_WORDS + 4u;
-    return vec3(uintBitsToFloat(u_rt_data[base]),
-        uintBitsToFloat(u_rt_data[base + 1u]),
-        uintBitsToFloat(u_rt_data[base + 2u]));
+    uint base = (geometry.m_vertex_offset + vertex_index) * RT_VERTEX_WORDS;
+    if ((geometry.m_flags & RT_GEOMETRY_CACHE_VERTEX) != 0u)
+        return unpackHalf2x16(u_mesh_cache[base + 5u]);
+    return unpackHalf2x16(u_rt_data[base + 7u]);
+}
+
+vec3 getRTVertexNormal(RTGeometry geometry, uint vertex_index)
+{
+    uint base = (geometry.m_vertex_offset + vertex_index) * RT_VERTEX_WORDS;
+    if ((geometry.m_flags & RT_GEOMETRY_CACHE_VERTEX) != 0u)
+    {
+        // A2B10G10R10 snorm, x is the lowest bits
+        uint packed_normal = u_mesh_cache[base + 3u];
+        return normalize(max(vec3(float(int(packed_normal << 22u) >> 22),
+            float(int(packed_normal << 12u) >> 22),
+            float(int(packed_normal << 2u) >> 22)) / 511.0, vec3(-1.0)));
+    }
+    return vec3(uintBitsToFloat(u_rt_data[base + 4u]),
+        uintBitsToFloat(u_rt_data[base + 5u]),
+        uintBitsToFloat(u_rt_data[base + 6u]));
 }
 
 // Whether the sun is blocked at a world position (a ray query can't be a
@@ -119,23 +156,23 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
     vec3 bary = vec3(1.0 - b.x - b.y, b.x, b.y);
 
     RTGeometry geometry = u_rt_geometries[geometry_index];
-    uint index_base = geometry.m_index_offset + primitive * 3u;
-    uvec3 idx = uvec3(u_rt_data[index_base], u_rt_data[index_base + 1u],
-        u_rt_data[index_base + 2u]);
+    uvec3 idx = uvec3(getRTIndex(geometry, primitive * 3u),
+        getRTIndex(geometry, primitive * 3u + 1u),
+        getRTIndex(geometry, primitive * 3u + 2u));
 
-    vec2 uv = getRTVertexUV(idx.x, geometry.m_vertex_offset) * bary.x +
-        getRTVertexUV(idx.y, geometry.m_vertex_offset) * bary.y +
-        getRTVertexUV(idx.z, geometry.m_vertex_offset) * bary.z;
-    uv += geometry.m_uv_shift;
+    vec2 uv = getRTVertexUV(geometry, idx.x) * bary.x +
+        getRTVertexUV(geometry, idx.y) * bary.y +
+        getRTVertexUV(geometry, idx.z) * bary.z;
+    uv += vec2(geometry.m_uv_shift_x, geometry.m_uv_shift_y);
     vec4 vertex_color =
-        getRTVertexColor(idx.x, geometry.m_vertex_offset) * bary.x +
-        getRTVertexColor(idx.y, geometry.m_vertex_offset) * bary.y +
-        getRTVertexColor(idx.z, geometry.m_vertex_offset) * bary.z;
+        getRTVertexColor(geometry, idx.x) * bary.x +
+        getRTVertexColor(geometry, idx.y) * bary.y +
+        getRTVertexColor(geometry, idx.z) * bary.z;
     vertex_color *= getVertexColor(geometry.m_vertex_color);
     vec3 normal = normalize(
-        getRTVertexNormal(idx.x, geometry.m_vertex_offset) * bary.x +
-        getRTVertexNormal(idx.y, geometry.m_vertex_offset) * bary.y +
-        getRTVertexNormal(idx.z, geometry.m_vertex_offset) * bary.z);
+        getRTVertexNormal(geometry, idx.x) * bary.x +
+        getRTVertexNormal(geometry, idx.y) * bary.y +
+        getRTVertexNormal(geometry, idx.z) * bary.z);
     // The inverse transpose of object to world (row vector times matrix)
     normal = normalize(normal * world_to_object);
     vec3 eyedir = -ray_direction;
