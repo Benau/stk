@@ -26,6 +26,7 @@ GEVulkanMeshCache::GEVulkanMeshCache()
     m_buffer = VK_NULL_HANDLE;
     m_memory = VK_NULL_HANDLE;
     m_ibo_offset = m_skinning_vbo_offset = m_aabb_offset = m_aabb_size = 0;
+    m_update_count = 0;
 }   // init
 
 // ----------------------------------------------------------------------------
@@ -176,15 +177,24 @@ void GEVulkanMeshCache::updateCache()
     VmaAllocationCreateInfo local_create_info = {};
     local_create_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     local_create_info.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
-    if (!m_vk->createBuffer(vbo_size + ibo_size + aabb_size,
-        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+    VkBufferUsageFlags usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+        VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    // GEVulkanRTScene builds the acceleration structures of the dynamic nodes
+    // from the vertices and indices of it
+    if (GEVulkanFeatures::supportsRayQuery())
+    {
+        usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+    }
+    if (!m_vk->createBuffer(vbo_size + ibo_size + aabb_size, usage,
         local_create_info, m_buffer, m_memory))
         throw std::runtime_error("updateCache create buffer failed");
 
     m_vk->copyBuffer(staging_buffer, m_buffer,
         vbo_size + ibo_size + aabb_size);
     vmaDestroyBuffer(m_vk->getVmaAllocator(), staging_buffer, staging_memory);
+    m_update_count++;
 }   // updateCache
 
 // ----------------------------------------------------------------------------

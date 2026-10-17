@@ -22,6 +22,10 @@ private:
     VmaAllocation m_memory;
 
     size_t m_ibo_offset, m_skinning_vbo_offset, m_aabb_offset, m_aabb_size;
+
+    // Increased every time the buffer is created again (all offsets of the
+    // mesh buffers are new then)
+    uint64_t m_update_count;
 public:
     // ------------------------------------------------------------------------
     GEVulkanMeshCache();
@@ -33,6 +37,8 @@ public:
     void destroy();
     // ------------------------------------------------------------------------
     VkBuffer getBuffer() const                             { return m_buffer; }
+    // ------------------------------------------------------------------------
+    uint64_t getUpdateCount() const                  { return m_update_count; }
     // ------------------------------------------------------------------------
     size_t getIBOOffset() const                        { return m_ibo_offset; }
     // ------------------------------------------------------------------------
