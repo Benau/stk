@@ -98,6 +98,9 @@ private:
     // Decided when the FBO is created, see needsSolidSSR()
     const bool m_solid_ssr;
 
+    // Decided when the FBO is created, see needsSolidRT()
+    const bool m_solid_rt;
+
     // History is available from the second frame onward; the first frame has
     // no previous tonemap output to sample
     bool m_solid_ssr_ready;
@@ -108,6 +111,10 @@ private:
 public:
     // ------------------------------------------------------------------------
     static bool needsSolidSSR();
+    // ------------------------------------------------------------------------
+    // True when solid materials reflect the ray traced scene (no history is
+    // needed)
+    static bool needsSolidRT();
     // ------------------------------------------------------------------------
     static bool resolveSwapchainOutput(GEVulkanDriver* vk,
                                        const core::dimension2d<u32>& size,
@@ -149,6 +156,10 @@ public:
     // ------------------------------------------------------------------------
     // Same for GVPT_SOLID_SSR (GVDFP_SOLID_SSR is the layout of it)
     bool hasSolidSSR() const                           { return m_solid_ssr; }
+    // ------------------------------------------------------------------------
+    // Same for GVPT_SOLID_RT (it has its own pipeline layout in
+    // GEVulkanDrawCall)
+    bool hasSolidRT() const                              { return m_solid_rt; }
     // ------------------------------------------------------------------------
     // GVDFP_SOLID_SSR uses the layout and the set (the one without HiZ depth)
     // of the displace pass, see GVDFP_SOLID_SSR

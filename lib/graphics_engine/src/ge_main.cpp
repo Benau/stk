@@ -3,6 +3,7 @@
 #include "ge_spm.hpp"
 #include "ge_spm_buffer.hpp"
 #include "ge_vulkan_driver.hpp"
+#include "ge_vulkan_features.hpp"
 #include "mini_glm.hpp"
 
 #include "IMesh.h"
@@ -287,8 +288,11 @@ void refreshDeferredSplit()
     // previous frame (the OpenGL renderer also needs the passes to be
     // separated), and the HiZ depth is generated after the g-buffer. The
     // FAST displace reflection only samples the depth buffer
+    // The ray traced reflection is a pass of the split FBO
     if (isSolidReflectionSSR(g_config.m_solid_reflection) ||
-        isDisplaceReflectionHiZ(g_config.m_displace_reflection))
+        isDisplaceReflectionHiZ(g_config.m_displace_reflection) ||
+        (g_config.m_solid_reflection == GSRT_RAY_QUERY &&
+        GEVulkanFeatures::supportsRayQuery()))
         g_config.m_deferred_split |= 1 << 3;
     // The ambient occlusion is computed between the g-buffer and the lighting
     // passes, and sampled by the lighting pass
