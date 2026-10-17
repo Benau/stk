@@ -16,6 +16,7 @@ namespace irr
 namespace GE
 {
 class GEVulkanDriver;
+class GEVulkanDynamicBuffer;
 
 // Shading of a ray hit, shared with RT_SHADING_* in the ray traced shaders
 enum GERTShadingType : uint32_t
@@ -37,7 +38,9 @@ struct GERTVertex
 
 // Per geometry data of the acceleration structure, indexed by the geometry
 // index of a ray hit (std430, 32 bytes), offsets are in units of
-// GERTVertex and uint32_t of the data buffer
+// GERTVertex and uint32_t of the data buffer. Only m_uv_shift, m_hue and
+// m_vertex_color can change after the build (GEVulkanRTScene::update), the
+// rest is baked with the acceleration structure
 struct GERTGeometry
 {
     uint32_t m_vertex_offset;
@@ -67,18 +70,35 @@ private:
 
     VmaAllocation m_data_memory;
 
-    // GERTGeometry array
-    VkBuffer m_geometry_buffer;
+    // Where the (mutable) GERTGeometry of a geometry comes from, the order is
+    // the one of the geometries of the BLAS
+    struct GeometrySource
+    {
+        // Grabbed, so it's valid until clear()
+        irr::scene::ISceneNode* m_node;
+        unsigned m_material_index;
+    };
 
-    VmaAllocation m_geometry_memory;
+    // CPU copy of the GERTGeometry array as it was built (the baked fields
+    // are final, the others are the initial ones), update() copies it and
+    // writes the current values of the others directly into the host buffer
+    std::vector<GERTGeometry> m_geometry_infos;
+
+    std::vector<GeometrySource> m_geometry_sources;
+
+    // GERTGeometry array, one host visible buffer per getCurrentBufferIdx()
+    // (frames in flight + 1) so it's written directly without any barrier or
+    // fence, like the ObjectData of GEVulkanDrawCall::generate
+    std::unique_ptr<GEVulkanDynamicBuffer> m_geometry_data;
 
     // Set 0 of the ray traced pass: the TLAS, the data buffer and the geometry
-    // buffer (see solid_rt.frag), updated after the scene is built
+    // buffer (see solid_rt.frag), one for each buffer of m_geometry_data and
+    // updated after the scene is built
     VkDescriptorSetLayout m_descriptor_layout;
 
     VkDescriptorPool m_descriptor_pool;
 
-    VkDescriptorSet m_descriptor_set;
+    std::vector<VkDescriptorSet> m_descriptor_sets;
 
     VkBuffer m_blas_buffer;
 
@@ -113,6 +133,9 @@ private:
     bool createScratchBuffer(VkDeviceSize size, VkBuffer& buffer,
         VmaAllocation& memory, VkDeviceAddress& aligned_address);
     // ------------------------------------------------------------------------
+    // Keep infos (after all offsets are final) and write it to all buffers
+    bool createGeometryData(const std::vector<GERTGeometry>& infos);
+    // ------------------------------------------------------------------------
     void updateDescriptorSet();
     // ------------------------------------------------------------------------
     bool buildAccelerationStructures(
@@ -138,13 +161,22 @@ public:
     VkDescriptorSetLayout getDescriptorSetLayout() const
                                                 { return m_descriptor_layout; }
     // ------------------------------------------------------------------------
-    // Valid to bind if isReady()
-    const VkDescriptorSet* getDescriptorSet() const
-                                                  { return &m_descriptor_set; }
+    // Valid to bind if isReady(), buffer_idx is GEVulkanDriver::
+    // getCurrentBufferIdx() of the frame (update() writes that buffer)
+    const VkDescriptorSet* getDescriptorSet(unsigned buffer_idx) const
+                                     { return &m_descriptor_sets[buffer_idx]; }
     // ------------------------------------------------------------------------
     VkBuffer getDataBuffer() const                    { return m_data_buffer; }
     // ------------------------------------------------------------------------
-    VkBuffer getGeometryBuffer() const            { return m_geometry_buffer; }
+    // Once per frame in GEVulkanDriver::endScene before the fence is waited
+    // (like GEVulkanDrawCall::generate, so the buffer of
+    // GEVulkanDriver::getCurrentBufferIdx() is not used by the gpu): write all
+    // GERTGeometry of this frame directly into the mapped host buffer, with
+    // the uv shift (texture matrix), hue and custom vertex color refreshed
+    // from the materials of the nodes, so animated textures and color changes
+    // of the static nodes are seen in the reflection. The acceleration
+    // structures are never touched. Nothing is written if not isReady()
+    void update();
     // ------------------------------------------------------------------------
     uint32_t getGeometryCount() const              { return m_geometry_count; }
     // ------------------------------------------------------------------------

@@ -108,6 +108,7 @@ enum DebugMenuCommand
     DEBUG_GE_IBL,
     DEBUG_GE_SR,
     DEBUG_GE_DR,
+    DEBUG_GE_DRT,
     DEBUG_SP_RESET,
     DEBUG_SP_TOGGLE_CULLING,
     DEBUG_SP_WN_VIZ,
@@ -443,6 +444,14 @@ bool handleContextMenuAction(s32 cmd_id)
                 GE::GEDisplaceReflectionType(next);
             vk->updateDriver(true/*scale_changed*/);
         }
+        break;
+    }
+#endif
+    case DEBUG_GE_DRT:
+#ifndef SERVER_ONLY
+    {
+        GE::getGEConfig()->m_dynamic_ray_tracing =
+            !GE::getGEConfig()->m_dynamic_ray_tracing;
         break;
     }
 #endif
@@ -1375,6 +1384,7 @@ bool onEvent(const SEvent &event)
             sub->addItem(L"Toggle GE IBL", DEBUG_GE_IBL);
             sub->addItem(L"Toggle GE Solid Reflection", DEBUG_GE_SR);
             sub->addItem(L"Toggle GE Displace Reflection", DEBUG_GE_DR);
+            sub->addItem(L"Toggle GE Dynamic Ray Tracing", DEBUG_GE_DRT);
 
             mnu->addItem(L"Keypress actions >",-1,true, true);
             sub = mnu->getSubMenu(8);
