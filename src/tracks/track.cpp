@@ -105,11 +105,11 @@
 #ifndef SERVER_ONLY
 #include <ge_main.hpp>
 #include <ge_occlusion_culling.hpp>
-#include <ge_render_info.hpp>
 #include <ge_texture.hpp>
 #include <ge_vulkan_driver.hpp>
 #include <ge_vulkan_features.hpp>
 #endif
+#include <ge_render_info.hpp>
 
 using namespace irr;
 
@@ -1368,6 +1368,7 @@ bool Track::loadMainTrack(const XMLNode &root)
     scene_node->setPosition(xyz);
     scene_node->setRotation(hpr);
     handleAnimatedTextures(scene_node, *track_node);
+    std::shared_ptr<GE::GERenderInfo> rt_info;
 #ifndef SERVER_ONLY
     if (!GUIEngine::isNoGraphics() &&
         GE::getDriver()->getDriverType() == video::EDT_VULKAN)
@@ -1379,8 +1380,7 @@ bool Track::loadMainTrack(const XMLNode &root)
         // is built after all nodes are loaded
         if (GE::GEVulkanFeatures::supportsRayQuery())
         {
-            std::shared_ptr<GE::GERenderInfo> rt_info =
-                std::make_shared<GE::GERenderInfo>();
+            rt_info = std::make_shared<GE::GERenderInfo>();
             rt_info->setRayTracingType(GE::GRTT_STATIC);
             for (unsigned i = 0; i < scene_node->getMaterialCount(); i++)
                 scene_node->getMaterial(i).setRenderInfo(rt_info);
@@ -1460,7 +1460,7 @@ bool Track::loadMainTrack(const XMLNode &root)
 
         if (lod_instance)
         {
-            LODNode* node = lodLoader.instanciateAsLOD(n, NULL, NULL);
+            LODNode* node = lodLoader.instanciateAsLOD(n, NULL, rt_info);
             if (node != NULL)
             {
                 node->setPosition(xyz);
@@ -1502,7 +1502,8 @@ bool Track::loadMainTrack(const XMLNode &root)
             m_all_cached_meshes.push_back(a_mesh);
             irr_driver->grabAllTextures(a_mesh);
             a_mesh->grab();
-            scene_node = irr_driver->addMesh(a_mesh, model_name);
+
+            scene_node = irr_driver->addMesh(a_mesh, model_name, NULL, rt_info);
             scene_node->setPosition(xyz);
             scene_node->setRotation(hpr);
             scene_node->setScale(scale);

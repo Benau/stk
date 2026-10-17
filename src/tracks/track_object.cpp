@@ -42,6 +42,7 @@
 #include <ISceneManager.h>
 #include <IVideoDriver.h>
 #include <ge_render_info.hpp>
+#include <ge_vulkan_features.hpp>
 
 /** A track object: any additional object on the track. This object implements
  *  a graphics-only representation, i.e. there is no physical representation.
@@ -78,6 +79,8 @@ TrackObject::TrackObject(const core::vector3df& xyz, const core::vector3df& hpr,
     m_presentation    = NULL;
     m_animator        = NULL;
     m_parent_library  = NULL;
+    m_has_animation   = false;
+    m_has_enable_script = false;
     m_interaction     = interaction;
     m_presentation    = presentation;
     m_is_driveable    = false;
@@ -113,6 +116,8 @@ void TrackObject::init(const XMLNode &xml_node, scene::ISceneNode* parent,
     m_presentation = NULL;
     m_animator = NULL;
     m_parent_library = parent_library;
+    m_has_animation = false;
+    m_has_enable_script = false;
 
     xml_node.get("id",      &m_id        );
     xml_node.get("model",   &m_name      );
@@ -138,6 +143,11 @@ void TrackObject::init(const XMLNode &xml_node, scene::ISceneNode* parent,
     xml_node.get("type",    &type );
 
     m_type = type;
+    // Same condition as the creation of m_animator below, which throws (and
+    // is discarded) without any IPO
+    m_has_animation = (type == "animation" || xml_node.hasChildNamed("curve"))
+        && AnimationBase::hasIpoNode(xml_node);
+    bool is_movable = (type == "movable");
 
     m_initially_visible = true;
     xml_node.get("if", &m_visibility_condition);
@@ -161,6 +171,9 @@ void TrackObject::init(const XMLNode &xml_node, scene::ISceneNode* parent,
     else if (xml_node.getName() == "library")
     {
         xml_node.get("name", &m_name);
+        // Before the constructor, it creates the children which ask for it
+        m_has_enable_script =
+            TrackObjectPresentationLibraryNode::libraryHasEnableScript(m_name);
         m_presentation = new TrackObjectPresentationLibraryNode(this, xml_node, model_def_loader);
         if (parent_library != NULL)
         {
@@ -255,9 +268,21 @@ void TrackObject::init(const XMLNode &xml_node, scene::ISceneNode* parent,
             }
         }
 
+        if (!GUIEngine::isNoGraphics() &&
+            irr_driver->getVideoDriver()->getDriverType() == video::EDT_VULKAN &&
+            GE::GEVulkanFeatures::supportsRayQuery())
+        {
+            // Baked into the static acceleration structure, so it must never
+            // move or be enabled / disabled later
+            if (!is_movable && !hasDynamicStateRecursively())
+            {
+                if (!m_render_info)
+                    m_render_info = std::make_shared<GE::GERenderInfo>();
+                m_render_info->setRayTracingType(GE::GRTT_STATIC);
+            }
+        }
 #endif
         scene::ISceneNode *glownode = NULL;
-        bool is_movable = false;
         if (lod_instance)
         {
             m_type = "lod";
@@ -266,7 +291,7 @@ void TrackObject::init(const XMLNode &xml_node, scene::ISceneNode* parent,
             m_presentation = lod_node;
 
             LODNode* node = (LODNode*)lod_node->getNode();
-            if (type == "movable" && parent != NULL)
+            if (is_movable && parent != NULL)
             {
                 // HACK: unparent movables from their parent library object if any,
                 // because bullet provides absolute transforms, not transforms relative
@@ -289,7 +314,7 @@ void TrackObject::init(const XMLNode &xml_node, scene::ISceneNode* parent,
                                                              parent,
                                                              m_render_info);
             scene::ISceneNode* node = ((TrackObjectPresentationMesh *)m_presentation)->getNode();
-            if (type == "movable" && parent != NULL)
+            if (is_movable && parent != NULL)
             {
                 // HACK: unparent movables from their parent library object if any,
                 // because bullet provides absolute transforms, not transforms relative
@@ -313,7 +338,7 @@ void TrackObject::init(const XMLNode &xml_node, scene::ISceneNode* parent,
         if (m_interaction != "ghost" && m_interaction != "none" &&
             render_pass != "skybox"                                     )
         {
-            m_physical_object = PhysicalObject::fromXML(type == "movable",
+            m_physical_object = PhysicalObject::fromXML(is_movable,
                                                    xml_node,
                                                    this);
         }
@@ -374,7 +399,7 @@ void TrackObject::init(const XMLNode &xml_node, scene::ISceneNode* parent,
     }
 
 
-    if (type == "animation" || xml_node.hasChildNamed("curve"))
+    if (m_has_animation)
     {
         try
         {

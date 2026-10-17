@@ -198,6 +198,9 @@ class TrackObjectPresentationLibraryNode : public TrackObjectPresentationSceneNo
     std::string m_name;
     bool m_start_executed, m_reset_executed;
 public:
+    // Static so a track object can know it before this is constructed (the
+    // children of the library are created inside the constructor)
+    static bool libraryHasEnableScript(const std::string& name);
     TrackObjectPresentationLibraryNode(TrackObject* parent,
         const XMLNode& xml_node,
         ModelDefinitionLoader& model_def_loader);

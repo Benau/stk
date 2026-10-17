@@ -27,13 +27,33 @@
 #include <cmath>
 
 
+// ----------------------------------------------------------------------------
+bool AnimationBase::isIpoNode(const XMLNode& node)
+{
+    return node.getName() != "animated-texture";
+}   // isIpoNode
+
+// ----------------------------------------------------------------------------
+/** True if the constructor above will not throw ("Empty IPO, discard."), so
+ *  it can be used to know if an animation will exist before creating it. */
+bool AnimationBase::hasIpoNode(const XMLNode& node)
+{
+    for (unsigned int i = 0; i < node.getNumNodes(); i++)
+    {
+        if (isIpoNode(*node.getNode(i)))
+            return true;
+    }
+    return false;
+}   // hasIpoNode
+
+// ----------------------------------------------------------------------------
 AnimationBase::AnimationBase(const XMLNode &node)
 {
     float fps=25;
     node.get("fps", &fps);
     for(unsigned int i=0; i<node.getNumNodes(); i++)
     {
-        if (node.getNode(i)->getName() == "animated-texture")
+        if (!isIpoNode(*node.getNode(i)))
             continue;
         Ipo *ipo = new Ipo(*node.getNode(i), fps);
         m_all_ipos.push_back(ipo);

@@ -33,6 +33,7 @@
 #include "graphics/sp/sp_shader_manager.hpp"
 #include "io/file_manager.hpp"
 #include "io/xml_node.hpp"
+#include <ge_render_info.hpp>
 #include "input/device_manager.hpp"
 #include "input/input_device.hpp"
 #include "input/input_manager.hpp"
@@ -58,6 +59,10 @@
 #include <IParticleSystemSceneNode.h>
 #include <ISceneManager.h>
 #include <IVideoDriver.h>
+
+#include <fstream>
+#include <iterator>
+#include <map>
 
 // ----------------------------------------------------------------------------
 TrackObjectPresentation::TrackObjectPresentation(const XMLNode& xml_node)
@@ -172,6 +177,39 @@ TrackObjectPresentationEmpty::~TrackObjectPresentationEmpty()
 {
     irr_driver->removeNode(m_node);
 }   // ~TrackObjectPresentationEmpty
+
+// ----------------------------------------------------------------------------
+bool TrackObjectPresentationLibraryNode::libraryHasEnableScript(
+                                                       const std::string& name)
+{
+    // Same lookup order as the constructor: the library of the track first
+    std::string path;
+    Track* track = Track::getCurrentTrack();
+    if (track != NULL &&
+        file_manager->fileExists(
+        track->getTrackFile("library/" + name + "/node.xml")))
+        path = track->getTrackFile("library/" + name + "/scripting.as");
+    else
+        path = file_manager->getAsset(FileManager::LIBRARY, name) +
+            "/scripting.as";
+
+    // Libraries are instanced many times, the files are read once
+    static std::map<std::string, bool> cache;
+    auto it = cache.find(path);
+    if (it != cache.end())
+        return it->second;
+
+    bool result = false;
+    if (file_manager->fileExists(path))
+    {
+        std::ifstream file(path.c_str());
+        std::string content((std::istreambuf_iterator<char>(file)),
+            std::istreambuf_iterator<char>());
+        result = content.find("setEnabled") != std::string::npos;
+    }
+    cache[path] = result;
+    return result;
+}   // libraryHasEnableScript
 
 // ----------------------------------------------------------------------------
 TrackObjectPresentationLibraryNode::TrackObjectPresentationLibraryNode(
