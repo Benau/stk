@@ -21,7 +21,9 @@
 #include "animations/ipo.hpp"
 #include "animations/three_d_animation.hpp"
 #include "config/stk_config.hpp"
+#include "graphics/irr_driver.hpp"
 #include "graphics/lod_node.hpp"
+#include "guiengine/engine.hpp"
 #include "graphics/material_manager.hpp"
 #include "io/xml_node.hpp"
 #include "network/network_config.hpp"
@@ -31,6 +33,11 @@
 
 #include <IMeshSceneNode.h>
 #include <ISceneManager.h>
+#ifndef SERVER_ONLY
+#include <IVideoDriver.h>
+#include <ge_main.hpp>
+#include <ge_vulkan_driver.hpp>
+#endif
 
 TrackObjectManager::TrackObjectManager()
 {
@@ -100,6 +107,14 @@ void TrackObjectManager::init()
             moveable_objects++;
         }
     }
+#ifndef SERVER_ONLY
+    // onWorldReady (visibility conditions of scripts) and the limit above
+    // can disable objects, the static ray traced scene (if built already) is
+    // made again by the driver with what is visible now
+    if (!GUIEngine::isNoGraphics() &&
+        irr_driver->getVideoDriver()->getDriverType() == video::EDT_VULKAN)
+        GE::getVKDriver()->clearRTScene();
+#endif
 }   // init
 
 // ----------------------------------------------------------------------------
