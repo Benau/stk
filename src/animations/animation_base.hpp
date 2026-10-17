@@ -65,6 +65,8 @@ protected:
     float m_current_time;
 
 public:
+    static bool isIpoNode(const XMLNode& node);
+    static bool hasIpoNode(const XMLNode& node);
                  AnimationBase(const XMLNode &node);
                  AnimationBase(Ipo *ipo);
     virtual      ~AnimationBase();

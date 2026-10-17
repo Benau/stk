@@ -100,6 +100,14 @@ protected:
     ThreeDAnimation*               m_animator;
 
     TrackObject*                   m_parent_library;
+
+    /** True if an animation (IPO curves) will be created for this object,
+     *  known before the presentation is created (m_animator is not). */
+    bool                           m_has_animation;
+
+    /** True if this is a library with a script that enables/disables objects.
+     *  Known before its children are created. */
+    bool                           m_has_enable_script;
     
     std::vector<TrackObject*>      m_movable_children;
     std::vector<TrackObject*>      m_children;
@@ -248,6 +256,18 @@ public:
         if (!m_parent_library)
             return false;
         return m_parent_library->hasAnimatorRecursively();
+    }
+    // ------------------------------------------------------------------------
+    // Return true if this object or any parent library can be animated or
+    // enabled/disabled by a script after the track is loaded. Valid while
+    // the children of a library are being created (unlike m_animator and
+    // m_presentation, which are set after that)
+    bool hasDynamicStateRecursively() const
+    {
+        if (m_has_animation || m_has_enable_script)
+            return true;
+        return m_parent_library != NULL &&
+            m_parent_library->hasDynamicStateRecursively();
     }
     // ------------------------------------------------------------------------
     void setPaused(bool mode){ m_animator->setPaused(mode); }
