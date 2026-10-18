@@ -65,6 +65,8 @@ bool getShadingType(irr::video::E_MATERIAL_TYPE mt, uint32_t* type)
         types.resize(irr::video::EMT_MATERIAL_COUNT, -1);
         types[GEMaterialManager::getIrrMaterialType("solid")] = GRTST_SOLID;
         types[GEMaterialManager::getIrrMaterialType("normalmap")] = GRTST_NORMALMAP;
+        types[GEMaterialManager::getIrrMaterialType("decal")] = GRTST_DECAL;
+        types[GEMaterialManager::getIrrMaterialType("splatting")] = GRTST_SPLATTING;
     }
     int ret = types[mt];
     if (ret == -1)
