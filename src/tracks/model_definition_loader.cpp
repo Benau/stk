@@ -31,6 +31,8 @@ using namespace irr;
 #include <ISceneManager.h>
 #include <IMeshManipulator.h>
 #include <algorithm>
+#include <ge_render_info.hpp>
+#include <ge_spm.hpp>
 
 ModelDefinitionLoader::ModelDefinitionLoader(Track* track)
 {
@@ -91,6 +93,9 @@ LODNode* ModelDefinitionLoader::instanciateAsLOD(const XMLNode* node, scene::ISc
                 //cache.push_back(a_mesh);
                 irr_driver->grabAllTextures(a_mesh);
                 m_track->addCachedMesh(a_mesh);
+                if (ri && ri->getRayTracingType() == GE::GRTT_STATIC &&
+                    !static_cast<GE::GESPM*>(a_mesh)->isStatic())
+                    ri->setRayTracingType(GE::GRTT_DYNAMIC);
                 scene::IAnimatedMeshSceneNode* scene_node = irr_driver
                     ->addAnimatedMesh(a_mesh, group[m].m_model_file, NULL, ri);
 

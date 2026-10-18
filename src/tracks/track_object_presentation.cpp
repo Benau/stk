@@ -61,6 +61,8 @@
 #include <IVideoDriver.h>
 
 #include <fstream>
+#include <ge_render_info.hpp>
+#include <ge_spm.hpp>
 #include <iterator>
 #include <map>
 
@@ -603,6 +605,10 @@ void TrackObjectPresentationMesh::init(const XMLNode* xml_node,
     }
     else if (animated)
     {
+        if (m_render_info &&
+            m_render_info->getRayTracingType() == GE::GRTT_STATIC &&
+            !static_cast<GE::GESPM*>(m_mesh)->isStatic())
+            m_render_info->setRayTracingType(GE::GRTT_DYNAMIC);
         scene::IAnimatedMeshSceneNode *node =
             irr_driver->addAnimatedMesh((scene::IAnimatedMesh*)m_mesh,
                                         m_model_file, parent, m_render_info);
