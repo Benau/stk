@@ -272,14 +272,14 @@ void TrackObject::init(const XMLNode &xml_node, scene::ISceneNode* parent,
             irr_driver->getVideoDriver()->getDriverType() == video::EDT_VULKAN &&
             GE::GEVulkanFeatures::supportsRayQuery())
         {
-            // Baked into the static acceleration structure, so it must never
-            // move or be enabled / disabled later
-            if (!is_movable && !hasDynamicStateRecursively())
-            {
-                if (!m_render_info)
-                    m_render_info = std::make_shared<GE::GERenderInfo>();
-                m_render_info->setRayTracingType(GE::GRTT_STATIC);
-            }
+            if (!m_render_info)
+                m_render_info = std::make_shared<GE::GERenderInfo>();
+            // Static is baked into the static acceleration structure, so it
+            // must never move or be enabled / disabled later, those are
+            // tracked every frame (if GEConfig::m_dynamic_ray_tracing is on)
+            m_render_info->setRayTracingType(
+                (!is_movable && !hasDynamicStateRecursively()) ?
+                GE::GRTT_STATIC : GE::GRTT_DYNAMIC);
         }
 #endif
         scene::ISceneNode *glownode = NULL;

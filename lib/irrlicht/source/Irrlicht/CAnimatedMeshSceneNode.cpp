@@ -1075,7 +1075,8 @@ void CAnimatedMeshSceneNode::resetFirstRenderInfo(std::shared_ptr<GE::GERenderIn
 		Materials[i].setRenderInfo(nullptr);
 	for (u32 i = 0; i < Materials.size(); i++)
 	{
-		if (Materials[i].isColorizable())
+		if (Materials[i].isColorizable() ||
+			(ri && ri->getRayTracingType() != GE::GRTT_NONE))
 			Materials[i].setRenderInfo(ri);
 	}
 }

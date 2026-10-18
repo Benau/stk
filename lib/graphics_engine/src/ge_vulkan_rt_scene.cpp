@@ -67,7 +67,8 @@ void collectNode(irr::scene::ISceneNode* node, std::vector<RTSource>& sources,
         return;
     {
         irr::scene::IMesh* mesh = NULL;
-        if (node->getType() == irr::scene::ESNT_ANIMATED_MESH)
+        bool skinning_node = node->getType() == irr::scene::ESNT_ANIMATED_MESH;
+        if (skinning_node)
             mesh = static_cast<GEVulkanAnimatedMeshSceneNode*>(node)->getMesh();
         else if (node->getType() == irr::scene::ESNT_MESH)
             mesh = static_cast<irr::scene::IMeshSceneNode*>(node)->getMesh();
@@ -80,7 +81,8 @@ void collectNode(irr::scene::ISceneNode* node, std::vector<RTSource>& sources,
                     i >= node->getMaterialCount())
                     continue;
                 GESPMBuffer* buffer = static_cast<GESPMBuffer*>(b);
-                if (buffer->hasSkinning() || buffer->isDynamic() ||
+                if ((skinning_node && buffer->hasSkinning()) ||
+                    buffer->isDynamic() ||
                     buffer->getVertexCount() == 0 ||
                     buffer->getIndexCount() < 3)
                     continue;
@@ -124,7 +126,8 @@ void collectDynamicNode(irr::scene::ISceneNode* node,
         return;
     {
         irr::scene::IMesh* mesh = NULL;
-        if (node->getType() == irr::scene::ESNT_ANIMATED_MESH)
+        bool skinning_node = node->getType() == irr::scene::ESNT_ANIMATED_MESH;
+        if (skinning_node)
             mesh = static_cast<GEVulkanAnimatedMeshSceneNode*>(node)->getMesh();
         else if (node->getType() == irr::scene::ESNT_MESH)
             mesh = static_cast<irr::scene::IMeshSceneNode*>(node)->getMesh();
@@ -141,7 +144,8 @@ void collectDynamicNode(irr::scene::ISceneNode* node,
                     i >= node->getMaterialCount())
                     continue;
                 GESPMBuffer* buffer = static_cast<GESPMBuffer*>(b);
-                if (buffer->hasSkinning() || buffer->isDynamic() ||
+                if ((skinning_node && buffer->hasSkinning()) ||
+                    buffer->isDynamic() ||
                     buffer->getVertexCount() == 0 ||
                     buffer->getIndexCount() < 3)
                     continue;

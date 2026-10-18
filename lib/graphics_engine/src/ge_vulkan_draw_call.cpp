@@ -124,7 +124,7 @@ void ObjectData::init(irr::scene::ISceneNode* node, int material_id,
     m_texture_trans[0] = texture_matrix[8];
     m_texture_trans[1] = texture_matrix[9];
     auto& ri = m.getRenderInfo();
-    if (ri && ri->getHue() > 0.0f)
+    if (m.isColorizable() && ri && ri->getHue() > 0.0f)
         m_hue_change = ri->getHue();
     else
         m_hue_change = 0.0f;
@@ -619,7 +619,7 @@ start:
                 break;
             }
             auto& ri = q.second.getRenderInfo();
-            if (ri && ri->getHue() > 0.0f)
+            if (q.second.isColorizable() && ri && ri->getHue() > 0.0f)
             {
                 key.m_hue_change = true;
                 break;
