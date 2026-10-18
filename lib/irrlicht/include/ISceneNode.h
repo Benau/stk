@@ -811,6 +811,12 @@ namespace scene
 			return identity;
 		}
 		virtual const core::vector3df& getAbsoluteScale() const { return getScale(); }
+		//! If a child is visible for the ray traced scene of GE (isVisible of
+		//! the child by default), a LODNode shows only its most detailed level
+		virtual bool isChildVisibleForGE(const ISceneNode* child) const
+		{
+			return child->isVisible();
+		}
 
 	protected:
 
