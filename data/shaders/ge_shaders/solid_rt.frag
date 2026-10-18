@@ -89,6 +89,8 @@ layout(location = 0) out vec4 o_color;
 // Same as GERTShadingType
 const uint RT_SHADING_SOLID = 0;
 const uint RT_SHADING_NORMALMAP = 1;
+const uint RT_SHADING_DECAL = 2;
+const uint RT_SHADING_SPLATTING = 3;
 const uint RT_VERTEX_WORDS = 8;
 // Same as GERTGeometry flags
 const uint RT_GEOMETRY_CACHE_VERTEX = 1;
@@ -193,15 +195,58 @@ vec3 getSolidAlbedo(int base, vec2 uv, float lod, float hue,
     return tex.rgb * vertex_color.rgb;
 }
 
+// splatting.frag, the 4 detail layers (2 to 5) are mixed by the splatting map
+// (layer 1, second uv). The low resolution sampling of the far distance
+// (mitigation of repetitive patterns) uses the distance to the camera, and as
+// its uv is the half one, it's one level less blurry
+vec3 getSplattingAlbedo(int base, vec2 uv, vec2 uv_two, float lod,
+                        float camera_distance)
+{
+    float mitigation = clamp(pow(camera_distance * 0.01, 2.0), 0.0, 1.0);
+    float low_lod = max(lod - 1.0, 0.0);
+    vec4 splatting = sampleHitTexture(base, 1, uv_two, lod);
+    vec4 detail0 = mix(sampleHitTexture(base, 2, uv, lod),
+        sampleHitTexture(base, 2, uv * 0.5, low_lod), mitigation);
+    vec4 detail1 = mix(sampleHitTexture(base, 3, uv, lod),
+        sampleHitTexture(base, 3, uv * 0.5, low_lod), mitigation);
+    vec4 detail2 = mix(sampleHitTexture(base, 4, uv, lod),
+        sampleHitTexture(base, 4, uv * 0.5, low_lod), mitigation);
+    vec4 detail3 = mix(sampleHitTexture(base, 5, uv, lod),
+        sampleHitTexture(base, 5, uv * 0.5, low_lod), mitigation);
+    return (splatting.r * detail0 + splatting.g * detail1 +
+        splatting.b * detail2 +
+        max(0.0, (1.0 - splatting.r - splatting.g - splatting.b)) *
+        detail3).xyz;
+}
+
 // The material of the hit like the fragment shader of the geometry writes it to
 // the g-buffer: the albedo, x: gloss, y: metallic, z: emissive of pbr, and the
 // (not two sided yet) normal, which the shader can change. uv is the first
 // one (with the uv shift of the node), uv_two the second one, which has no
 // shift
 void getHitMaterial(RTGeometry geometry, int base, vec2 uv, vec2 uv_two,
-                    vec4 vertex_color, float lod,
+                    vec4 vertex_color, float lod, float camera_distance,
                     out vec3 diffuse_color, out vec3 pbr, inout vec3 normal)
 {
+    if (geometry.m_shading_type == RT_SHADING_DECAL)
+    {
+        // decal.frag, the second layer is over the first one, no vertex
+        // color and no hue
+        vec4 color = sampleHitTexture(base, 0, uv, lod);
+        vec4 layer_two = sampleHitTexture(base, 1, uv_two, lod);
+        diffuse_color = layer_two.a * layer_two.rgb +
+            color.rgb * (1.0 - layer_two.a);
+        pbr = sampleHitTexture(base, 2, uv, lod).xyz;
+        return;
+    }
+    if (geometry.m_shading_type == RT_SHADING_SPLATTING)
+    {
+        // No gloss, metallic and emissive
+        diffuse_color = getSplattingAlbedo(base, uv, uv_two, lod,
+            camera_distance);
+        pbr = vec3(0.0);
+        return;
+    }
     // solid.frag and normalmap.frag
     diffuse_color = getSolidAlbedo(base, uv, lod, geometry.m_hue,
         vertex_color);
@@ -246,7 +291,8 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
     vec3 diffuse_color;
     vec3 pbr;
     getHitMaterial(geometry, base, uv, uv_two, vertex_color, lod,
-        diffuse_color, pbr, normal);
+        distance(ray_origin + ray_direction * hit_distance,
+        u_camera.m_inverse_view_matrix[3].xyz), diffuse_color, pbr, normal);
     // Two sided
     if (dot(normal, eyedir) < 0.0)
         normal = -normal;
