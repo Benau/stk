@@ -27,16 +27,24 @@ enum GERTShadingType : uint32_t
     GRTST_SOLID = 0,
 };
 
-// Vertex of the ray traced scene (world space, 32 bytes), the position is
-// read by the acceleration structure build so it must be the first 3 floats
+// Vertex of the ray traced scene (world space, 32 bytes), the same layout as
+// the vertex of the mesh cache (S3DVertexSkinnedMesh without the joints and
+// weights), so the shaders read the vertices of the baked and skinned
+// geometries and the ones of the mesh cache the same way. The position is read
+// by the acceleration structure build so it must be the first 3 floats
 struct GERTVertex
 {
     float m_position[3];
+    // A2B10G10R10 snorm, x is the lowest bits
+    uint32_t m_normal;
     // SColor of the vertex (ARGB)
     uint32_t m_color;
-    float m_normal[3];
     // 2 half floats, same layout as packHalf2x16
     uint32_t m_uv;
+    // The second uv (decal and splatting maps), same layout as m_uv
+    uint32_t m_uv_two;
+    // Same layout as m_normal, w is the sign of the bitangent
+    uint32_t m_tangent;
 };
 
 // Per geometry data of the acceleration structure, indexed by the geometry

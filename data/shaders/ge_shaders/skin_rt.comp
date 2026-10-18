@@ -10,8 +10,12 @@
 // 8 words for each vertex (position, packed normal, linear color, 2 half uvs,
 // tangent), and 4 words for each vertex of a mesh buffer with skinning, which
 // are 4 s16 joints and 4 half weights. Binding 2 is the data buffer of
-// GEVulkanRTScene, where the output vertices (8 words of GERTVertex: position,
-// color, normal, 2 half uvs) are written
+// GEVulkanRTScene, where the output vertices (8 words of GERTVertex, the same
+// as the ones of the mesh cache but in world space: position, packed normal,
+// color, 2 half uvs, 2 half uvs of the second uv and packed tangent) are
+// written
+#include "utils/rt_utils.glsl"
+
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0, std140) readonly buffer SkinningMatrices
@@ -55,11 +59,9 @@ void main()
     vec3 position = vec3(uintBitsToFloat(u_mesh_cache[s]),
         uintBitsToFloat(u_mesh_cache[s + 1u]),
         uintBitsToFloat(u_mesh_cache[s + 2u]));
-    // A2B10G10R10 snorm, x is the lowest bits
-    uint packed_normal = u_mesh_cache[s + 3u];
-    vec3 normal = max(vec3(float(int(packed_normal << 22u) >> 22),
-        float(int(packed_normal << 12u) >> 22),
-        float(int(packed_normal << 2u) >> 22)) / 511.0, vec3(-1.0));
+    vec3 normal = unpackSnorm1010102(u_mesh_cache[s + 3u]).xyz;
+    uint packed_tangent = u_mesh_cache[s + 7u];
+    vec3 tangent = unpackSnorm1010102(packed_tangent).xyz;
 
     uint k = pc.m_skin_word + i * 4u;
     uint joints_01 = u_mesh_cache[k];
@@ -78,14 +80,19 @@ void main()
         (pc.m_world * (joint_matrix * vec4(position, 1.0))).xyz;
     vec3 world_normal = normalize(
         mat3(pc.m_world) * (joint_matrix * vec4(normal, 0.0)).xyz);
+    // A mesh without tangents has a zero one
+    vec3 world_tangent =
+        mat3(pc.m_world) * (joint_matrix * vec4(tangent, 0.0)).xyz;
+    if (dot(world_tangent, world_tangent) > 0.0)
+        world_tangent = normalize(world_tangent);
 
     uint d = pc.m_dst_word + i * 8u;
     u_rt_data[d] = floatBitsToUint(world_position.x);
     u_rt_data[d + 1u] = floatBitsToUint(world_position.y);
     u_rt_data[d + 2u] = floatBitsToUint(world_position.z);
-    u_rt_data[d + 3u] = u_mesh_cache[s + 4u];
-    u_rt_data[d + 4u] = floatBitsToUint(world_normal.x);
-    u_rt_data[d + 5u] = floatBitsToUint(world_normal.y);
-    u_rt_data[d + 6u] = floatBitsToUint(world_normal.z);
-    u_rt_data[d + 7u] = u_mesh_cache[s + 5u];
+    u_rt_data[d + 3u] = packSnorm1010102(world_normal, 0u);
+    u_rt_data[d + 4u] = u_mesh_cache[s + 4u];
+    u_rt_data[d + 5u] = u_mesh_cache[s + 5u];
+    u_rt_data[d + 6u] = u_mesh_cache[s + 6u];
+    u_rt_data[d + 7u] = packSnorm1010102(world_tangent, packed_tangent & 0xC0000000u);
 }

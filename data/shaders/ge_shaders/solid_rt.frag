@@ -21,11 +21,13 @@
 // are in the space of its BLAS, so the normal is transformed to world space by
 // the world to object matrix of the hit.
 //
-// The vertices and indices of a geometry are in the data buffer (8 words of
-// GERTVertex, 32 bit indices) or, if the geometry is of a dynamic node, in the
-// mesh cache of the driver (GEVulkanMeshCache, the same as the raster pass uses:
-// 8 words of position, packed normal, linear vertex color, 2 half uvs and
-// tangent, 16 bit indices), see m_flags.
+// The vertices and indices of a geometry are in the data buffer (GERTVertex, 32
+// bit indices) or, if the geometry is of a dynamic node, in the mesh cache of
+// the driver (GEVulkanMeshCache, the same as the raster pass uses, 16 bit
+// indices), see m_flags. A vertex is the same 8 words in both: position,
+// packed normal, linear vertex color, 2 half uvs, 2 half uvs of the second uv
+// and packed tangent (in world space, the ones of the mesh cache are in the
+// space of the BLAS of the instance).
 //
 // Set 0 is the one of GEVulkanRTScene (acceleration structure, data buffer,
 // geometry buffer, mesh cache), set 1 the camera and the global light, set 2 GVDFP_HDR
@@ -36,8 +38,7 @@
 #define MESH_TEXTURES_SET 4
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT u_tlas;
-// Vertices (8 words: position, color, normal, 2 half uv) of all geometries,
-// then their indices
+// Vertices (8 words, see above) of all geometries, then their indices
 layout(set = 0, binding = 1, std430) readonly buffer RTData
 {
     uint u_rt_data[];
@@ -83,6 +84,7 @@ layout(location = 0) out vec4 o_color;
 #include "../utils/rgb_conversion.frag"
 #include "utils/global_light_data.glsl"
 #include "utils/pbr_light.glsl"
+#include "utils/rt_utils.glsl"
 
 const uint RT_SHADING_SOLID = 0;
 const uint RT_VERTEX_WORDS = 8;
@@ -102,36 +104,51 @@ uint getRTIndex(RTGeometry geometry, uint i)
     return (at & 1u) == 0u ? (word & 0xFFFFu) : (word >> 16u);
 }
 
+// Words of a vertex, the same in the data buffer and in the mesh cache
+const uint RT_VERTEX_NORMAL = 3;
+const uint RT_VERTEX_COLOR = 4;
+const uint RT_VERTEX_UV = 5;
+const uint RT_VERTEX_UV_TWO = 6;
+const uint RT_VERTEX_TANGENT = 7;
+
+uint getRTVertexWord(RTGeometry geometry, uint vertex_index, uint word)
+{
+    uint at = (geometry.m_vertex_offset + vertex_index) * RT_VERTEX_WORDS +
+        word;
+    if ((geometry.m_flags & RT_GEOMETRY_CACHE_VERTEX) != 0u)
+        return u_mesh_cache[at];
+    return u_rt_data[at];
+}
+
 vec4 getRTVertexColor(RTGeometry geometry, uint vertex_index)
 {
-    uint base = (geometry.m_vertex_offset + vertex_index) * RT_VERTEX_WORDS;
-    if ((geometry.m_flags & RT_GEOMETRY_CACHE_VERTEX) != 0u)
-        return getVertexColor(u_mesh_cache[base + 4u]);
-    return getVertexColor(u_rt_data[base + 3u]);
+    return getVertexColor(getRTVertexWord(geometry, vertex_index,
+        RT_VERTEX_COLOR));
 }
 
 vec2 getRTVertexUV(RTGeometry geometry, uint vertex_index)
 {
-    uint base = (geometry.m_vertex_offset + vertex_index) * RT_VERTEX_WORDS;
-    if ((geometry.m_flags & RT_GEOMETRY_CACHE_VERTEX) != 0u)
-        return unpackHalf2x16(u_mesh_cache[base + 5u]);
-    return unpackHalf2x16(u_rt_data[base + 7u]);
+    return unpackHalf2x16(getRTVertexWord(geometry, vertex_index,
+        RT_VERTEX_UV));
+}
+
+vec2 getRTVertexUVTwo(RTGeometry geometry, uint vertex_index)
+{
+    return unpackHalf2x16(getRTVertexWord(geometry, vertex_index,
+        RT_VERTEX_UV_TWO));
 }
 
 vec3 getRTVertexNormal(RTGeometry geometry, uint vertex_index)
 {
-    uint base = (geometry.m_vertex_offset + vertex_index) * RT_VERTEX_WORDS;
-    if ((geometry.m_flags & RT_GEOMETRY_CACHE_VERTEX) != 0u)
-    {
-        // A2B10G10R10 snorm, x is the lowest bits
-        uint packed_normal = u_mesh_cache[base + 3u];
-        return normalize(max(vec3(float(int(packed_normal << 22u) >> 22),
-            float(int(packed_normal << 12u) >> 22),
-            float(int(packed_normal << 2u) >> 22)) / 511.0, vec3(-1.0)));
-    }
-    return vec3(uintBitsToFloat(u_rt_data[base + 4u]),
-        uintBitsToFloat(u_rt_data[base + 5u]),
-        uintBitsToFloat(u_rt_data[base + 6u]));
+    return unpackSnorm1010102(getRTVertexWord(geometry, vertex_index,
+        RT_VERTEX_NORMAL)).xyz;
+}
+
+// xyz in the space of the BLAS, w is the sign of the bitangent
+vec4 getRTVertexTangent(RTGeometry geometry, uint vertex_index)
+{
+    return unpackSnorm1010102(getRTVertexWord(geometry, vertex_index,
+        RT_VERTEX_TANGENT));
 }
 
 // Whether the sun is blocked at a world position (a ray query can't be a
