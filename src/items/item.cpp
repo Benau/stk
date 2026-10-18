@@ -412,9 +412,12 @@ void Item::handleNewMesh(ItemType type)
         SP::SPMeshNode* spmn = dynamic_cast<SP::SPMeshNode*>(node);
         if (spmn)
             spmn->setGlowColor(ItemManager::getGlowColor(type));
-        else if (irr_driver->getVideoDriver()->getDriverType() == video::EDT_VULKAN)
+        else if (irr_driver->getVideoDriver()->getDriverType() == video::EDT_VULKAN &&
+            node->getMaterialCount() != 0)
         {
-            auto ri = std::make_shared<GE::GERenderInfo>();
+            auto ri = node->getMaterial(0).getRenderInfo();
+            if (!ri)
+                ri = std::make_shared<GE::GERenderInfo>();
             ri->getGlowOutlineColor() = ItemManager::getGlowColor(type).toSColor();
             for (unsigned j = 0; j < node->getMaterialCount(); j++)
                 node->getMaterial(j).setRenderInfo(ri);

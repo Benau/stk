@@ -106,7 +106,10 @@
 
 #ifndef SERVER_ONLY
 #include <ge_main.hpp>
+#include <ge_material_manager.hpp>
+#include <ge_render_info.hpp>
 #include <ge_vulkan_driver.hpp>
+#include <ge_vulkan_features.hpp>
 #include <ge_vulkan_texture_descriptor.hpp>
 #include <SDL_stdinc.h>
 #endif
@@ -1490,6 +1493,38 @@ scene::IParticleSystemSceneNode *IrrDriver::addParticleNode(bool default_emitter
 }   // addParticleNode
 
 // --------------------------------------------------------------------------------------------
+void IrrDriver::autoDynamicRayQuery(scene::ISceneNode* node,
+                                    std::shared_ptr<GE::GERenderInfo>& render_info)
+{
+#ifndef SERVER_ONLY
+    bool ghost_material = render_info && render_info->isTransparent();
+    if (!ghost_material &&
+        m_video_driver->getDriverType() == video::EDT_VULKAN &&
+        GE::GEVulkanFeatures::supportsRayQuery())
+    {
+        bool set_dynamic = false;
+        for (unsigned i = 0; i < node->getMaterialCount(); i++)
+        {
+            const GE::GEMaterial* m = GE::GEMaterialManager::getMaterial(
+                node->getMaterialType(i));
+            if (!m->isTransparent())
+            {
+                set_dynamic = true;
+                break;
+            }
+        }
+        if (set_dynamic)
+        {
+            if (!render_info)
+                render_info = std::make_shared<GE::GERenderInfo>();
+            if (render_info->getRayTracingType() == GE::GRTT_NONE)
+                render_info->setRayTracingType(GE::GRTT_DYNAMIC);
+        }
+    }
+#endif
+}   // autoDynamicRayQuery
+
+// --------------------------------------------------------------------------------------------
 /** Adds a static mesh to scene. This should be used for smaller objects,
  *  since the node is not optimised.
  *  \param mesh The mesh to add.
@@ -1505,6 +1540,7 @@ scene::ISceneNode *IrrDriver::addMesh(scene::IMesh *mesh,
     if (!CVS->isGLSL())
     {
         scene::ISceneNode* node = m_scene_manager->addMeshSceneNode(mesh, parent);
+        autoDynamicRayQuery(node, render_info);
         node->resetFirstRenderInfo(render_info);
         return node;
     }
@@ -1744,6 +1780,7 @@ scene::IAnimatedMeshSceneNode *IrrDriver::addAnimatedMesh(scene::IAnimatedMesh *
             core::vector3df(0, 0, 0),
             core::vector3df(1, 1, 1),
             /*addIfMeshIsZero*/true);
+        autoDynamicRayQuery(node, render_info);
         node->resetFirstRenderInfo(render_info);
     }
     return node;

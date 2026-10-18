@@ -165,6 +165,9 @@ Referee::Referee()
     m_scene_node = irr_driver->addAnimatedMesh(NULL, "referee");
     //m_scene_node->setReadOnlyMaterials(true);
     m_scene_node->setMesh(m_st_referee_mesh);
+    std::shared_ptr<GE::GERenderInfo> render_info;
+    irr_driver->autoDynamicRayQuery(m_scene_node, render_info);
+    m_scene_node->resetFirstRenderInfo(render_info);
     m_scene_node->grab();
     m_scene_node->setRotation(m_st_start_rotation.toIrrVector());
     m_scene_node->setScale(m_st_scale.toIrrVector());
@@ -201,6 +204,9 @@ Referee::Referee(const AbstractKart &kart)
     m_scene_node = irr_driver->addAnimatedMesh(NULL, "referee");
     //m_scene_node->setReadOnlyMaterials(true);
     m_scene_node->setMesh(m_st_referee_mesh);
+    std::shared_ptr<GE::GERenderInfo> render_info;
+    irr_driver->autoDynamicRayQuery(m_scene_node, render_info);
+    m_scene_node->resetFirstRenderInfo(render_info);
     m_scene_node->grab();
     m_scene_node->setScale(m_st_scale.toIrrVector());
     m_scene_node->setPosition(core::vector3df(0, kart.getKartHeight() + 0.4f, 0));

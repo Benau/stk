@@ -542,6 +542,9 @@ public:
     u32 getDefaultFramebuffer() const;
     // ------------------------------------------------------------------------
     void handleWindowResize();
+    // ------------------------------------------------------------------------
+    void autoDynamicRayQuery(scene::ISceneNode* node,
+                             std::shared_ptr<GE::GERenderInfo>& render_info);
 };   // IrrDriver
 
 extern IrrDriver *irr_driver;
