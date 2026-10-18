@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <set>
 #include <stdexcept>
@@ -29,6 +30,19 @@ namespace GE
 {
 namespace
 {
+// ----------------------------------------------------------------------------
+// A2B10G10R10 snorm, x is the lowest bits (the format of the normals and
+// tangents of the mesh cache), w are the 2 bits at the top
+uint32_t packSnorm1010102(float x, float y, float z, uint32_t w)
+{
+    auto to_10 = [](float v) -> uint32_t
+    {
+        v = std::min(1.0f, std::max(-1.0f, v));
+        return (uint32_t)(int32_t)std::lround(v * 511.0f) & 0x3FFu;
+    };
+    return to_10(x) | (to_10(y) << 10) | (to_10(z) << 20) | ((w & 3u) << 30);
+}   // packSnorm1010102
+
 // ----------------------------------------------------------------------------
 struct RTSource
 {
@@ -1790,16 +1804,25 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
                 MiniGLM::decompressVector3(src[i].m_normal);
             normal_matrix.rotateVect(normal);
             normal.normalize();
+            // The tangent is a direction of the surface, so it's not
+            // transformed by the normal matrix, the sign of the bitangent
+            // (2 bits at the top) is the one of the vertex
+            irr::core::vector3df tangent =
+                MiniGLM::decompressVector3(src[i].m_tangent);
+            abs.rotateVect(tangent);
+            tangent.normalize();
             GERTVertex v;
             v.m_position[0] = pos.X;
             v.m_position[1] = pos.Y;
             v.m_position[2] = pos.Z;
+            v.m_normal = packSnorm1010102(normal.X, normal.Y, normal.Z, 0);
             v.m_color = src[i].m_color.color;
-            v.m_normal[0] = normal.X;
-            v.m_normal[1] = normal.Y;
-            v.m_normal[2] = normal.Z;
             v.m_uv = (uint32_t)(uint16_t)src[i].m_all_uvs[0] |
                 ((uint32_t)(uint16_t)src[i].m_all_uvs[1] << 16);
+            v.m_uv_two = (uint32_t)(uint16_t)src[i].m_all_uvs[2] |
+                ((uint32_t)(uint16_t)src[i].m_all_uvs[3] << 16);
+            v.m_tangent = packSnorm1010102(tangent.X, tangent.Y, tangent.Z,
+                src[i].m_tangent >> 30);
             vertices.push_back(v);
         }
         const irr::u16* idx = buffer->getIndices();
