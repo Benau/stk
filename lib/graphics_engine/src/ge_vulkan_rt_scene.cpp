@@ -57,16 +57,21 @@ bool getShadingType(const GEMaterial* material, uint32_t* type)
 }   // getShadingType
 
 // ----------------------------------------------------------------------------
-void collectNode(irr::scene::ISceneNode* node, std::vector<RTSource>& sources)
+// visible is if the node and all its parents are visible, it's passed down by
+// the parent (isChildVisibleForGE) instead of isTrulyVisible, so a parent (a
+// LODNode) can show its most detailed level without changing the scene
+void collectNode(irr::scene::ISceneNode* node, std::vector<RTSource>& sources,
+                 bool visible)
 {
-    if (node->isVisible())
+    if (!visible)
+        return;
     {
         irr::scene::IMesh* mesh = NULL;
         if (node->getType() == irr::scene::ESNT_ANIMATED_MESH)
             mesh = static_cast<GEVulkanAnimatedMeshSceneNode*>(node)->getMesh();
         else if (node->getType() == irr::scene::ESNT_MESH)
             mesh = static_cast<irr::scene::IMeshSceneNode*>(node)->getMesh();
-        if (mesh && node->isTrulyVisible())
+        if (mesh)
         {
             for (unsigned i = 0; i < mesh->getMeshBufferCount(); i++)
             {
@@ -94,7 +99,8 @@ void collectNode(irr::scene::ISceneNode* node, std::vector<RTSource>& sources)
     const irr::core::array<irr::scene::ISceneNode*>& children =
         node->getChildren();
     for (irr::u32 i = 0; i < children.size(); i++)
-        collectNode(children[i], sources);
+        collectNode(children[i], sources,
+            node->isChildVisibleForGE(children[i]));
 }   // collectNode
 
 // ----------------------------------------------------------------------------
@@ -112,16 +118,17 @@ struct DynamicSource
 
 // ----------------------------------------------------------------------------
 void collectDynamicNode(irr::scene::ISceneNode* node,
-                        std::vector<DynamicSource>& sources)
+                        std::vector<DynamicSource>& sources, bool visible)
 {
-    if (node->isVisible())
+    if (!visible)
+        return;
     {
         irr::scene::IMesh* mesh = NULL;
         if (node->getType() == irr::scene::ESNT_ANIMATED_MESH)
             mesh = static_cast<GEVulkanAnimatedMeshSceneNode*>(node)->getMesh();
         else if (node->getType() == irr::scene::ESNT_MESH)
             mesh = static_cast<irr::scene::IMeshSceneNode*>(node)->getMesh();
-        if (mesh && node->isTrulyVisible())
+        if (mesh)
         {
             DynamicSource source;
             source.m_node = node;
@@ -157,7 +164,8 @@ void collectDynamicNode(irr::scene::ISceneNode* node,
     const irr::core::array<irr::scene::ISceneNode*>& children =
         node->getChildren();
     for (irr::u32 i = 0; i < children.size(); i++)
-        collectDynamicNode(children[i], sources);
+        collectDynamicNode(children[i], sources,
+            node->isChildVisibleForGE(children[i]));
 }   // collectDynamicNode
 
 // ----------------------------------------------------------------------------
@@ -172,10 +180,11 @@ struct SkinSource
 
 // ----------------------------------------------------------------------------
 void collectSkinnedNode(irr::scene::ISceneNode* node,
-                        std::vector<SkinSource>& sources)
+                        std::vector<SkinSource>& sources, bool visible)
 {
-    if (node->isVisible() && node->getType() == irr::scene::ESNT_ANIMATED_MESH &&
-        node->isTrulyVisible())
+    if (!visible)
+        return;
+    if (node->getType() == irr::scene::ESNT_ANIMATED_MESH)
     {
         irr::scene::IMesh* mesh =
             static_cast<GEVulkanAnimatedMeshSceneNode*>(node)->getMesh();
@@ -209,7 +218,8 @@ void collectSkinnedNode(irr::scene::ISceneNode* node,
     const irr::core::array<irr::scene::ISceneNode*>& children =
         node->getChildren();
     for (irr::u32 i = 0; i < children.size(); i++)
-        collectSkinnedNode(children[i], sources);
+        collectSkinnedNode(children[i], sources,
+            node->isChildVisibleForGE(children[i]));
 }   // collectSkinnedNode
 
 // ----------------------------------------------------------------------------
@@ -1315,7 +1325,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root)
     // use another mesh)
     std::vector<DynamicSource> sources;
     if (root)
-        collectDynamicNode(root, sources);
+        collectDynamicNode(root, sources, root->isTrulyVisible());
     t.m_slots.clear();
     VkAccelerationStructureInstanceKHR* instances =
         (VkAccelerationStructureInstanceKHR*)t.m_instance_mapped;
@@ -1373,7 +1383,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root)
     t.m_skin_dispatches.clear();
     std::vector<SkinSource> skins;
     if (root)
-        collectSkinnedNode(root, skins);
+        collectSkinnedNode(root, skins, root->isTrulyVisible());
     if (!skins.empty())
     {
         std::vector<GESPMBuffer*> buffers;
@@ -1707,7 +1717,7 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
         return false;
 
     std::vector<RTSource> sources;
-    collectNode(root, sources);
+    collectNode(root, sources, root->isTrulyVisible());
     if (sources.empty())
         return false;
 

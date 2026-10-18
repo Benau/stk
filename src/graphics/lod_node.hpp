@@ -151,6 +151,18 @@ public:
         return result;
     }
 
+    // For the ray traced scene of GE, only the most detailed level is visible
+    // (m_current_level doesn't matter here), the other children are as they
+    // are. The scene is not changed, GE passes the result down when it walks
+    virtual bool isChildVisibleForGE(const scene::ISceneNode* child) const
+    {
+        for (u32 i = 0; i < m_nodes.size(); i++)
+        {
+            if (m_nodes[i] == child)
+                return i == 0;
+        }
+        return child->isVisible();
+    }
 };
 
 #endif
