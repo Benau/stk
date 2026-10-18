@@ -25,6 +25,7 @@
 #include "LinearMath/btQuaternion.h"
 
 #include <ge_render_info.hpp>
+#include <ge_vulkan_features.hpp>
 #include <IAnimatedMeshSceneNode.h>
 #include <ISceneManager.h>
 
@@ -135,9 +136,17 @@ void CTFFlag::updateFlagGraphics(irr::scene::IAnimatedMeshSceneNode* flag_node)
     if (m_flag_render_info)
     {
         if (m_deactivated_ticks > 0)
+        {
             m_flag_render_info->setTransparent(true);
+            if (GE::GEVulkanFeatures::supportsRayQuery())
+                m_flag_render_info->setRayTracingType(GE::GRTT_NONE);
+        }
         else
+        {
             m_flag_render_info->setTransparent(false);
+            if (GE::GEVulkanFeatures::supportsRayQuery())
+                m_flag_render_info->setRayTracingType(GE::GRTT_DYNAMIC);
+        }
     }
 #endif
 
@@ -146,8 +155,12 @@ void CTFFlag::updateFlagGraphics(irr::scene::IAnimatedMeshSceneNode* flag_node)
 // ----------------------------------------------------------------------------
 void CTFFlag::initFlagRenderInfo(irr::scene::IAnimatedMeshSceneNode* flag_node)
 {
+#ifndef SERVER_ONLY
     m_flag_render_info = std::make_shared<GE::GERenderInfo>(0.0f, true);
+    if (GE::GEVulkanFeatures::supportsRayQuery())
+        m_flag_render_info->setRayTracingType(GE::GRTT_DYNAMIC);
     flag_node->resetFirstRenderInfo(m_flag_render_info);
+#endif
 }   // initFlagRenderInfo
 
 // ----------------------------------------------------------------------------
