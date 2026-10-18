@@ -86,7 +86,9 @@ layout(location = 0) out vec4 o_color;
 #include "utils/pbr_light.glsl"
 #include "utils/rt_utils.glsl"
 
+// Same as GERTShadingType
 const uint RT_SHADING_SOLID = 0;
+const uint RT_SHADING_NORMALMAP = 1;
 const uint RT_VERTEX_WORDS = 8;
 // Same as GERTGeometry flags
 const uint RT_GEOMETRY_CACHE_VERTEX = 1;
@@ -165,6 +167,47 @@ float getSunShadow(vec3 position, vec3 normal, vec3 sun_direction)
         gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
 }
 
+vec4 sampleHitTexture(int base, int layer, vec2 uv, float lod)
+{
+    return textureLod(f_mesh_textures[GE_SAMPLE_TEX_INDEX(base + layer)], uv,
+        lod);
+}
+
+// The albedo of solid.frag and normalmap.frag (hue, vertex color and the
+// texture)
+vec3 getSolidAlbedo(int base, vec2 uv, float lod, float hue,
+                    vec4 vertex_color)
+{
+    vec4 tex = sampleHitTexture(base, 0, uv, lod);
+    if (hue > 0.0)
+    {
+        float mask = tex.a;
+        vec3 old_hsv = rgbToHsv(tex.rgb);
+        float mask_step = step(mask, 0.5);
+        float saturation = mask * 2.5;
+        vec2 new_xy = mix(vec2(old_hsv.x, old_hsv.y),
+            vec2(hue, max(old_hsv.y, saturation)),
+            vec2(mask_step, mask_step));
+        tex = vec4(hsvToRgb(vec3(new_xy.x, new_xy.y, old_hsv.z)), 1.0);
+    }
+    return tex.rgb * vertex_color.rgb;
+}
+
+// The material of the hit like the fragment shader of the geometry writes it to
+// the g-buffer: the albedo, x: gloss, y: metallic, z: emissive of pbr, and the
+// (not two sided yet) normal, which the shader can change. uv is the first
+// one (with the uv shift of the node), uv_two the second one, which has no
+// shift
+void getHitMaterial(RTGeometry geometry, int base, vec2 uv, vec2 uv_two,
+                    vec4 vertex_color, float lod,
+                    out vec3 diffuse_color, out vec3 pbr, inout vec3 normal)
+{
+    // solid.frag and normalmap.frag
+    diffuse_color = getSolidAlbedo(base, uv, lod, geometry.m_hue,
+        vertex_color);
+    pbr = sampleHitTexture(base, 2, uv, lod).xyz;
+}
+
 // The lit (hdr) color of the closest hit, the values of the hit are
 // parameters because a ray query can't be one
 vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
@@ -180,6 +223,9 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
     vec2 uv = getRTVertexUV(geometry, idx.x) * bary.x +
         getRTVertexUV(geometry, idx.y) * bary.y +
         getRTVertexUV(geometry, idx.z) * bary.z;
+    vec2 uv_two = getRTVertexUVTwo(geometry, idx.x) * bary.x +
+        getRTVertexUVTwo(geometry, idx.y) * bary.y +
+        getRTVertexUVTwo(geometry, idx.z) * bary.z;
     uv += vec2(geometry.m_uv_shift_x, geometry.m_uv_shift_y);
     vec4 vertex_color =
         getRTVertexColor(geometry, idx.x) * bary.x +
@@ -193,30 +239,17 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
     // The inverse transpose of object to world (row vector times matrix)
     normal = normalize(normal * world_to_object);
     vec3 eyedir = -ray_direction;
-    // Two sided
-    if (dot(normal, eyedir) < 0.0)
-        normal = -normal;
 
     // No derivatives in a ray query, the farther the hit the blurrier
     float lod = clamp(log2(1.0 + hit_distance * 0.5), 0.0, 8.0);
     int base = int(geometry.m_material_id) * TOTAL_MESH_TEXTURE_LAYER;
-    vec4 tex = textureLod(f_mesh_textures[GE_SAMPLE_TEX_INDEX(base)], uv, lod);
-    // Same as solid.frag
-    if (geometry.m_hue > 0.0)
-    {
-        float mask = tex.a;
-        vec3 old_hsv = rgbToHsv(tex.rgb);
-        float mask_step = step(mask, 0.5);
-        float saturation = mask * 2.5;
-        vec2 new_xy = mix(vec2(old_hsv.x, old_hsv.y),
-            vec2(geometry.m_hue, max(old_hsv.y, saturation)),
-            vec2(mask_step, mask_step));
-        tex = vec4(hsvToRgb(vec3(new_xy.x, new_xy.y, old_hsv.z)), 1.0);
-    }
-    vec3 diffuse_color = tex.rgb * vertex_color.rgb;
-    // x: gloss, y: metallic, z: emissive
-    vec3 pbr = textureLod(f_mesh_textures[GE_SAMPLE_TEX_INDEX(base + 2)], uv,
-        lod).xyz;
+    vec3 diffuse_color;
+    vec3 pbr;
+    getHitMaterial(geometry, base, uv, uv_two, vertex_color, lod,
+        diffuse_color, pbr, normal);
+    // Two sided
+    if (dot(normal, eyedir) < 0.0)
+        normal = -normal;
     float perceptual_roughness = 1.0 - pbr.x;
 
     vec3 world_position = ray_origin + ray_direction * hit_distance;

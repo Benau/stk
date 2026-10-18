@@ -53,21 +53,24 @@ struct RTSource
 };   // RTSource
 
 // ----------------------------------------------------------------------------
-// Only the materials which can be shaded by the ray traced shaders (with the
-// default vertex shader), alphatest, transparent, etc. are not included, so
-// the rays pass through them
-bool getShadingType(const GEMaterial* material, uint32_t* type)
+// The shading type of a material by its shader (the name of GEMaterialManager),
+// only the ones which can be shaded by the ray traced shaders are here:
+// transparent, ghost, grass (it has its own vertex shader), etc. are not
+// included, so the rays pass through them
+bool getShadingType(irr::video::E_MATERIAL_TYPE mt, uint32_t* type)
 {
-    if (!material || material->isTransparent() ||
-        material->m_vertex_shader != "spm.vert")
-        return false;
-    if (material->m_fragment_shader == "solid.frag" ||
-        material->m_fragment_shader == "normalmap.frag")
+    static std::vector<int> types;
+    if (types.empty())
     {
-        *type = GRTST_SOLID;
-        return true;
+        types.resize(irr::video::EMT_MATERIAL_COUNT, -1);
+        types[GEMaterialManager::getIrrMaterialType("solid")] = GRTST_SOLID;
+        types[GEMaterialManager::getIrrMaterialType("normalmap")] = GRTST_NORMALMAP;
     }
-    return false;
+    int ret = types[mt];
+    if (ret == -1)
+        return false;
+    *type = ret;
+    return true;
 }   // getShadingType
 
 // ----------------------------------------------------------------------------
@@ -105,8 +108,7 @@ void collectNode(irr::scene::ISceneNode* node, std::vector<RTSource>& sources,
                 if (!ri || ri->getRayTracingType() != GRTT_STATIC)
                     continue;
                 uint32_t type = 0;
-                if (!getShadingType(GEMaterialManager::getMaterial(
-                    node->getMaterialType(i)), &type))
+                if (!getShadingType(node->getMaterialType(i), &type))
                     continue;
                 sources.push_back({ buffer, node, i, type });
             }
@@ -168,8 +170,7 @@ void collectDynamicNode(irr::scene::ISceneNode* node,
                 if (!ri || ri->getRayTracingType() != GRTT_DYNAMIC)
                     continue;
                 uint32_t type = 0;
-                if (!getShadingType(GEMaterialManager::getMaterial(
-                    node->getMaterialType(i)), &type))
+                if (!getShadingType(node->getMaterialType(i), &type))
                     continue;
                 source.m_buffer_mask |= (uint64_t)1 << i;
                 source.m_buffers.push_back(i);
@@ -225,9 +226,7 @@ void collectSkinnedNode(irr::scene::ISceneNode* node,
                     buffer->getIndexCount() < 3)
                     continue;
                 uint32_t type = 0;
-                const GEMaterial* material = GEMaterialManager::getMaterial(
-                    node->getMaterialType(i));
-                if (!getShadingType(material, &type))
+                if (!getShadingType(node->getMaterialType(i), &type))
                     continue;
                 sources.push_back({ node, buffer, i, type });
             }
