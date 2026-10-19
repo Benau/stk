@@ -51,6 +51,8 @@ void RayTracingSettingsDialog::beforeAddingWidgets()
         ->setState(UserConfigParams::m_ray_tracing_dynamic_objects);
     getWidget<CheckBoxWidget>("rt_foliage")
         ->setState(UserConfigParams::m_ray_tracing_alphatest);
+    getWidget<CheckBoxWidget>("rt_grass")
+        ->setState(UserConfigParams::m_ray_tracing_grass);
 }   // beforeAddingWidgets
 
 // -----------------------------------------------------------------------------
@@ -63,6 +65,7 @@ void RayTracingSettingsDialog::updateActivation()
     getWidget<CheckBoxWidget>("rt_reflection")->setActive(on);
     getWidget<CheckBoxWidget>("rt_dynamic_objects")->setActive(on);
     getWidget<CheckBoxWidget>("rt_foliage")->setActive(on);
+    getWidget<CheckBoxWidget>("rt_grass")->setActive(on);
     // The label explaining why it's not available
     getWidget<LabelWidget>("rt_unsupported")->setVisible(!m_supported);
 }   // updateActivation
@@ -98,10 +101,12 @@ GUIEngine::EventPropagation RayTracingSettingsDialog::processEvent(
                     ->getState();
                 UserConfigParams::m_ray_tracing_alphatest =
                     getWidget<CheckBoxWidget>("rt_foliage")->getState();
+                UserConfigParams::m_ray_tracing_grass =
+                    getWidget<CheckBoxWidget>("rt_grass")->getState();
                 user_config->saveConfig();
                 OptionsScreenVideo::setRayTracing();
 
-                // Dynamic objects and foliage are handled by the ray traced
+                // Dynamic objects, foliage and grass are handled by the ray traced
                 // scene itself (it's built again if needed), the others
                 // change which passes the deferred FBO has, and the solid
                 // reflection which is used (RT overrides SSR)

@@ -93,6 +93,7 @@ const uint RT_SHADING_DECAL = 2;
 const uint RT_SHADING_SPLATTING = 3;
 const uint RT_SHADING_ALPHATEST = 4;
 const uint RT_SHADING_UNLIT = 5;
+const uint RT_SHADING_GRASS = 6;
 const uint RT_VERTEX_WORDS = 8;
 // Same as GERTGeometry flags
 const uint RT_GEOMETRY_CACHE_VERTEX = 1;
@@ -168,7 +169,8 @@ bool passesAlphaTest(uint geometry_index, uint primitive, vec2 b,
 {
     RTGeometry geometry = u_rt_geometries[geometry_index];
     if (geometry.m_shading_type != RT_SHADING_ALPHATEST &&
-        geometry.m_shading_type != RT_SHADING_UNLIT)
+        geometry.m_shading_type != RT_SHADING_UNLIT &&
+        geometry.m_shading_type != RT_SHADING_GRASS)
         return true;
     vec3 bary = vec3(1.0 - b.x - b.y, b.x, b.y);
     uvec3 idx = uvec3(getRTIndex(geometry, primitive * 3u),
@@ -178,10 +180,16 @@ bool passesAlphaTest(uint geometry_index, uint primitive, vec2 b,
         getRTVertexUV(geometry, idx.y) * bary.y +
         getRTVertexUV(geometry, idx.z) * bary.z +
         vec2(geometry.m_uv_shift_x, geometry.m_uv_shift_y);
-    float vertex_alpha = (getRTVertexColor(geometry, idx.x).a * bary.x +
-        getRTVertexColor(geometry, idx.y).a * bary.y +
-        getRTVertexColor(geometry, idx.z).a * bary.z) *
-        getVertexColor(geometry.m_vertex_color).a;
+    // grass.vert has a white vertex color (the vertex color of the mesh is the
+    // weight of the wind)
+    float vertex_alpha = 1.0;
+    if (geometry.m_shading_type != RT_SHADING_GRASS)
+    {
+        vertex_alpha = (getRTVertexColor(geometry, idx.x).a * bary.x +
+            getRTVertexColor(geometry, idx.y).a * bary.y +
+            getRTVertexColor(geometry, idx.z).a * bary.z) *
+            getVertexColor(geometry.m_vertex_color).a;
+    }
     float lod = clamp(log2(1.0 + hit_distance * 0.5), 0.0, 8.0);
     int base = int(geometry.m_material_id) * TOTAL_MESH_TEXTURE_LAYER;
     return sampleHitTexture(base, 0, uv, min(lod, 1.0)).a * vertex_alpha >= 0.5;
@@ -279,7 +287,8 @@ void getHitMaterial(RTGeometry geometry, int base, vec2 uv, vec2 uv_two,
                     out vec3 pbr, inout vec3 normal)
 {
     if (geometry.m_shading_type == RT_SHADING_ALPHATEST ||
-        geometry.m_shading_type == RT_SHADING_UNLIT)
+        geometry.m_shading_type == RT_SHADING_UNLIT ||
+        geometry.m_shading_type == RT_SHADING_GRASS)
     {
         // alphatest.frag and unlit.frag (the alpha was tested by the ray),
         // the hue only changes the hue of the color
@@ -289,7 +298,11 @@ void getHitMaterial(RTGeometry geometry, int base, vec2 uv, vec2 uv_two,
             vec3 old_hsv = rgbToHsv(tex_color);
             tex_color = hsvToRgb(vec3(geometry.m_hue, old_hsv.y, old_hsv.z));
         }
-        diffuse_color = tex_color * vertex_color.rgb;
+        // The vertex color of grass.vert is white
+        if (geometry.m_shading_type == RT_SHADING_GRASS)
+            diffuse_color = tex_color;
+        else
+            diffuse_color = tex_color * vertex_color.rgb;
         // unlit.frag has only a little emissive, no gloss and no metallic
         if (geometry.m_shading_type == RT_SHADING_UNLIT)
             pbr = vec3(0.0, 0.0, 0.4);

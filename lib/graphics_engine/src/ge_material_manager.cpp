@@ -219,6 +219,14 @@ void GEMaterialManager::update()
 }   // update
 
 // ----------------------------------------------------------------------------
+void GEMaterialManager::getWindDirection(float* out)
+{
+    out[0] = g_wind_direction.X;
+    out[1] = g_wind_direction.Y;
+    out[2] = g_wind_direction.Z;
+}   // getWindDirection
+
+// ----------------------------------------------------------------------------
 irr::video::E_MATERIAL_TYPE
           GEMaterialManager::getIrrMaterialType(const std::string& shader_name)
 {
