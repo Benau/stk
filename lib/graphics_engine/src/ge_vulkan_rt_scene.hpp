@@ -3,6 +3,7 @@
 
 #include "ge_vma.hpp"
 #include "vulkan_wrapper.h"
+#include "vector3d.h"
 
 #include <cstdint>
 #include <map>
@@ -494,7 +495,8 @@ public:
     // Only if GERayTracingConfig::m_dynamic_objects is true, otherwise the buffers
     // are restored (once) to what the build wrote. Nothing is written if not
     // isReady(). root is not changed
-    void update(irr::scene::ISceneNode* root);
+    void update(irr::scene::ISceneNode* root,
+                const std::vector<irr::core::vector3df>& cameras);
     // ------------------------------------------------------------------------
     // Record the skinning and the update of the skinned BLAS, the builds of the
     // new BLAS and the TLAS of the current buffer index if its instances

@@ -1247,7 +1247,8 @@ void GEVulkanRTScene::destroySkinSet(SkinSet* set)
 }   // destroySkinSet
 
 // ----------------------------------------------------------------------------
-void GEVulkanRTScene::update(irr::scene::ISceneNode* root)
+void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
+                         const std::vector<irr::core::vector3df>& cameras)
 {
     if (!isReady() || !m_geometry_data)
         return;
@@ -1444,6 +1445,30 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root)
             unsigned matrix_count = 1;
             bool matrices_ok = true;
             std::vector<TopLevel::SkinDispatch> dispatches;
+            // The vertices are baked relative to this origin, with the
+            // translation of the instance as the origin, otherwise a node far
+            // from the world origin loses the precision of its 32 bit
+            // vertices (the small details are distorted). All the skinned
+            // nodes share a BLAS, so the origin is the position of the node
+            // nearest to the first camera, which is the one that should have
+            // the best precision (the order of the skins is not changed)
+            irr::core::vector3df skin_origin;
+            if (!skins.empty())
+            {
+                float nearest = -1.0f;
+                for (const SkinSource& s : skins)
+                {
+                    const irr::core::vector3df pos =
+                        s.m_node->getAbsoluteTransformation().getTranslation();
+                    const float dist = cameras.empty() ? 0.0f :
+                        (float)pos.getDistanceFromSQ(cameras[0]);
+                    if (nearest < 0.0f || dist < nearest)
+                    {
+                        nearest = dist;
+                        skin_origin = pos;
+                    }
+                }
+            }
             irr::scene::ISceneNode* last_node = NULL;
             int last_offset = 0;
             for (const SkinSource& s : skins)
@@ -1467,6 +1492,10 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root)
                 TopLevel::SkinDispatch dispatch;
                 memcpy(dispatch.m_world, s.m_node->getAbsoluteTransformation()
                     .pointer(), sizeof(dispatch.m_world));
+                // Column major, the translation is the last column
+                dispatch.m_world[12] -= skin_origin.X;
+                dispatch.m_world[13] -= skin_origin.Y;
+                dispatch.m_world[14] -= skin_origin.Z;
                 dispatch.m_skinning_offset = last_offset;
                 dispatches.push_back(dispatch);
             }
@@ -1485,11 +1514,16 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root)
             else
             {
                 m_skin_set->m_last_used_frame = m_frame_counter;
-                // World space already, so the transform is the identity
+                // World space with the origin of the skin removed (see
+                // skin_origin), the instance only moves it back. The shaders
+                // use the rotation part (identity) for the normals
                 VkAccelerationStructureInstanceKHR instance = {};
                 instance.transform.matrix[0][0] = 1.0f;
                 instance.transform.matrix[1][1] = 1.0f;
                 instance.transform.matrix[2][2] = 1.0f;
+                instance.transform.matrix[0][3] = skin_origin.X;
+                instance.transform.matrix[1][3] = skin_origin.Y;
+                instance.transform.matrix[2][3] = skin_origin.Z;
                 instance.instanceCustomIndex = (uint32_t)geometry_count;
                 instance.mask = 0xFF;
                 instance.instanceShaderBindingTableRecordOffset = 0;

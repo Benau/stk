@@ -1976,11 +1976,19 @@ bool GEVulkanDriver::endScene()
     GEVulkanSceneManager* sm = static_cast<GEVulkanSceneManager*>(
         m_irrlicht_device->getSceneManager());
     bool in_game = false;
+    // The positions of all cameras (splitscreen has many) drawn in the game
+    // target
+    std::vector<irr::core::vector3df> rt_cameras;
     for (GEVulkanTargetGroup* g : sm->getFrameGroups())
     {
         if (g->m_target == m_rtt_texture)
         {
             in_game = true;
+            for (unsigned i = 0; i < g->m_used; i++)
+            {
+                rt_cameras.push_back(
+                    g->m_dcs[i].second->getAbsolutePosition());
+            }
             break;
         }
     }
@@ -2000,7 +2008,7 @@ bool GEVulkanDriver::endScene()
             // like GEVulkanDrawCall::generate (a build writes all buffers).
             // It does nothing if m_dynamic_objects is false (after
             // restoring what the build wrote)
-            m_rt_scene->update(sm->getRootSceneNode());
+            m_rt_scene->update(sm->getRootSceneNode(), rt_cameras);
         }
     }
 
