@@ -28,6 +28,8 @@ enum GERTShadingType : uint32_t
     GRTST_NORMALMAP = 1,
     GRTST_DECAL = 2,
     GRTST_SPLATTING = 3,
+    GRTST_ALPHATEST = 4,
+    GRTST_UNLIT = 5,
 };
 
 // Vertex of the ray traced scene (world space, 32 bytes), the same layout as
