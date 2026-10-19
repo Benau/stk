@@ -1986,6 +1986,11 @@ bool GEVulkanDriver::endScene()
     }
     if (in_game && GEVulkanDeferredFBOSplit::needsSolidRT() && m_rt_scene)
     {
+        // Geometries with alpha tested materials are only in a scene which
+        // was built with the setting on
+        if (m_rt_scene->isReady() && m_rt_scene->getBuiltAlphatest() !=
+            getGEConfig()->m_ray_tracing.m_alphatest)
+            m_rt_scene->clear();
         if (!m_rt_scene->isReady())
             m_rt_scene->build(sm->getRootSceneNode());
         else
@@ -1993,7 +1998,7 @@ bool GEVulkanDriver::endScene()
             // Writes the GERTGeometry and the instances directly into the host
             // buffers of this frame, so it must be before the fence is waited
             // like GEVulkanDrawCall::generate (a build writes all buffers).
-            // It does nothing if m_dynamic_ray_tracing is false (after
+            // It does nothing if m_dynamic_objects is false (after
             // restoring what the build wrote)
             m_rt_scene->update(sm->getRootSceneNode());
         }

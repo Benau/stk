@@ -580,6 +580,7 @@ begin:
                 UserConfigParams::m_light_scatter;
             GE::getGEConfig()->m_ssao = UserConfigParams::m_ssao;
             GE::getGEConfig()->m_bloom = UserConfigParams::m_bloom;
+            OptionsScreenVideo::setRayTracing();
             // Same lens dust as the OpenGL bloom (bloomblend.frag)
             GE::getGEConfig()->m_bloom_blend_texture =
                 file_manager->getFileSystem()->getAbsolutePath(

@@ -66,6 +66,8 @@ public:
     void         updateScaleRTTsSlider();
     static void updateImageQuality(bool force_reload_texture);
     static void setSSR();
+    /** Mirrors the ray tracing user config to GE::GERayTracingConfig. */
+    static void setRayTracing();
 };
 
 #endif

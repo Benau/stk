@@ -32,7 +32,7 @@ GEConfig g_config =
     false,
     false,
     false,
-    false,
+    {},
     "",
     false,
     GADT_DISABLED,
@@ -289,16 +289,15 @@ void refreshDeferredSplit()
     // previous frame (the OpenGL renderer also needs the passes to be
     // separated), and the HiZ depth is generated after the g-buffer. The
     // FAST displace reflection only samples the depth buffer
-    // The ray traced reflection is a pass of the split FBO
-    if (isSolidReflectionSSR(g_config.m_solid_reflection) ||
-        isDisplaceReflectionHiZ(g_config.m_displace_reflection) ||
-        (g_config.m_solid_reflection == GSRT_RAY_QUERY &&
-        GEVulkanFeatures::supportsRayQuery()))
+    if (isSolidSSR() ||
+        isDisplaceReflectionHiZ(g_config.m_displace_reflection))
         g_config.m_deferred_split |= 1 << 3;
     // The ambient occlusion is computed between the g-buffer and the lighting
     // passes, and sampled by the lighting pass
     if (g_config.m_ssao)
         g_config.m_deferred_split |= 1 << 4;
+    if (isSolidRayTracing())
+        g_config.m_deferred_split |= 1 << 5;
 }
 
 void setLogCallback(GELogCallback callback)
@@ -334,6 +333,33 @@ void logMessage(GELogLevel level, const char* format, ...)
         g_log_callback(level, message.c_str());
     else
         std::cerr << "[GE] " << message << std::endl;
+}
+
+bool isRayTracing()
+{
+    return g_config.m_ray_tracing.m_enabled &&
+        GEVulkanFeatures::supportsRayQuery();
+}
+
+bool isSolidRayTracing()
+{
+    return g_config.m_pbr && g_config.m_ray_tracing.m_solid_reflection &&
+        isRayTracing();
+}
+
+GESolidReflectionType getSolidReflection()
+{
+    return isSolidRayTracing() ? GSRT_DISABLED : g_config.m_solid_reflection;
+}
+
+bool isSolidSSR()
+{
+    return isSolidReflectionSSR(getSolidReflection());
+}
+
+bool isSolidHiZ()
+{
+    return isSolidReflectionHiZ(getSolidReflection());
 }
 
 }

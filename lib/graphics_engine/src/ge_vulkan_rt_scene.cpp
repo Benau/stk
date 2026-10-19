@@ -82,6 +82,10 @@ bool getShadingType(irr::video::E_MATERIAL_TYPE mt, uint32_t* type)
     int ret = types[mt];
     if (ret == -1)
         return false;
+    // Not in the scene, so the rays pass through them
+    if ((ret == GRTST_ALPHATEST || ret == GRTST_UNLIT) &&
+        !getGEConfig()->m_ray_tracing.m_alphatest)
+        return false;
     *type = ret;
     return true;
 }   // getShadingType
@@ -291,6 +295,7 @@ GEVulkanRTScene::GEVulkanRTScene(GEVulkanDriver* vk)
     m_cache_version = 0;
     m_frame_counter = 0;
     m_warned_dynamic_limit = false;
+    m_built_alphatest = false;
     m_skin_layout = VK_NULL_HANDLE;
     m_skin_pool = VK_NULL_HANDLE;
     m_skin_pipeline_layout = VK_NULL_HANDLE;
@@ -811,7 +816,7 @@ bool GEVulkanRTScene::createGeometryData(
         GEVulkanDriver::getMaxFrameInFlight() + 1, 0));
     // Every buffer has the built data (the static geometries), so any of them
     // can be used right after the build (and always without
-    // m_dynamic_ray_tracing)
+    // GERayTracingConfig::m_dynamic_objects)
     for (unsigned i = 0; i < m_geometry_data->getHostBuffer().size(); i++)
     {
         if (m_geometry_data->getHostBuffer()[i] == VK_NULL_HANDLE ||
@@ -1290,7 +1295,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root)
     if (t.m_cache_version != cache_version)
         writeMeshCacheDescriptor(buffer_idx, mesh_cache);
     // The BLAS of the dynamic nodes are made of the mesh cache
-    const bool dynamic = getGEConfig()->m_dynamic_ray_tracing &&
+    const bool dynamic = getGEConfig()->m_ray_tracing.m_dynamic_objects &&
         GEVulkanFeatures::supportsBaseVertexRendering() && mesh_cache &&
         mesh_cache->getBuffer() != VK_NULL_HANDLE;
 
@@ -1741,6 +1746,8 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
         !GEVulkanFeatures::supportsComputeInMainQueue() || !root)
         return false;
 
+    // The shading types the geometries are collected with
+    m_built_alphatest = getGEConfig()->m_ray_tracing.m_alphatest;
     std::vector<RTSource> sources;
     collectNode(root, sources, root->isTrulyVisible());
     if (sources.empty())
