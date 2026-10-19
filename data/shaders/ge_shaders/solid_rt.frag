@@ -224,9 +224,11 @@ vec3 getSplattingAlbedo(int base, vec2 uv, vec2 uv_two, float lod,
 // (not two sided yet) normal, which the shader can change. uv is the first
 // one (with the uv shift of the node), uv_two the second one, which has no
 // shift
+// tangent is in world space, w is the sign of the bitangent
 void getHitMaterial(RTGeometry geometry, int base, vec2 uv, vec2 uv_two,
-                    vec4 vertex_color, float lod, float camera_distance,
-                    out vec3 diffuse_color, out vec3 pbr, inout vec3 normal)
+                    vec4 vertex_color, vec4 tangent, float lod,
+                    float camera_distance, out vec3 diffuse_color,
+                    out vec3 pbr, inout vec3 normal)
 {
     if (geometry.m_shading_type == RT_SHADING_DECAL)
     {
@@ -251,12 +253,26 @@ void getHitMaterial(RTGeometry geometry, int base, vec2 uv, vec2 uv_two,
     diffuse_color = getSolidAlbedo(base, uv, lod, geometry.m_hue,
         vertex_color);
     pbr = sampleHitTexture(base, 2, uv, lod).xyz;
+    if (geometry.m_shading_type == RT_SHADING_NORMALMAP &&
+        dot(tangent.xyz, tangent.xyz) > 0.0)
+    {
+        // normalmap.frag, the same tangent space (not orthogonalized)
+        vec3 tangent_space_normal =
+            2.0 * sampleHitTexture(base, 3, uv, lod).xyz - 1.0;
+        vec3 frag_tangent = normalize(tangent.xyz);
+        vec3 frag_normal = normalize(normal);
+        vec3 frag_bitangent =
+            normalize(cross(frag_normal, tangent.xyz) * tangent.w);
+        normal = normalize(mat3(frag_tangent, frag_bitangent, frag_normal) *
+            tangent_space_normal);
+    }
 }
 
 // The lit (hdr) color of the closest hit, the values of the hit are
 // parameters because a ray query can't be one
 vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
-              mat3 world_to_object, vec3 ray_origin, vec3 ray_direction)
+              mat3 world_to_object, mat3 object_to_world, vec3 ray_origin,
+              vec3 ray_direction)
 {
     vec3 bary = vec3(1.0 - b.x - b.y, b.x, b.y);
 
@@ -284,13 +300,20 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
     // The inverse transpose of object to world (row vector times matrix)
     normal = normalize(normal * world_to_object);
     vec3 eyedir = -ray_direction;
+    // The tangents of a dynamic geometry are in the space of its BLAS, the sign
+    // of the bitangent is the one of the first vertex
+    vec4 tangent = getRTVertexTangent(geometry, idx.x) * bary.x +
+        getRTVertexTangent(geometry, idx.y) * bary.y +
+        getRTVertexTangent(geometry, idx.z) * bary.z;
+    tangent.xyz = object_to_world * tangent.xyz;
+    tangent.w = getRTVertexTangent(geometry, idx.x).w >= 0.0 ? 1.0 : -1.0;
 
     // No derivatives in a ray query, the farther the hit the blurrier
     float lod = clamp(log2(1.0 + hit_distance * 0.5), 0.0, 8.0);
     int base = int(geometry.m_material_id) * TOTAL_MESH_TEXTURE_LAYER;
     vec3 diffuse_color;
     vec3 pbr;
-    getHitMaterial(geometry, base, uv, uv_two, vertex_color, lod,
+    getHitMaterial(geometry, base, uv, uv_two, vertex_color, tangent, lod,
         distance(ray_origin + ray_direction * hit_distance,
         u_camera.m_inverse_view_matrix[3].xyz), diffuse_color, pbr, normal);
     // Two sided
@@ -380,6 +403,7 @@ void main()
         rayQueryGetIntersectionBarycentricsEXT(ray_query, true),
         rayQueryGetIntersectionTEXT(ray_query, true),
         mat3(rayQueryGetIntersectionWorldToObjectEXT(ray_query, true)),
+        mat3(rayQueryGetIntersectionObjectToWorldEXT(ray_query, true)),
         world_position, world_reflection);
     o_color = vec4(hit_color * weight, weight);
 }
