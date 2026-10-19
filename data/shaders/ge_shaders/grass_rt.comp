@@ -1,0 +1,59 @@
+// Moves the vertices of a mesh with the grass material by the wind, in the model
+// space like grass.vert does (grass_wind.glsl is shared by both), before the
+// BLAS of the mesh in GEVulkanRTScene is updated. The BLAS has the model space
+// vertices, the transformation of each node is the one of its instance in the
+// TLAS, so all the instances of a mesh share the vertices (one thread for every
+// vertex)
+//
+// Binding 1 is the mesh cache of the driver (GEVulkanMeshCache), which has 8
+// words for each vertex (position, packed normal, color, 2 half uvs, tangent),
+// binding 2 is the data buffer of GEVulkanRTScene, where only the position (3
+// words, no padding) of each output vertex is written. Binding 0 of the set (the
+// joint matrices of skin_rt.comp) is not used, the set and the pipeline layout
+// are shared with it
+#include "utils/grass_wind.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 1, std430) readonly buffer RTMeshCache
+{
+    uint u_mesh_cache[];
+};
+
+layout(set = 0, binding = 2, std430) writeonly buffer RTData
+{
+    uint u_rt_data[];
+};
+
+layout(push_constant, std430) uniform PushConstants
+{
+    // Same as the push constant of grass.vert
+    vec3 m_wind_direction;
+    // First word of the first vertex in the mesh cache
+    uint m_source_word;
+    // First word of the first output vertex in the data buffer
+    uint m_dst_word;
+    uint m_vertex_count;
+} pc;
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.m_vertex_count)
+        return;
+
+    uint s = pc.m_source_word + i * 8u;
+    vec3 position = vec3(uintBitsToFloat(u_mesh_cache[s]),
+        uintBitsToFloat(u_mesh_cache[s + 1u]),
+        uintBitsToFloat(u_mesh_cache[s + 2u]));
+    // The weight is v_color.r of grass.vert, which is the vertex attribute
+    // (A8B8G8R8) of the lowest 8 bits of the color word
+    float weight = float(u_mesh_cache[s + 4u] & 0xFFu) / 255.0;
+    vec3 moved = position +
+        getGrassWindOffset(pc.m_wind_direction, position.y) * weight;
+
+    uint d = pc.m_dst_word + i * 3u;
+    u_rt_data[d] = floatBitsToUint(moved.x);
+    u_rt_data[d + 1u] = floatBitsToUint(moved.y);
+    u_rt_data[d + 2u] = floatBitsToUint(moved.z);
+}

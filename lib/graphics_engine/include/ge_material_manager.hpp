@@ -59,6 +59,10 @@ void init();
 // ----------------------------------------------------------------------------
 void update();
 // ----------------------------------------------------------------------------
+// The wind (animated by update()) which the push constants of the grass shader
+// have, 3 floats
+void getWindDirection(float* out);
+// ----------------------------------------------------------------------------
 irr::video::E_MATERIAL_TYPE getIrrMaterialType(const std::string& shader_name);
 // ----------------------------------------------------------------------------
 const std::string& getShader(irr::video::E_MATERIAL_TYPE mt);

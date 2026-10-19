@@ -1046,6 +1046,10 @@ namespace UserConfigParams
             PARAM_DEFAULT(BoolUserConfigParam(false, "ray_tracing_alphatest",
             &m_graphics_quality,
             "Materials with transparent texels (plants, fences) are ray traced"));
+    PARAM_PREFIX BoolUserConfigParam        m_ray_tracing_grass
+            PARAM_DEFAULT(BoolUserConfigParam(false, "ray_tracing_grass",
+            &m_graphics_quality,
+            "Wind-animated grass are ray traced (can be slow)"));
 
     // ---- Misc
     PARAM_PREFIX BoolUserConfigParam        m_cache_overworld

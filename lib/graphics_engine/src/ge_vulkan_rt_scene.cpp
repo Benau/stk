@@ -44,6 +44,17 @@ uint32_t packSnorm1010102(float x, float y, float z, uint32_t w)
 }   // packSnorm1010102
 
 // ----------------------------------------------------------------------------
+// The push constants of grass_rt.comp
+struct GrassPushConstants
+{
+    // The wind direction of grass.vert
+    float m_wind[3];
+    uint32_t m_source_word;
+    uint32_t m_dst_word;
+    uint32_t m_vertex_count;
+};   // GrassPushConstants
+
+// ----------------------------------------------------------------------------
 struct RTSource
 {
     GESPMBuffer* m_buffer;
@@ -57,15 +68,15 @@ struct RTSource
 // so the ray query gives a candidate to confirm (solid_rt.frag)
 VkGeometryFlagsKHR getGeometryFlags(uint32_t shading_type)
 {
-    return (shading_type == GRTST_ALPHATEST || shading_type == GRTST_UNLIT) ?
-        0 : VK_GEOMETRY_OPAQUE_BIT_KHR;
+    return (shading_type == GRTST_ALPHATEST || shading_type == GRTST_UNLIT ||
+        shading_type == GRTST_GRASS) ? 0 : VK_GEOMETRY_OPAQUE_BIT_KHR;
 }   // getGeometryFlags
 
 // ----------------------------------------------------------------------------
 // The shading type of a material by its shader (the name of GEMaterialManager),
 // only the ones which can be shaded by the ray traced shaders are here:
-// transparent, ghost, grass (it has its own vertex shader), etc. are not
-// included, so the rays pass through them
+// transparent, ghost, etc. are not included, so the rays pass through them. The
+// grass is only used by the dynamic nodes (GEVulkanRTScene::update)
 bool getShadingType(irr::video::E_MATERIAL_TYPE mt, uint32_t* type)
 {
     static std::vector<int> types;
@@ -78,6 +89,7 @@ bool getShadingType(irr::video::E_MATERIAL_TYPE mt, uint32_t* type)
         types[GEMaterialManager::getIrrMaterialType("splatting")] = GRTST_SPLATTING;
         types[GEMaterialManager::getIrrMaterialType("alphatest")] = GRTST_ALPHATEST;
         types[GEMaterialManager::getIrrMaterialType("unlit")] = GRTST_UNLIT;
+        types[GEMaterialManager::getIrrMaterialType("grass")] = GRTST_GRASS;
     }
     int ret = types[mt];
     if (ret == -1)
@@ -85,6 +97,8 @@ bool getShadingType(irr::video::E_MATERIAL_TYPE mt, uint32_t* type)
     // Not in the scene, so the rays pass through them
     if ((ret == GRTST_ALPHATEST || ret == GRTST_UNLIT) &&
         !getGEConfig()->m_ray_tracing.m_alphatest)
+        return false;
+    if (ret == GRTST_GRASS && !getGEConfig()->m_ray_tracing.m_grass)
         return false;
     *type = ret;
     return true;
@@ -94,6 +108,8 @@ bool getShadingType(irr::video::E_MATERIAL_TYPE mt, uint32_t* type)
 // visible is if the node and all its parents are visible, it's passed down by
 // the parent (isChildVisibleForGE) instead of isTrulyVisible, so a parent (a
 // LODNode) can show its most detailed level without changing the scene
+// The meshes with the grass material (it has a vertex shader which moves the
+// vertices) are not in the static BLAS, they are instances (collectDynamicNode)
 void collectNode(irr::scene::ISceneNode* node, std::vector<RTSource>& sources,
                  bool visible)
 {
@@ -123,6 +139,10 @@ void collectNode(irr::scene::ISceneNode* node, std::vector<RTSource>& sources,
                 irr::video::SMaterial& m = node->getMaterial(i);
                 const std::shared_ptr<GERenderInfo>& ri = m.getRenderInfo();
                 if (!ri || ri->getRayTracingType() != GRTT_STATIC)
+                    continue;
+                static irr::video::E_MATERIAL_TYPE grass_type =
+                    GEMaterialManager::getIrrMaterialType("grass");
+                if (node->getMaterialType(i) == grass_type)
                     continue;
                 uint32_t type = 0;
                 if (!getShadingType(node->getMaterialType(i), &type))
@@ -164,8 +184,11 @@ struct DynamicSource
 };   // DynamicSource
 
 // ----------------------------------------------------------------------------
+// The mesh buffers with the grass material (any GRTT_ but GRTT_NONE, the static
+// ones are not in the static BLAS) are in grass, with their own mask
 void collectDynamicNode(irr::scene::ISceneNode* node,
                         std::vector<DynamicSource>& sources,
+                        std::vector<DynamicSource>& grass,
                         std::vector<SkinSource>& skins, bool visible)
 {
     if (!visible)
@@ -179,10 +202,13 @@ void collectDynamicNode(irr::scene::ISceneNode* node,
             mesh = static_cast<irr::scene::IMeshSceneNode*>(node)->getMesh();
         if (mesh)
         {
+            static irr::video::E_MATERIAL_TYPE grass_type =
+                GEMaterialManager::getIrrMaterialType("grass");
             DynamicSource source;
             source.m_node = node;
             source.m_mesh = mesh;
             source.m_buffer_mask = 0;
+            DynamicSource grass_source = source;
             for (unsigned i = 0; i < mesh->getMeshBufferCount() && i < 64; i++)
             {
                 irr::scene::IMeshBuffer* b = mesh->getMeshBuffer(i);
@@ -197,17 +223,23 @@ void collectDynamicNode(irr::scene::ISceneNode* node,
                     continue;
                 const std::shared_ptr<GERenderInfo>& ri =
                     node->getMaterial(i).getRenderInfo();
-                if (!ri || ri->getRayTracingType() != GRTT_DYNAMIC)
+                if (!ri || ri->getRayTracingType() == GRTT_NONE)
+                    continue;
+                const bool is_grass = node->getMaterialType(i) == grass_type;
+                if (!is_grass && ri->getRayTracingType() != GRTT_DYNAMIC)
                     continue;
                 uint32_t type = 0;
                 if (!getShadingType(node->getMaterialType(i), &type))
                     continue;
-                source.m_buffer_mask |= (uint64_t)1 << i;
-                source.m_buffers.push_back(i);
-                source.m_shading_types.push_back(type);
+                DynamicSource& target = is_grass ? grass_source : source;
+                target.m_buffer_mask |= (uint64_t)1 << i;
+                target.m_buffers.push_back(i);
+                target.m_shading_types.push_back(type);
             }
             if (!source.m_buffers.empty())
                 sources.push_back(source);
+            if (!grass_source.m_buffers.empty())
+                grass.push_back(grass_source);
         }
     }
     if (node->getType() == irr::scene::ESNT_ANIMATED_MESH)
@@ -242,7 +274,7 @@ void collectDynamicNode(irr::scene::ISceneNode* node,
     const irr::core::array<irr::scene::ISceneNode*>& children =
         node->getChildren();
     for (irr::u32 i = 0; i < children.size(); i++)
-        collectDynamicNode(children[i], sources, skins,
+        collectDynamicNode(children[i], sources, grass, skins,
             node->isChildVisibleForGE(children[i]));
 }   // collectDynamicNode
 
@@ -287,6 +319,9 @@ GEVulkanRTScene::GEVulkanRTScene(GEVulkanDriver* vk)
     m_frame_counter = 0;
     m_warned_dynamic_limit = false;
     m_built_alphatest = false;
+    m_grass_next_id = 0;
+    m_grass_pipeline = VK_NULL_HANDLE;
+    m_grass_pipeline_failed = false;
     m_skin_layout = VK_NULL_HANDLE;
     m_skin_pool = VK_NULL_HANDLE;
     m_skin_pipeline_layout = VK_NULL_HANDLE;
@@ -359,6 +394,8 @@ GEVulkanRTScene::~GEVulkanRTScene()
 {
     clear();
     m_vk->waitIdle();
+    if (m_grass_pipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(m_vk->getDevice(), m_grass_pipeline, NULL);
     if (m_skin_pipeline != VK_NULL_HANDLE)
         vkDestroyPipeline(m_vk->getDevice(), m_skin_pipeline, NULL);
     if (m_skin_pipeline_layout != VK_NULL_HANDLE)
@@ -451,6 +488,7 @@ void GEVulkanRTScene::writeMeshCacheDescriptor(unsigned buffer_idx,
 void GEVulkanRTScene::clear()
 {
     if (m_top_levels.empty() && m_mesh_blas.empty() && !m_skin_set &&
+        m_grass_blas.empty() &&
         m_retired_skin_sets.empty() &&
         m_blas == VK_NULL_HANDLE &&
         m_data_buffer == VK_NULL_HANDLE && !m_geometry_data &&
@@ -459,6 +497,8 @@ void GEVulkanRTScene::clear()
     m_vk->waitIdle();
     VmaAllocator allocator = m_vk->getVmaAllocator();
     // The device is idle, so the BLAS of the meshes can go too
+    while (!m_grass_blas.empty())
+        destroyGrassBLAS(m_grass_blas.begin()->second.get());
     m_pending_blas.clear();
     if (m_skin_set)
         destroySkinSet(m_skin_set.get());
@@ -959,6 +999,14 @@ void GEVulkanRTScene::destroyUnusedMeshBLAS()
     }
     for (MeshBLAS* blas : unused)
         destroyMeshBLAS(blas);
+    std::vector<GrassBLAS*> unused_grass;
+    for (auto& p : m_grass_blas)
+    {
+        if (m_frame_counter - p.second->m_last_used_frame > grace)
+            unused_grass.push_back(p.second.get());
+    }
+    for (GrassBLAS* blas : unused_grass)
+        destroyGrassBLAS(blas);
     // The skinned BLAS, a replaced one is in the frames in flight too
     if (m_skin_set && m_frame_counter - m_skin_set->m_last_used_frame > grace)
     {
@@ -977,6 +1025,196 @@ void GEVulkanRTScene::destroyUnusedMeshBLAS()
             it++;
     }
 }   // destroyUnusedMeshBLAS
+
+// ----------------------------------------------------------------------------
+bool GEVulkanRTScene::createGrassPipeline()
+{
+    if (m_grass_pipeline != VK_NULL_HANDLE)
+        return true;
+    if (m_grass_pipeline_failed)
+        return false;
+    m_grass_pipeline_failed = true;
+    // The descriptor sets and the pipeline layout of the skin pipeline are
+    // used (the mesh cache and the data buffer are the same bindings, binding
+    // 0 is not read by grass_rt.comp but the set has to be valid, and its
+    // push constants are bigger than the ones of grass_rt.comp)
+    if (!createSkinPipeline() || !createSkinningData())
+        return false;
+    VkComputePipelineCreateInfo pipeline_info = {};
+    pipeline_info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipeline_info.stage.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    pipeline_info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    pipeline_info.stage.module =
+        GEVulkanShaderManager::getShader("grass_rt.comp");
+    pipeline_info.stage.pName = "main";
+    pipeline_info.layout = m_skin_pipeline_layout;
+    if (pipeline_info.stage.module == VK_NULL_HANDLE ||
+        vkCreateComputePipelines(m_vk->getDevice(), m_vk->getPipelineCache(),
+        1, &pipeline_info, NULL, &m_grass_pipeline) != VK_SUCCESS)
+    {
+        m_grass_pipeline = VK_NULL_HANDLE;
+        return false;
+    }
+    m_grass_pipeline_failed = false;
+    return true;
+}   // createGrassPipeline
+
+// ----------------------------------------------------------------------------
+GEVulkanRTScene::GrassBLAS* GEVulkanRTScene::getGrassBLAS(
+                            irr::scene::IMesh* mesh, uint64_t buffer_mask,
+                            const std::vector<unsigned>& buffer_indices,
+                            GEVulkanMeshCache* mesh_cache)
+{
+    MeshKey key = { mesh, buffer_mask };
+    auto it = m_grass_blas.find(key);
+    if (it != m_grass_blas.end())
+        return it->second.get();
+
+    // One which can't be created is also kept (without m_blas), so it's not
+    // tried every frame, it's destroyed when it's not used anymore
+    std::unique_ptr<GrassBLAS> blas(new GrassBLAS());
+    GrassBLAS* ret = blas.get();
+    ret->m_id = ++m_grass_next_id;
+    ret->m_last_used_frame = m_frame_counter;
+    m_grass_blas[key] = std::move(blas);
+    if (!createGrassPipeline() || m_skin_block == VK_NULL_HANDLE)
+        return ret;
+
+    // Only the positions (3 floats without padding) are new, the rest of the
+    // vertex and the indices are used from the mesh cache
+    const size_t position_pitch = sizeof(float) * 3;
+    VkDeviceSize out_bytes = 0;
+    for (unsigned buffer_index : buffer_indices)
+    {
+        out_bytes += (VkDeviceSize)mesh->getMeshBuffer(buffer_index)->
+            getVertexCount() * position_pitch;
+    }
+    VmaVirtualAllocationCreateInfo alloc_info = {};
+    alloc_info.size = out_bytes;
+    alloc_info.alignment = sizeof(GERTVertex);
+    VkDeviceSize offset = 0;
+    if (vmaVirtualAllocate(m_skin_block, &alloc_info, &ret->m_allocation,
+        &offset) != VK_SUCCESS)
+    {
+        ret->m_allocation = VK_NULL_HANDLE;
+        GE::logMessage(GLL_WARNING, "GEVulkanRTScene: no space for the "
+            "grass meshes (SKIN_DATA_BYTES)");
+        return ret;
+    }
+    // From the start of the data buffer
+    const VkDeviceSize base_offset = m_skin_region_offset + offset;
+    const VkDeviceAddress data_address = getAddress(m_data_buffer);
+    const VkDeviceAddress cache_address = getAddress(mesh_cache->getBuffer());
+    VkDeviceSize out_prefix = 0;
+    for (unsigned g = 0; g < buffer_indices.size(); g++)
+    {
+        GESPMBuffer* buffer = static_cast<GESPMBuffer*>(
+            mesh->getMeshBuffer(buffer_indices[g]));
+        const uint32_t vertex_count = buffer->getVertexCount();
+        const uint32_t index_count = buffer->getIndexCount() / 3 * 3;
+        GERTGeometry info = {};
+        info.m_vertex_offset = (uint32_t)buffer->getVBOOffset();
+        info.m_index_offset = (uint32_t)(mesh_cache->getIBOOffset() /
+            sizeof(uint16_t) + buffer->getIBOOffset());
+        info.m_shading_type = GRTST_GRASS;
+        info.m_flags = GRTGF_CACHE_VERTEX | GRTGF_CACHE_INDEX;
+        ret->m_infos.push_back(info);
+        ret->m_source_words.push_back((uint32_t)(buffer->getVBOOffset() *
+            sizeof(GERTVertex) / sizeof(uint32_t)));
+        ret->m_dst_words.push_back((uint32_t)((base_offset + out_prefix) /
+            sizeof(uint32_t)));
+        ret->m_vertex_counts.push_back(vertex_count);
+
+        VkAccelerationStructureGeometryKHR geometry = {};
+        geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+        geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+        geometry.flags = getGeometryFlags(info.m_shading_type);
+        geometry.geometry.triangles.sType =
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+        geometry.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+        geometry.geometry.triangles.vertexData.deviceAddress = data_address +
+            base_offset + out_prefix;
+        geometry.geometry.triangles.vertexStride = position_pitch;
+        geometry.geometry.triangles.maxVertex = vertex_count - 1;
+        geometry.geometry.triangles.indexType = VK_INDEX_TYPE_UINT16;
+        geometry.geometry.triangles.indexData.deviceAddress = cache_address +
+            (VkDeviceAddress)info.m_index_offset * sizeof(uint16_t);
+        ret->m_as_geometries.push_back(geometry);
+        VkAccelerationStructureBuildRangeInfoKHR range = {};
+        range.primitiveCount = index_count / 3;
+        ret->m_as_ranges.push_back(range);
+        out_prefix += (VkDeviceSize)vertex_count * position_pitch;
+    }
+
+    // Updated every frame, so the build is made for it
+    VkAccelerationStructureBuildGeometryInfoKHR build_info = {};
+    build_info.sType =
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+    build_info.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    build_info.flags = VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR |
+        VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    build_info.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    build_info.geometryCount = (uint32_t)ret->m_as_geometries.size();
+    build_info.pGeometries = ret->m_as_geometries.data();
+    std::vector<uint32_t> primitive_counts;
+    for (const auto& range : ret->m_as_ranges)
+        primitive_counts.push_back(range.primitiveCount);
+    VkAccelerationStructureBuildSizesInfoKHR sizes = {};
+    sizes.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+    vkGetAccelerationStructureBuildSizesKHR(m_vk->getDevice(),
+        VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &build_info,
+        primitive_counts.data(), &sizes);
+    if (!createAccelerationStructure(
+        VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+        sizes.accelerationStructureSize, ret->m_blas_buffer,
+        ret->m_blas_memory, ret->m_blas))
+    {
+        GE::logMessage(GLL_ERROR,
+            "GEVulkanRTScene: creating the BLAS of a grass mesh failed");
+        // Not built, so it must not be used
+        if (ret->m_blas != VK_NULL_HANDLE)
+        {
+            vkDestroyAccelerationStructureKHR(m_vk->getDevice(), ret->m_blas,
+                NULL);
+        }
+        ret->m_blas = VK_NULL_HANDLE;
+        return ret;
+    }
+    ret->m_scratch_size = std::max(sizes.buildScratchSize,
+        sizes.updateScratchSize);
+    VkAccelerationStructureDeviceAddressInfoKHR address_info = {};
+    address_info.sType =
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+    address_info.accelerationStructure = ret->m_blas;
+    ret->m_address = vkGetAccelerationStructureDeviceAddressKHR(
+        m_vk->getDevice(), &address_info);
+    return ret;
+}   // getGrassBLAS
+
+// ----------------------------------------------------------------------------
+void GEVulkanRTScene::destroyGrassBLAS(GrassBLAS* blas)
+{
+    for (auto it = m_grass_blas.begin(); it != m_grass_blas.end(); it++)
+    {
+        if (it->second.get() != blas)
+            continue;
+        if (blas->m_blas != VK_NULL_HANDLE)
+        {
+            vkDestroyAccelerationStructureKHR(m_vk->getDevice(), blas->m_blas,
+                NULL);
+        }
+        if (blas->m_blas_buffer != VK_NULL_HANDLE)
+        {
+            vmaDestroyBuffer(m_vk->getVmaAllocator(), blas->m_blas_buffer,
+                blas->m_blas_memory);
+        }
+        if (blas->m_allocation != VK_NULL_HANDLE && m_skin_block)
+            vmaVirtualFree(m_skin_block, blas->m_allocation);
+        m_grass_blas.erase(it);
+        return;
+    }
+}   // destroyGrassBLAS
 
 // ----------------------------------------------------------------------------
 bool GEVulkanRTScene::createSkinPipeline()
@@ -1258,6 +1496,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
     // is only written, never read
     const unsigned buffer_idx = m_vk->getCurrentBufferIdx();
     TopLevel& t = m_top_levels[buffer_idx];
+    t.m_grass_updates.clear();
     GERTGeometry* mapped_addr =
         (GERTGeometry*)m_geometry_data->getMappedAddr()[buffer_idx];
     VmaAllocator allocator = m_vk->getVmaAllocator();
@@ -1268,6 +1507,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
         mesh_cache ? mesh_cache->getUpdateCount() : 0;
     if (cache_version != m_cache_version)
     {
+        m_warned_dynamic_limit = false;
         // The buffer and the offsets of all meshes are new (and a mesh could
         // be gone, so a mesh address can be used by another one). The mesh
         // cache waited for the device before it destroyed its buffer, and the
@@ -1275,6 +1515,8 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
         m_pending_blas.clear();
         while (!m_mesh_blas.empty())
             destroyMeshBLAS(m_mesh_blas.begin()->second.get());
+        while (!m_grass_blas.empty())
+            destroyGrassBLAS(m_grass_blas.begin()->second.get());
         if (m_skin_set)
             destroySkinSet(m_skin_set.get());
         m_skin_set.reset();
@@ -1304,17 +1546,19 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
                 static_count * sizeof(GERTGeometry));
             t.m_geometry_static = true;
         }
+        // The static BLAS only (the grass is found with the dynamic nodes)
+        VkAccelerationStructureInstanceKHR* static_instances =
+            (VkAccelerationStructureInstanceKHR*)t.m_instance_mapped;
         if (!t.m_instance_static)
         {
-            VkAccelerationStructureInstanceKHR instance = getStaticInstance();
-            memcpy(t.m_instance_mapped, &instance, sizeof(instance));
+            static_instances[0] = getStaticInstance();
             vmaFlushAllocation(allocator, t.m_instance_memory, 0,
-                sizeof(instance));
-            t.m_instance_count = 1;
-            t.m_instance_static = true;
+                sizeof(VkAccelerationStructureInstanceKHR));
             t.m_dirty = true;
             t.m_slots.clear();
         }
+        t.m_instance_count = 1;
+        t.m_instance_static = true;
         destroyUnusedMeshBLAS();
         return;
     }
@@ -1349,9 +1593,13 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
     // The dynamic nodes, found every frame (a node can be added, removed or
     // use another mesh)
     std::vector<DynamicSource> sources;
+    std::vector<DynamicSource> grass_sources;
     std::vector<SkinSource> skins;
     if (root)
-        collectDynamicNode(root, sources, skins, root->isTrulyVisible());
+    {
+        collectDynamicNode(root, sources, grass_sources, skins,
+            root->isTrulyVisible());
+    }
     t.m_slots.clear();
     VkAccelerationStructureInstanceKHR* instances =
         (VkAccelerationStructureInstanceKHR*)t.m_instance_mapped;
@@ -1401,6 +1649,91 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
             setDynamicMaterial(info, node, s.m_buffers[g], td, t.m_slots);
             mapped_addr[geometry_count++] = info;
         }
+    }
+
+    // The grass, every node is an instance of the BLAS of its mesh (the wind is
+    // applied to its vertices in the model space once for all the nodes, see
+    // grass_rt.comp). The geometries of the nodes with the same mesh and the
+    // same material are shared, only a mesh which has a node is updated
+    std::map<std::vector<uint32_t>, uint32_t> grass_geometries;
+    for (DynamicSource& s : grass_sources)
+    {
+        GrassBLAS* blas = getGrassBLAS(s.m_mesh, s.m_buffer_mask, s.m_buffers,
+            mesh_cache);
+        if (blas->m_blas == VK_NULL_HANDLE)
+            continue;
+        if (instance_count >= m_instance_capacity)
+        {
+            if (!m_warned_dynamic_limit)
+            {
+                m_warned_dynamic_limit = true;
+                GE::logMessage(GLL_WARNING, "GEVulkanRTScene: too many "
+                    "grass instances, the other ones are not traced");
+            }
+            break;
+        }
+        irr::scene::ISceneNode* node = s.m_node;
+        std::vector<GERTGeometry> infos;
+        std::vector<uint32_t> geometry_key;
+        geometry_key.push_back(blas->m_id);
+        for (unsigned g = 0; g < blas->m_infos.size(); g++)
+        {
+            GERTGeometry info = blas->m_infos[g];
+            setDynamicMaterial(info, node, s.m_buffers[g], td, t.m_slots);
+            infos.push_back(info);
+            uint32_t hue_bits, shift_x_bits, shift_y_bits;
+            memcpy(&hue_bits, &info.m_hue, sizeof(uint32_t));
+            memcpy(&shift_x_bits, &info.m_uv_shift[0], sizeof(uint32_t));
+            memcpy(&shift_y_bits, &info.m_uv_shift[1], sizeof(uint32_t));
+            geometry_key.push_back(info.m_material_id);
+            geometry_key.push_back(hue_bits);
+            geometry_key.push_back(shift_x_bits);
+            geometry_key.push_back(shift_y_bits);
+        }
+        uint32_t first_geometry = 0;
+        auto found = grass_geometries.find(geometry_key);
+        if (found != grass_geometries.end())
+            first_geometry = found->second;
+        else
+        {
+            if (geometry_count - static_count + infos.size() >
+                MAX_DYNAMIC_GEOMETRIES)
+            {
+                if (!m_warned_dynamic_limit)
+                {
+                    m_warned_dynamic_limit = true;
+                    GE::logMessage(GLL_WARNING, "GEVulkanRTScene: too many "
+                        "grass geometries, the other ones are not traced");
+                }
+                break;
+            }
+            first_geometry = (uint32_t)geometry_count;
+            for (const GERTGeometry& info : infos)
+                mapped_addr[geometry_count++] = info;
+            grass_geometries[geometry_key] = first_geometry;
+        }
+        blas->m_last_used_frame = m_frame_counter;
+        if (blas->m_listed_frame != m_frame_counter)
+        {
+            blas->m_listed_frame = m_frame_counter;
+            t.m_grass_updates.push_back(blas);
+        }
+
+        // Row major 3x4 of the column major 4x4 of the node
+        const irr::core::matrix4& abs = node->getAbsoluteTransformation();
+        VkAccelerationStructureInstanceKHR instance = {};
+        for (unsigned r = 0; r < 3; r++)
+        {
+            for (unsigned c = 0; c < 4; c++)
+                instance.transform.matrix[r][c] = abs[c * 4 + r];
+        }
+        instance.instanceCustomIndex = first_geometry;
+        instance.mask = 0xFF;
+        instance.instanceShaderBindingTableRecordOffset = 0;
+        instance.flags =
+            VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+        instance.accelerationStructureReference = blas->m_address;
+        instances[instance_count++] = instance;
     }
 
     // The skinned nodes, all in the BLAS of the current set
@@ -1572,6 +1905,8 @@ void GEVulkanRTScene::buildTopLevel(VkCommandBuffer cmd)
     t.m_dirty = false;
     SkinSet* skin_set = t.m_skin_active && m_skin_set &&
         m_skin_pipeline != VK_NULL_HANDLE ? m_skin_set.get() : NULL;
+    const bool grass = !t.m_grass_updates.empty() &&
+        m_grass_pipeline != VK_NULL_HANDLE;
 
     const VkDeviceSize alignment =
         GEVulkanFeatures::getAccelerationStructureScratchAlignment();
@@ -1583,6 +1918,11 @@ void GEVulkanRTScene::buildTopLevel(VkCommandBuffer cmd)
         needed += align(blas->m_build_scratch_size);
     if (skin_set)
         needed += align(skin_set->m_scratch_size);
+    if (grass)
+    {
+        for (GrassBLAS* blas : t.m_grass_updates)
+            needed += align(blas->m_scratch_size);
+    }
     if (t.m_scratch_size < needed)
     {
         // The previous frame which used this index is finished
@@ -1605,7 +1945,7 @@ void GEVulkanRTScene::buildTopLevel(VkCommandBuffer cmd)
 
     VkMemoryBarrier barrier = {};
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    if (skin_set)
+    if (skin_set || grass)
     {
         // Skin the bind pose to the output vertices of the BLAS. The queue
         // executes the previous frame before this one, but the ray queries
@@ -1644,32 +1984,58 @@ void GEVulkanRTScene::buildTopLevel(VkCommandBuffer cmd)
         // This set is not used by the previous frames in flight
         vkUpdateDescriptorSets(m_vk->getDevice(), writes.size(),
             writes.data(), 0, NULL);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_skin_pipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-            m_skin_pipeline_layout, 0, 1, &set, 0, NULL);
-        for (unsigned g = 0; g < t.m_skin_dispatches.size(); g++)
+        if (skin_set)
         {
-            struct
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_skin_pipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                m_skin_pipeline_layout, 0, 1, &set, 0, NULL);
+            for (unsigned g = 0; g < t.m_skin_dispatches.size(); g++)
             {
-                float m_world[16];
-                uint32_t m_source_word;
-                uint32_t m_skin_word;
-                uint32_t m_dst_word;
-                uint32_t m_vertex_count;
-                int32_t m_skinning_offset;
-            } pc;
-            static_assert(sizeof(pc) == sizeof(float) * 16 + 5 * 4,
-                "same as the push constants of skin_rt.comp");
-            memcpy(pc.m_world, t.m_skin_dispatches[g].m_world,
-                sizeof(pc.m_world));
-            pc.m_source_word = skin_set->m_source_words[g];
-            pc.m_skin_word = skin_set->m_skin_words[g];
-            pc.m_dst_word = skin_set->m_dst_words[g];
-            pc.m_vertex_count = skin_set->m_vertex_counts[g];
-            pc.m_skinning_offset = t.m_skin_dispatches[g].m_skinning_offset;
-            vkCmdPushConstants(cmd, m_skin_pipeline_layout,
-                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-            vkCmdDispatch(cmd, (pc.m_vertex_count + 63) / 64, 1, 1);
+                struct
+                {
+                    float m_world[16];
+                    uint32_t m_source_word;
+                    uint32_t m_skin_word;
+                    uint32_t m_dst_word;
+                    uint32_t m_vertex_count;
+                    int32_t m_skinning_offset;
+                } pc;
+                static_assert(sizeof(pc) == sizeof(float) * 16 + 5 * 4,
+                    "same as the push constants of skin_rt.comp");
+                memcpy(pc.m_world, t.m_skin_dispatches[g].m_world,
+                    sizeof(pc.m_world));
+                pc.m_source_word = skin_set->m_source_words[g];
+                pc.m_skin_word = skin_set->m_skin_words[g];
+                pc.m_dst_word = skin_set->m_dst_words[g];
+                pc.m_vertex_count = skin_set->m_vertex_counts[g];
+                pc.m_skinning_offset = t.m_skin_dispatches[g].m_skinning_offset;
+                vkCmdPushConstants(cmd, m_skin_pipeline_layout,
+                    VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+                vkCmdDispatch(cmd, (pc.m_vertex_count + 63) / 64, 1, 1);
+            }
+        }
+        if (grass)
+        {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                m_grass_pipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                m_skin_pipeline_layout, 0, 1, &set, 0, NULL);
+            float wind[3];
+            GEMaterialManager::getWindDirection(wind);
+            for (GrassBLAS* blas : t.m_grass_updates)
+            {
+                for (unsigned g = 0; g < blas->m_vertex_counts.size(); g++)
+                {
+                    GrassPushConstants pc;
+                    memcpy(pc.m_wind, wind, sizeof(wind));
+                    pc.m_source_word = blas->m_source_words[g];
+                    pc.m_dst_word = blas->m_dst_words[g];
+                    pc.m_vertex_count = blas->m_vertex_counts[g];
+                    vkCmdPushConstants(cmd, m_skin_pipeline_layout,
+                        VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+                    vkCmdDispatch(cmd, (pc.m_vertex_count + 63) / 64, 1, 1);
+                }
+            }
         }
         // The builds read the output vertices
         barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -1681,7 +2047,7 @@ void GEVulkanRTScene::buildTopLevel(VkCommandBuffer cmd)
             &barrier, 0, NULL, 0, NULL);
     }
 
-    if (!m_pending_blas.empty() || skin_set)
+    if (!m_pending_blas.empty() || skin_set || grass)
     {
         std::vector<VkAccelerationStructureBuildGeometryInfoKHR> infos;
         std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> ranges;
@@ -1727,6 +2093,35 @@ void GEVulkanRTScene::buildTopLevel(VkCommandBuffer cmd)
             infos.push_back(info);
             ranges.push_back(skin_set->m_as_ranges.data());
             skin_set->m_built = true;
+            scratch += align(skin_set->m_scratch_size);
+        }
+        if (grass)
+        {
+            // The first time they are built, then updated (refit), with the
+            // same flags
+            for (GrassBLAS* blas : t.m_grass_updates)
+            {
+                VkAccelerationStructureBuildGeometryInfoKHR info = {};
+                info.sType =
+                    VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+                info.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+                info.flags =
+                    VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR |
+                    VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+                info.mode = blas->m_built ?
+                    VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR :
+                    VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+                info.srcAccelerationStructure =
+                    blas->m_built ? blas->m_blas : VK_NULL_HANDLE;
+                info.dstAccelerationStructure = blas->m_blas;
+                info.geometryCount = (uint32_t)blas->m_as_geometries.size();
+                info.pGeometries = blas->m_as_geometries.data();
+                info.scratchData.deviceAddress = scratch;
+                scratch += align(blas->m_scratch_size);
+                infos.push_back(info);
+                ranges.push_back(blas->m_as_ranges.data());
+                blas->m_built = true;
+            }
         }
         vkCmdBuildAccelerationStructuresKHR(cmd, (uint32_t)infos.size(),
             infos.data(), ranges.data());
@@ -1785,6 +2180,7 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
             "too many geometries, only the first ones are used");
         sources.resize(max_geometry);
     }
+    const size_t static_count = sources.size();
 
     // Bake the world space vertices (decoded here, so no packed format is
     // needed in the shaders) and the indices, relative to the first vertex of
@@ -1885,11 +2281,13 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
     // aligned to the vertex (offsets of GERTGeometry are in units of
     // GERTVertex), only if the mesh cache is used
     VkDeviceSize data_buffer_size = 0;
+    VkDeviceSize region_end = (data.size() + sizeof(GERTVertex) - 1) /
+        sizeof(GERTVertex) * sizeof(GERTVertex);
     if (GEVulkanFeatures::supportsBaseVertexRendering())
     {
-        m_skin_region_offset = (data.size() + sizeof(GERTVertex) - 1) /
-            sizeof(GERTVertex) * sizeof(GERTVertex);
-        data_buffer_size = m_skin_region_offset + SKIN_DATA_BYTES;
+        m_skin_region_offset = region_end;
+        region_end += SKIN_DATA_BYTES;
+        data_buffer_size = region_end;
         VmaVirtualBlockCreateInfo block_info = {};
         block_info.size = SKIN_DATA_BYTES;
         if (vmaCreateVirtualBlock(&block_info, &m_skin_block) != VK_SUCCESS)
@@ -1911,10 +2309,10 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
     const VkDeviceAddress base = getAddress(m_data_buffer);
     std::vector<VkAccelerationStructureGeometryKHR> geometries;
     std::vector<VkAccelerationStructureBuildRangeInfoKHR> ranges;
-    geometries.reserve(infos.size());
-    ranges.reserve(infos.size());
+    geometries.reserve(static_count);
+    ranges.reserve(static_count);
     uint32_t triangles = 0;
-    for (unsigned i = 0; i < infos.size(); i++)
+    for (unsigned i = 0; i < static_count; i++)
     {
         VkAccelerationStructureGeometryKHR g = {};
         g.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
@@ -1943,7 +2341,7 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
         clear();
         return false;
     }
-    m_geometry_count = (uint32_t)infos.size();
+    m_geometry_count = (uint32_t)static_count;
     m_triangle_count = triangles;
     updateDescriptorSet();
     GE::logMessage(GLL_INFO, "GEVulkanRTScene: built %d geometries",

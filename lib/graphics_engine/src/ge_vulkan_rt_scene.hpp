@@ -5,6 +5,8 @@
 #include "vulkan_wrapper.h"
 #include "vector3d.h"
 
+namespace irr { namespace scene { class ISceneNode; } }
+
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -31,6 +33,7 @@ enum GERTShadingType : uint32_t
     GRTST_SPLATTING = 3,
     GRTST_ALPHATEST = 4,
     GRTST_UNLIT = 5,
+    GRTST_GRASS = 6,
 };
 
 // Vertex of the ray traced scene (world space, 32 bytes), the same layout as
@@ -90,6 +93,18 @@ enum GERTGeometryFlag : uint32_t
 // world space triangles, which is shared by all cameras. The scene should be
 // built after the nodes are added and cleared before the scene is cleared.
 //
+// The nodes with the grass material (grass.vert moves the vertices by the wind)
+// are never in the static BLAS. If GERayTracingConfig::m_grass and
+// GERayTracingConfig::m_dynamic_objects are true (the grass is found every frame
+// by the same walk of the dynamic nodes) every node with any GRTT_ type but
+// GRTT_NONE is a TLAS instance of the BLAS of its mesh, which has the vertices in
+// the model space, moved by the wind in the model space like grass.vert does
+// (grass_wind.glsl). A compute shader (grass_rt.comp) writes the positions of
+// the unique grass meshes into the data buffer once a frame and the BLAS of each
+// is updated (refit), all the nodes using a mesh share them, so the number of
+// instances is not related to the vertices. The instances with the same mesh and
+// the same material share their GERTGeometry
+//
 // If GERayTracingConfig::m_dynamic_objects is true (and the mesh cache of the
 // driver is used, GEVulkanFeatures::supportsBaseVertexRendering), the nodes with
 // GRTT_DYNAMIC (and no skinning) are found every frame (update), each unique
@@ -118,13 +133,13 @@ public:
     enum
     {
         // Instances of a TLAS, the first one is the static BLAS
-        MAX_INSTANCES = 256,
+        MAX_INSTANCES = 2048,
         // GERTGeometry of all the dynamic instances of a frame, after the
         // ones of the static BLAS
-        MAX_DYNAMIC_GEOMETRIES = 1024,
+        MAX_DYNAMIC_GEOMETRIES = 2048,
         // The skinned (world space) vertices of the skinned BLAS (and of the
-        // one it replaces for some frames), after the data of the static BLAS
-        // in the data buffer
+        // one it replaces for some frames) and the positions of the BLAS of the
+        // grass meshes, after the data of the static BLAS in the data buffer
         SKIN_DATA_BYTES = 4 * 1024 * 1024,
         // Joint matrices of all the skinned nodes of a frame
         MAX_SKINNING_MATRICES = 1024
@@ -178,6 +193,8 @@ private:
     // buffer of its VkAccelerationStructureInstanceKHR array which is written
     // directly (never read) before the fence is waited, so a frame never
     // touches what the gpu is still reading
+    struct GrassBLAS;
+
     struct TopLevel
     {
         VkBuffer m_instance_buffer;
@@ -216,6 +233,9 @@ private:
         };
         bool m_skin_active;
         std::vector<SkinDispatch> m_skin_dispatches;
+        // The BLAS of the grass meshes used by the instances of this index,
+        // they are skinned (wind) and updated before the TLAS is built
+        std::vector<GrassBLAS*> m_grass_updates;
         // ------------------------------------------------------------------
         TopLevel()
         {
@@ -332,6 +352,65 @@ private:
 
     std::unique_ptr<SkinSet> m_skin_set;
 
+    // Model space BLAS of the mesh with the grass material, only the geometries
+    // (mesh buffers) in m_buffer_mask are in it (same key as MeshBLAS). The
+    // positions of the vertices are the output of grass_rt.comp (3 words, the
+    // wind is applied) in the data buffer, the rest of the vertex and the
+    // indices are the ones of the mesh cache, so it's updated every frame it's
+    // used. The mesh is not grabbed, they are all destroyed when the mesh cache
+    // changes
+    struct GrassBLAS
+    {
+        uint32_t m_id;
+        // The baked fields (offsets in the mesh cache, shading type and flags)
+        // of each geometry
+        std::vector<GERTGeometry> m_infos;
+        std::vector<VkAccelerationStructureGeometryKHR> m_as_geometries;
+        std::vector<VkAccelerationStructureBuildRangeInfoKHR> m_as_ranges;
+        // Of each geometry: the first word of the vertices in the mesh cache,
+        // the first word of the output positions in the data buffer, and the
+        // vertex count
+        std::vector<uint32_t> m_source_words;
+        std::vector<uint32_t> m_dst_words;
+        std::vector<uint32_t> m_vertex_counts;
+        // The bigger of the build and the update
+        VkDeviceSize m_scratch_size;
+        VmaVirtualAllocation m_allocation;
+        VkBuffer m_blas_buffer;
+        VmaAllocation m_blas_memory;
+        VkAccelerationStructureKHR m_blas;
+        VkDeviceAddress m_address;
+        // Built once, then updated
+        bool m_built;
+        uint64_t m_last_used_frame;
+        // The frame it's in the list of the updates of a TopLevel
+        uint64_t m_listed_frame;
+        // ------------------------------------------------------------------
+        GrassBLAS()
+        {
+            m_id = 0;
+            m_scratch_size = 0;
+            m_allocation = VK_NULL_HANDLE;
+            m_blas_buffer = VK_NULL_HANDLE;
+            m_blas_memory = VK_NULL_HANDLE;
+            m_blas = VK_NULL_HANDLE;
+            m_address = 0;
+            m_built = false;
+            m_last_used_frame = 0;
+            m_listed_frame = 0;
+        }
+    };
+
+    std::map<MeshKey, std::unique_ptr<GrassBLAS> > m_grass_blas;
+
+    uint32_t m_grass_next_id;
+
+    // Compute pipeline of grass_rt.comp, it uses the descriptor sets and the
+    // pipeline layout of the skin one (see createGrassPipeline)
+    VkPipeline m_grass_pipeline;
+
+    bool m_grass_pipeline_failed;
+
     // Replaced sets, destroyed when the frames which can use them are done
     std::vector<std::unique_ptr<SkinSet> > m_retired_skin_sets;
 
@@ -424,6 +503,18 @@ private:
     // ------------------------------------------------------------------------
     bool createSkinPipeline();
     // ------------------------------------------------------------------------
+    // Needs the skin pipeline and the skinning data (their set and layout)
+    bool createGrassPipeline();
+    // ------------------------------------------------------------------------
+    // A BLAS which can't be created is also kept (without m_blas), so it's not
+    // tried every frame
+    GrassBLAS* getGrassBLAS(irr::scene::IMesh* mesh, uint64_t buffer_mask,
+                            const std::vector<unsigned>& buffer_indices,
+                            GEVulkanMeshCache* mesh_cache);
+    // ------------------------------------------------------------------------
+    // The device must not use it
+    void destroyGrassBLAS(GrassBLAS* blas);
+    // ------------------------------------------------------------------------
     // Returns NULL if it can't be created
     std::unique_ptr<SkinSet> createSkinSet(
         const std::vector<GESPMBuffer*>& buffers,
@@ -495,6 +586,7 @@ public:
     // Only if GERayTracingConfig::m_dynamic_objects is true, otherwise the buffers
     // are restored (once) to what the build wrote. Nothing is written if not
     // isReady(). root is not changed
+    // cameras are the absolute positions of the cameras of the frame
     void update(irr::scene::ISceneNode* root,
                 const std::vector<irr::core::vector3df>& cameras);
     // ------------------------------------------------------------------------

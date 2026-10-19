@@ -84,6 +84,9 @@ struct GERayTracingConfig
     // unlit shaders) are in the traced scene, otherwise the rays pass through
     // them
     bool m_alphatest;
+    // Grass (the grass material has a wind animation in its vertex shader) is
+    // in the traced scene, it's baked every frame by a compute shader
+    bool m_grass;
     // ------------------------------------------------------------------------
     GERayTracingConfig()
     {
@@ -91,6 +94,7 @@ struct GERayTracingConfig
         m_solid_reflection = false;
         m_dynamic_objects = false;
         m_alphatest = false;
+        m_grass = false;
     }
 };
 enum GEShadowType : unsigned
