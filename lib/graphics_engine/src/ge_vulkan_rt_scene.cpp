@@ -53,6 +53,15 @@ struct RTSource
 };   // RTSource
 
 // ----------------------------------------------------------------------------
+// The geometries which discard by the alpha of their texture are not opaque,
+// so the ray query gives a candidate to confirm (solid_rt.frag)
+VkGeometryFlagsKHR getGeometryFlags(uint32_t shading_type)
+{
+    return (shading_type == GRTST_ALPHATEST || shading_type == GRTST_UNLIT) ?
+        0 : VK_GEOMETRY_OPAQUE_BIT_KHR;
+}   // getGeometryFlags
+
+// ----------------------------------------------------------------------------
 // The shading type of a material by its shader (the name of GEMaterialManager),
 // only the ones which can be shaded by the ray traced shaders are here:
 // transparent, ghost, grass (it has its own vertex shader), etc. are not
@@ -67,6 +76,8 @@ bool getShadingType(irr::video::E_MATERIAL_TYPE mt, uint32_t* type)
         types[GEMaterialManager::getIrrMaterialType("normalmap")] = GRTST_NORMALMAP;
         types[GEMaterialManager::getIrrMaterialType("decal")] = GRTST_DECAL;
         types[GEMaterialManager::getIrrMaterialType("splatting")] = GRTST_SPLATTING;
+        types[GEMaterialManager::getIrrMaterialType("alphatest")] = GRTST_ALPHATEST;
+        types[GEMaterialManager::getIrrMaterialType("unlit")] = GRTST_UNLIT;
     }
     int ret = types[mt];
     if (ret == -1)
@@ -612,8 +623,7 @@ VkAccelerationStructureInstanceKHR GEVulkanRTScene::getStaticInstance() const
     instance.mask = 0xFF;
     instance.instanceShaderBindingTableRecordOffset = 0;
     instance.flags =
-        VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR |
-        VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR;
+        VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
     instance.accelerationStructureReference =
         vkGetAccelerationStructureDeviceAddressKHR(m_vk->getDevice(),
         &address_info);
@@ -853,7 +863,7 @@ GEVulkanRTScene::MeshBLAS* GEVulkanRTScene::getMeshBLAS(
         VkAccelerationStructureGeometryKHR geometry = {};
         geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
         geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-        geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+        geometry.flags = getGeometryFlags(info.m_shading_type);
         geometry.geometry.triangles.sType =
             VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
         geometry.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
@@ -1158,7 +1168,7 @@ std::unique_ptr<GEVulkanRTScene::SkinSet> GEVulkanRTScene::createSkinSet(
         VkAccelerationStructureGeometryKHR geometry = {};
         geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
         geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-        geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+        geometry.flags = getGeometryFlags(info.m_shading_type);
         geometry.geometry.triangles.sType =
             VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
         geometry.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
@@ -1382,8 +1392,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root)
         instance.mask = 0xFF;
         instance.instanceShaderBindingTableRecordOffset = 0;
         instance.flags =
-            VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR |
-            VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR;
+            VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
         instance.accelerationStructureReference = blas->m_address;
         instances[instance_count++] = instance;
 
@@ -1490,8 +1499,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root)
                 instance.mask = 0xFF;
                 instance.instanceShaderBindingTableRecordOffset = 0;
                 instance.flags =
-                    VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR |
-                    VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR;
+                    VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
                 instance.accelerationStructureReference = m_skin_set->m_address;
                 instances[instance_count++] = instance;
                 for (unsigned g = 0; g < skins.size(); g++)
@@ -1879,7 +1887,7 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
         VkAccelerationStructureGeometryKHR g = {};
         g.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
         g.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-        g.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+        g.flags = getGeometryFlags(infos[i].m_shading_type);
         g.geometry.triangles.sType =
             VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
         g.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;

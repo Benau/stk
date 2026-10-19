@@ -91,6 +91,8 @@ const uint RT_SHADING_SOLID = 0;
 const uint RT_SHADING_NORMALMAP = 1;
 const uint RT_SHADING_DECAL = 2;
 const uint RT_SHADING_SPLATTING = 3;
+const uint RT_SHADING_ALPHATEST = 4;
+const uint RT_SHADING_UNLIT = 5;
 const uint RT_VERTEX_WORDS = 8;
 // Same as GERTGeometry flags
 const uint RT_GEOMETRY_CACHE_VERTEX = 1;
@@ -155,16 +157,62 @@ vec4 getRTVertexTangent(RTGeometry geometry, uint vertex_index)
         RT_VERTEX_TANGENT));
 }
 
+vec4 sampleHitTexture(int base, int layer, vec2 uv, float lod);
+
+// A candidate hit of a geometry which isn't opaque (alphatest.frag and
+// unlit.frag discard below 0.5 of the alpha of the texture and the vertex) is
+// confirmed if it isn't discarded, other geometries are opaque, so they're not
+// candidates
+bool passesAlphaTest(uint geometry_index, uint primitive, vec2 b,
+                     float hit_distance)
+{
+    RTGeometry geometry = u_rt_geometries[geometry_index];
+    if (geometry.m_shading_type != RT_SHADING_ALPHATEST &&
+        geometry.m_shading_type != RT_SHADING_UNLIT)
+        return true;
+    vec3 bary = vec3(1.0 - b.x - b.y, b.x, b.y);
+    uvec3 idx = uvec3(getRTIndex(geometry, primitive * 3u),
+        getRTIndex(geometry, primitive * 3u + 1u),
+        getRTIndex(geometry, primitive * 3u + 2u));
+    vec2 uv = getRTVertexUV(geometry, idx.x) * bary.x +
+        getRTVertexUV(geometry, idx.y) * bary.y +
+        getRTVertexUV(geometry, idx.z) * bary.z +
+        vec2(geometry.m_uv_shift_x, geometry.m_uv_shift_y);
+    float vertex_alpha = (getRTVertexColor(geometry, idx.x).a * bary.x +
+        getRTVertexColor(geometry, idx.y).a * bary.y +
+        getRTVertexColor(geometry, idx.z).a * bary.z) *
+        getVertexColor(geometry.m_vertex_color).a;
+    float lod = clamp(log2(1.0 + hit_distance * 0.5), 0.0, 8.0);
+    int base = int(geometry.m_material_id) * TOTAL_MESH_TEXTURE_LAYER;
+    return sampleHitTexture(base, 0, uv, min(lod, 1.0)).a * vertex_alpha >= 0.5;
+}
+
+// A ray query can't be a parameter of a function, so it's a macro, the ray
+// goes through the candidates which are discarded
+#define RT_PROCEED(query) \
+    while (rayQueryProceedEXT(query)) \
+    { \
+        if (rayQueryGetIntersectionTypeEXT(query, false) == \
+            gl_RayQueryCandidateIntersectionTriangleEXT && \
+            passesAlphaTest( \
+            uint(rayQueryGetIntersectionInstanceCustomIndexEXT(query, false)) + \
+            uint(rayQueryGetIntersectionGeometryIndexEXT(query, false)), \
+            uint(rayQueryGetIntersectionPrimitiveIndexEXT(query, false)), \
+            rayQueryGetIntersectionBarycentricsEXT(query, false), \
+            rayQueryGetIntersectionTEXT(query, false))) \
+            rayQueryConfirmIntersectionEXT(query); \
+    }
+
 // Whether the sun is blocked at a world position (a ray query can't be a
 // parameter of a function, but it can be a local one)
 float getSunShadow(vec3 position, vec3 normal, vec3 sun_direction)
 {
     rayQueryEXT shadow_query;
     rayQueryInitializeEXT(shadow_query, u_tlas,
-        gl_RayFlagsOpaqueEXT | gl_RayFlagsTerminateOnFirstHitEXT, 0xFF,
+        gl_RayFlagsTerminateOnFirstHitEXT, 0xFF,
         position + normal * RT_RAY_MIN, RT_RAY_MIN, sun_direction,
         RT_RAY_MAX);
-    while (rayQueryProceedEXT(shadow_query)) {}
+    RT_PROCEED(shadow_query)
     return rayQueryGetIntersectionTypeEXT(shadow_query, true) ==
         gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
 }
@@ -230,6 +278,25 @@ void getHitMaterial(RTGeometry geometry, int base, vec2 uv, vec2 uv_two,
                     float camera_distance, out vec3 diffuse_color,
                     out vec3 pbr, inout vec3 normal)
 {
+    if (geometry.m_shading_type == RT_SHADING_ALPHATEST ||
+        geometry.m_shading_type == RT_SHADING_UNLIT)
+    {
+        // alphatest.frag and unlit.frag (the alpha was tested by the ray),
+        // the hue only changes the hue of the color
+        vec3 tex_color = sampleHitTexture(base, 0, uv, lod).rgb;
+        if (geometry.m_hue > 0.0)
+        {
+            vec3 old_hsv = rgbToHsv(tex_color);
+            tex_color = hsvToRgb(vec3(geometry.m_hue, old_hsv.y, old_hsv.z));
+        }
+        diffuse_color = tex_color * vertex_color.rgb;
+        // unlit.frag has only a little emissive, no gloss and no metallic
+        if (geometry.m_shading_type == RT_SHADING_UNLIT)
+            pbr = vec3(0.0, 0.0, 0.4);
+        else
+            pbr = sampleHitTexture(base, 2, uv, lod).xyz;
+        return;
+    }
     if (geometry.m_shading_type == RT_SHADING_DECAL)
     {
         // decal.frag, the second layer is over the first one, no vertex
@@ -372,10 +439,9 @@ void main()
     float cosine = dot(reflected, eyedir);
 
     rayQueryEXT ray_query;
-    rayQueryInitializeEXT(ray_query, u_tlas, gl_RayFlagsOpaqueEXT, 0xFF,
+    rayQueryInitializeEXT(ray_query, u_tlas, gl_RayFlagsNoneEXT, 0xFF,
         world_position, RT_RAY_MIN, world_reflection, RT_RAY_MAX);
-    // Everything is opaque, so no candidate is generated
-    while (rayQueryProceedEXT(ray_query)) {}
+    RT_PROCEED(ray_query)
     if (rayQueryGetIntersectionTypeEXT(ray_query, true) ==
         gl_RayQueryCommittedIntersectionNoneEXT)
     {
