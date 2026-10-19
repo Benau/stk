@@ -139,8 +139,20 @@ void collectNode(irr::scene::ISceneNode* node, std::vector<RTSource>& sources,
 }   // collectNode
 
 // ----------------------------------------------------------------------------
+// A geometry (mesh buffer with skinning) of an animated node with GRTT_DYNAMIC
+struct SkinSource
+{
+    irr::scene::ISceneNode* m_node;
+    GESPMBuffer* m_buffer;
+    unsigned m_material_index;
+    uint32_t m_shading_type;
+};   // SkinSource
+
+// ----------------------------------------------------------------------------
 // A node with GRTT_DYNAMIC meshes buffers, the same checks as collectNode but
-// the mesh is not baked, it's a BLAS of its own shared by the nodes using it
+// the mesh is not baked, it's a BLAS of its own shared by the nodes using it.
+// The skinned geometries (SkinSource) are collected in the same walk, a buffer
+// with skinning is never in both
 struct DynamicSource
 {
     irr::scene::ISceneNode* m_node;
@@ -153,7 +165,8 @@ struct DynamicSource
 
 // ----------------------------------------------------------------------------
 void collectDynamicNode(irr::scene::ISceneNode* node,
-                        std::vector<DynamicSource>& sources, bool visible)
+                        std::vector<DynamicSource>& sources,
+                        std::vector<SkinSource>& skins, bool visible)
 {
     if (!visible)
         return;
@@ -197,29 +210,6 @@ void collectDynamicNode(irr::scene::ISceneNode* node,
                 sources.push_back(source);
         }
     }
-    const irr::core::array<irr::scene::ISceneNode*>& children =
-        node->getChildren();
-    for (irr::u32 i = 0; i < children.size(); i++)
-        collectDynamicNode(children[i], sources,
-            node->isChildVisibleForGE(children[i]));
-}   // collectDynamicNode
-
-// ----------------------------------------------------------------------------
-// A geometry (mesh buffer with skinning) of an animated node with GRTT_DYNAMIC
-struct SkinSource
-{
-    irr::scene::ISceneNode* m_node;
-    GESPMBuffer* m_buffer;
-    unsigned m_material_index;
-    uint32_t m_shading_type;
-};   // SkinSource
-
-// ----------------------------------------------------------------------------
-void collectSkinnedNode(irr::scene::ISceneNode* node,
-                        std::vector<SkinSource>& sources, bool visible)
-{
-    if (!visible)
-        return;
     if (node->getType() == irr::scene::ESNT_ANIMATED_MESH)
     {
         irr::scene::IMesh* mesh =
@@ -245,16 +235,16 @@ void collectSkinnedNode(irr::scene::ISceneNode* node,
                 uint32_t type = 0;
                 if (!getShadingType(node->getMaterialType(i), &type))
                     continue;
-                sources.push_back({ node, buffer, i, type });
+                skins.push_back({ node, buffer, i, type });
             }
         }
     }
     const irr::core::array<irr::scene::ISceneNode*>& children =
         node->getChildren();
     for (irr::u32 i = 0; i < children.size(); i++)
-        collectSkinnedNode(children[i], sources,
+        collectDynamicNode(children[i], sources, skins,
             node->isChildVisibleForGE(children[i]));
-}   // collectSkinnedNode
+}   // collectDynamicNode
 
 // ----------------------------------------------------------------------------
 // What changes of a geometry of a dynamic node (the material id of the mesh
@@ -1358,8 +1348,9 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root)
     // The dynamic nodes, found every frame (a node can be added, removed or
     // use another mesh)
     std::vector<DynamicSource> sources;
+    std::vector<SkinSource> skins;
     if (root)
-        collectDynamicNode(root, sources, root->isTrulyVisible());
+        collectDynamicNode(root, sources, skins, root->isTrulyVisible());
     t.m_slots.clear();
     VkAccelerationStructureInstanceKHR* instances =
         (VkAccelerationStructureInstanceKHR*)t.m_instance_mapped;
@@ -1414,9 +1405,6 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root)
     // The skinned nodes, all in the BLAS of the current set
     t.m_skin_active = false;
     t.m_skin_dispatches.clear();
-    std::vector<SkinSource> skins;
-    if (root)
-        collectSkinnedNode(root, skins, root->isTrulyVisible());
     if (!skins.empty())
     {
         std::vector<GESPMBuffer*> buffers;
