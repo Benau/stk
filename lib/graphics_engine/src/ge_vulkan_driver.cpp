@@ -3108,6 +3108,11 @@ void GEVulkanDriver::reloadShaders()
     if (getGEConfig()->m_deferred_split != 0)
         destroySwapChainRelated(false/*handle_surface*/);
     GEVulkanShaderManager::loadAllShaders();
+    if (m_rt_scene && GEVulkanFeatures::supportsRayQuery())
+    {
+        delete m_rt_scene;
+        m_rt_scene = new GEVulkanRTScene(this);
+    }
     if (getGEConfig()->m_deferred_split != 0)
         createSwapChainRelated(false/*handle_surface*/);
     static_cast<GEVulkanSceneManager*>(
