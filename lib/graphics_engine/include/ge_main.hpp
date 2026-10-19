@@ -49,7 +49,6 @@ enum GESolidReflectionType : unsigned
     GSRT_SSR_HIZ100,
     GSRT_SSR_HIZ200,
     GSRT_SSR_HIZ400,
-    GSRT_RAY_QUERY,
     GSRT_COUNT,
 };
 // Reflection of the displace (water) materials, shared numeric values with
@@ -69,6 +68,31 @@ inline bool isSolidReflectionHiZ(GESolidReflectionType t)
                 { return t >= GSRT_SSR_HIZ100 && t <= GSRT_SSR_HIZ400; }
 inline bool isDisplaceReflectionHiZ(GEDisplaceReflectionType t)
                 { return t >= GDRT_SSR_HIZ100 && t <= GDRT_SSR_HIZ400; }
+// Settings of ray tracing (needs VK_KHR_ray_query, see isRayTracing()), the
+// features below do nothing if m_enabled is false
+struct GERayTracingConfig
+{
+    // Global switch
+    bool m_enabled;
+    // Reflection of the solid materials is traced, it overrides
+    // GEConfig::m_solid_reflection (SSR is not used when it's on)
+    bool m_solid_reflection;
+    // Moving nodes (GRTT_DYNAMIC) are in the traced scene too, including the
+    // skinned (animated) meshes
+    bool m_dynamic_objects;
+    // Materials which discard by the alpha of their texture (alphatest and
+    // unlit shaders) are in the traced scene, otherwise the rays pass through
+    // them
+    bool m_alphatest;
+    // ------------------------------------------------------------------------
+    GERayTracingConfig()
+    {
+        m_enabled = false;
+        m_solid_reflection = false;
+        m_dynamic_objects = false;
+        m_alphatest = false;
+    }
+};
 enum GEShadowType : unsigned
 {
     GST_NONE = 0,
@@ -93,10 +117,9 @@ bool m_light_scatter;
 // Bloom of the finished hdr color (needs the split deferred FBO and compute in
 // the main queue, see GEVulkanBloom)
 bool m_bloom;
-// The static nodes of the ray traced scene are checked every frame for a
-// changed texture matrix, hue and vertex color (GEVulkanRTScene::update), also
-// for moving and animated meshes later
-bool m_dynamic_ray_tracing;
+// See GERayTracingConfig, use isRayTracing() and isSolidRayTracing() to know
+// if the device and the other settings allow it
+GERayTracingConfig m_ray_tracing;
 // Full path of an optional texture (lens dust for example) which the widest
 // blur of the bloom is multiplied by and added to it, mapped on the whole
 // viewport. Empty if there is none. It's loaded (and owned) by the deferred FBO
@@ -120,6 +143,16 @@ float m_ssao_k;
 float m_ssao_sigma;
 };
 
+// True if ray tracing is on and the device supports it
+bool isRayTracing();
+// True if the reflection of the solid materials is traced (which overrides
+// GEConfig::m_solid_reflection), needs the pbr shaders
+bool isSolidRayTracing();
+// What the solid reflection is with isSolidRayTracing() taken into account,
+// only use these (not GEConfig::m_solid_reflection) to know if SSR is used
+bool isSolidSSR();
+bool isSolidHiZ();
+GESolidReflectionType getSolidReflection();
 void setVideoDriver(irr::video::IVideoDriver* driver);
 void setShaderFolder(const std::string& path);
 irr::video::IVideoDriver* getDriver();

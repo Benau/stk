@@ -29,6 +29,7 @@
 #include "graphics/stk_tex_manager.hpp"
 #include "io/file_manager.hpp"
 #include "states_screens/dialogs/custom_video_settings.hpp"
+#include "states_screens/dialogs/ray_tracing_settings.hpp"
 #include "states_screens/dialogs/recommend_video_settings.hpp"
 #include "utils/profiler.hpp"
 
@@ -107,6 +108,8 @@ void OptionsScreenVideo::init()
     Screen::init();
     OptionsCommon::setTabStatus();
 
+    if (GE::getDriver()->getDriverType() != video::EDT_VULKAN)
+        getWidget("ray_tracing")->setVisible(false);
     m_prev_adv_pipline = UserConfigParams::m_dynamic_lights;
     RibbonWidget* ribbon = getWidget<RibbonWidget>("options_choice");
     assert(ribbon != NULL);
@@ -477,6 +480,10 @@ void OptionsScreenVideo::eventCallback(Widget* widget, const std::string& name,
     {
         new CustomVideoSettingsDialog(0.8f, 0.9f);
     }
+    else if(name == "ray_tracing")
+    {
+        new RayTracingSettingsDialog(0.6f, 0.8f);
+    }
     else if (name == "gfx_level")
     {
         GUIEngine::SpinnerWidget* gfx_level =
@@ -640,5 +647,15 @@ void OptionsScreenVideo::setSSR()
     GE::getGEConfig()->m_solid_reflection = solid;
     GE::getGEConfig()->m_displace_reflection = displace;
 }   // setSSR
+
+// --------------------------------------------------------------------------------------------
+void OptionsScreenVideo::setRayTracing()
+{
+    GE::GERayTracingConfig& rt = GE::getGEConfig()->m_ray_tracing;
+    rt.m_enabled = UserConfigParams::m_ray_tracing;
+    rt.m_solid_reflection = UserConfigParams::m_ray_tracing_reflection;
+    rt.m_dynamic_objects = UserConfigParams::m_ray_tracing_dynamic_objects;
+    rt.m_alphatest = UserConfigParams::m_ray_tracing_alphatest;
+}   // setRayTracing
 
 #endif // ifndef SERVER_ONLY

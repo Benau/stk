@@ -89,8 +89,8 @@ enum GERTGeometryFlag : uint32_t
 // world space triangles, which is shared by all cameras. The scene should be
 // built after the nodes are added and cleared before the scene is cleared.
 //
-// If GEConfig::m_dynamic_ray_tracing is true (and the mesh cache of the driver
-// is used, GEVulkanFeatures::supportsBaseVertexRendering), the nodes with
+// If GERayTracingConfig::m_dynamic_objects is true (and the mesh cache of the
+// driver is used, GEVulkanFeatures::supportsBaseVertexRendering), the nodes with
 // GRTT_DYNAMIC (and no skinning) are found every frame (update), each unique
 // mesh of them has its own BLAS in the model space, which is built from the
 // vertices and indices of the mesh cache (no copy of them, the shader reads
@@ -372,6 +372,8 @@ private:
     uint64_t m_frame_counter;
 
     bool m_warned_dynamic_limit;
+    // See getBuiltAlphatest()
+    bool m_built_alphatest;
 
     // Keep the slots of the mesh texture descriptor alive
     std::vector<std::shared_ptr<int> > m_texture_ids;
@@ -455,6 +457,10 @@ public:
     // Wait for the device and destroy everything
     void clear();
     // ------------------------------------------------------------------------
+    // The m_alphatest of GERayTracingConfig when it was built, it has to be
+    // built again (clear() then build()) if it's changed
+    bool getBuiltAlphatest() const                { return m_built_alphatest; }
+    // ------------------------------------------------------------------------
     bool isReady() const
     {
         return !m_top_levels.empty() &&
@@ -485,7 +491,7 @@ public:
     //   found under root, and the skinned BLAS), the BLAS of new meshes and
     //   a new skinned BLAS are created (not built, see buildTopLevel)
     // - the joint matrices of the skinned nodes
-    // Only if GEConfig::m_dynamic_ray_tracing is true, otherwise the buffers
+    // Only if GERayTracingConfig::m_dynamic_objects is true, otherwise the buffers
     // are restored (once) to what the build wrote. Nothing is written if not
     // isReady(). root is not changed
     void update(irr::scene::ISceneNode* root);

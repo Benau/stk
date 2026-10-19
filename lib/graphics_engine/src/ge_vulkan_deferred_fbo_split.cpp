@@ -205,16 +205,13 @@ void createSamplerDescriptor(GEVulkanDriver* vk, unsigned count,
 // (enforced by resolveSwapchainOutput())
 bool GEVulkanDeferredFBOSplit::needsSolidSSR()
 {
-    return getGEConfig()->m_pbr &&
-        isSolidReflectionSSR(getGEConfig()->m_solid_reflection);
+    return getGEConfig()->m_pbr && isSolidSSR();
 }   // needsSolidSSR
 
 // ----------------------------------------------------------------------------
 bool GEVulkanDeferredFBOSplit::needsSolidRT()
 {
-    return getGEConfig()->m_pbr &&
-        getGEConfig()->m_solid_reflection == GSRT_RAY_QUERY &&
-        GEVulkanFeatures::supportsRayQuery();
+    return isSolidRayTracing();
 }   // needsSolidRT
 
 // ----------------------------------------------------------------------------

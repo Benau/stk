@@ -1031,6 +1031,22 @@ namespace UserConfigParams
             PARAM_DEFAULT(BoolUserConfigParam(false, "ssr",
             &m_graphics_quality, "Enable screen space reflection"));
 
+    // Mirrored to GE::GERayTracingConfig (RayTracingSettingsDialog)
+    PARAM_PREFIX BoolUserConfigParam        m_ray_tracing
+            PARAM_DEFAULT(BoolUserConfigParam(false, "ray_tracing",
+            &m_graphics_quality, "Enable ray tracing"));
+    PARAM_PREFIX BoolUserConfigParam        m_ray_tracing_reflection
+            PARAM_DEFAULT(BoolUserConfigParam(true, "ray_tracing_reflection",
+            &m_graphics_quality, "Ray traced reflection of solid materials"));
+    PARAM_PREFIX BoolUserConfigParam        m_ray_tracing_dynamic_objects
+            PARAM_DEFAULT(BoolUserConfigParam(false,
+            "ray_tracing_dynamic_objects", &m_graphics_quality,
+            "Karts and items (including animated ones) are ray traced"));
+    PARAM_PREFIX BoolUserConfigParam        m_ray_tracing_alphatest
+            PARAM_DEFAULT(BoolUserConfigParam(false, "ray_tracing_alphatest",
+            &m_graphics_quality,
+            "Materials with transparent texels (plants, fences) are ray traced"));
+
     // ---- Misc
     PARAM_PREFIX BoolUserConfigParam        m_cache_overworld
             PARAM_DEFAULT(  BoolUserConfigParam(true, "cache-overworld") );

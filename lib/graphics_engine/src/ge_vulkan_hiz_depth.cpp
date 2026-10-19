@@ -17,7 +17,7 @@ namespace GE
 // ----------------------------------------------------------------------------
 bool GEVulkanHiZDepth::isEnabled(bool has_displace_fbo)
 {
-    return (isSolidReflectionHiZ(getGEConfig()->m_solid_reflection) ||
+    return (isSolidHiZ() ||
         (has_displace_fbo &&
         isDisplaceReflectionHiZ(getGEConfig()->m_displace_reflection))) &&
         GEVulkanFeatures::supportsComputeInMainQueue();

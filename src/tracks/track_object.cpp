@@ -276,7 +276,7 @@ void TrackObject::init(const XMLNode &xml_node, scene::ISceneNode* parent,
                 m_render_info = std::make_shared<GE::GERenderInfo>();
             // Static is baked into the static acceleration structure, so it
             // must never move or be enabled / disabled later, those are
-            // tracked every frame (if GEConfig::m_dynamic_ray_tracing is on)
+            // tracked every frame (if GERayTracingConfig::m_dynamic_objects is on)
             m_render_info->setRayTracingType(
                 (!is_movable && !hasDynamicStateRecursively()) ?
                 GE::GRTT_STATIC : GE::GRTT_DYNAMIC);

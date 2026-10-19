@@ -59,6 +59,7 @@
 #include "replay/replay_recorder.hpp"
 #include "scriptengine/script_engine.hpp"
 #include "states_screens/dialogs/debug_message_dialog.hpp"
+#include "states_screens/dialogs/ray_tracing_settings.hpp"
 #include "states_screens/dialogs/debug_slider.hpp"
 #include "states_screens/dialogs/general_text_field_dialog.hpp"
 #include "tracks/track_manager.hpp"
@@ -108,7 +109,7 @@ enum DebugMenuCommand
     DEBUG_GE_IBL,
     DEBUG_GE_SR,
     DEBUG_GE_DR,
-    DEBUG_GE_DRT,
+    DEBUG_GE_RT,
     DEBUG_SP_RESET,
     DEBUG_SP_TOGGLE_CULLING,
     DEBUG_SP_WN_VIZ,
@@ -447,11 +448,10 @@ bool handleContextMenuAction(s32 cmd_id)
         break;
     }
 #endif
-    case DEBUG_GE_DRT:
+    case DEBUG_GE_RT:
 #ifndef SERVER_ONLY
     {
-        GE::getGEConfig()->m_dynamic_ray_tracing =
-            !GE::getGEConfig()->m_dynamic_ray_tracing;
+        new RayTracingSettingsDialog(0.6f, 0.8f);
         break;
     }
 #endif
@@ -1384,7 +1384,7 @@ bool onEvent(const SEvent &event)
             sub->addItem(L"Toggle GE IBL", DEBUG_GE_IBL);
             sub->addItem(L"Toggle GE Solid Reflection", DEBUG_GE_SR);
             sub->addItem(L"Toggle GE Displace Reflection", DEBUG_GE_DR);
-            sub->addItem(L"Toggle GE Dynamic Ray Tracing", DEBUG_GE_DRT);
+            sub->addItem(L"Ray tracing settings...", DEBUG_GE_RT);
 
             mnu->addItem(L"Keypress actions >",-1,true, true);
             sub = mnu->getSubMenu(8);
