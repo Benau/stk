@@ -37,34 +37,6 @@
 
 #define MESH_TEXTURES_SET 4
 
-layout(set = 0, binding = 0) uniform accelerationStructureEXT u_tlas;
-// Vertices (8 words, see above) of all geometries, then their indices
-layout(set = 0, binding = 1, std430) readonly buffer RTData
-{
-    uint u_rt_data[];
-};
-// Same as GERTGeometry
-struct RTGeometry
-{
-    uint m_vertex_offset;
-    uint m_index_offset;
-    uint m_material_id;
-    uint m_shading_type;
-    float m_uv_shift_x;
-    float m_uv_shift_y;
-    float m_hue;
-    uint m_vertex_color;
-    uint m_flags;
-};
-layout(set = 0, binding = 2, std430) readonly buffer RTGeometries
-{
-    RTGeometry u_rt_geometries[];
-};
-// The mesh cache of the driver, vertices, then indices
-layout(set = 0, binding = 3, std430) readonly buffer RTMeshCache
-{
-    uint u_mesh_cache[];
-};
 layout(set = 2, binding = 1) uniform sampler2D u_normal;
 layout(set = 2, binding = 2) uniform sampler2D u_depth;
 layout(set = 3, binding = 0) uniform samplerCube u_diffuse;
@@ -85,151 +57,7 @@ layout(location = 0) out vec4 o_color;
 #include "utils/global_light_data.glsl"
 #include "utils/pbr_light.glsl"
 #include "utils/rt_utils.glsl"
-
-// Same as GERTShadingType
-const uint RT_SHADING_SOLID = 0;
-const uint RT_SHADING_NORMALMAP = 1;
-const uint RT_SHADING_DECAL = 2;
-const uint RT_SHADING_SPLATTING = 3;
-const uint RT_SHADING_ALPHATEST = 4;
-const uint RT_SHADING_UNLIT = 5;
-const uint RT_SHADING_GRASS = 6;
-const uint RT_VERTEX_WORDS = 8;
-// Same as GERTGeometry flags
-const uint RT_GEOMETRY_CACHE_VERTEX = 1;
-const uint RT_GEOMETRY_CACHE_INDEX = 2;
-
-const float RT_RAY_MIN = 0.02;
-const float RT_RAY_MAX = 2000.0;
-
-uint getRTIndex(RTGeometry geometry, uint i)
-{
-    uint at = geometry.m_index_offset + i;
-    if ((geometry.m_flags & RT_GEOMETRY_CACHE_INDEX) == 0u)
-        return u_rt_data[at];
-    uint word = u_mesh_cache[at >> 1u];
-    return (at & 1u) == 0u ? (word & 0xFFFFu) : (word >> 16u);
-}
-
-// Words of a vertex, the same in the data buffer and in the mesh cache
-const uint RT_VERTEX_NORMAL = 3;
-const uint RT_VERTEX_COLOR = 4;
-const uint RT_VERTEX_UV = 5;
-const uint RT_VERTEX_UV_TWO = 6;
-const uint RT_VERTEX_TANGENT = 7;
-
-uint getRTVertexWord(RTGeometry geometry, uint vertex_index, uint word)
-{
-    uint at = (geometry.m_vertex_offset + vertex_index) * RT_VERTEX_WORDS +
-        word;
-    if ((geometry.m_flags & RT_GEOMETRY_CACHE_VERTEX) != 0u)
-        return u_mesh_cache[at];
-    return u_rt_data[at];
-}
-
-vec4 getRTVertexColor(RTGeometry geometry, uint vertex_index)
-{
-    return getVertexColor(getRTVertexWord(geometry, vertex_index,
-        RT_VERTEX_COLOR));
-}
-
-vec2 getRTVertexUV(RTGeometry geometry, uint vertex_index)
-{
-    return unpackHalf2x16(getRTVertexWord(geometry, vertex_index,
-        RT_VERTEX_UV));
-}
-
-vec2 getRTVertexUVTwo(RTGeometry geometry, uint vertex_index)
-{
-    return unpackHalf2x16(getRTVertexWord(geometry, vertex_index,
-        RT_VERTEX_UV_TWO));
-}
-
-vec3 getRTVertexNormal(RTGeometry geometry, uint vertex_index)
-{
-    return unpackSnorm1010102(getRTVertexWord(geometry, vertex_index,
-        RT_VERTEX_NORMAL)).xyz;
-}
-
-// xyz in the space of the BLAS, w is the sign of the bitangent
-vec4 getRTVertexTangent(RTGeometry geometry, uint vertex_index)
-{
-    return unpackSnorm1010102(getRTVertexWord(geometry, vertex_index,
-        RT_VERTEX_TANGENT));
-}
-
-vec4 sampleHitTexture(int base, int layer, vec2 uv, float lod);
-
-// A candidate hit of a geometry which isn't opaque (alphatest.frag and
-// unlit.frag discard below 0.5 of the alpha of the texture and the vertex) is
-// confirmed if it isn't discarded, other geometries are opaque, so they're not
-// candidates
-bool passesAlphaTest(uint geometry_index, uint primitive, vec2 b,
-                     float hit_distance)
-{
-    RTGeometry geometry = u_rt_geometries[geometry_index];
-    if (geometry.m_shading_type != RT_SHADING_ALPHATEST &&
-        geometry.m_shading_type != RT_SHADING_UNLIT &&
-        geometry.m_shading_type != RT_SHADING_GRASS)
-        return true;
-    vec3 bary = vec3(1.0 - b.x - b.y, b.x, b.y);
-    uvec3 idx = uvec3(getRTIndex(geometry, primitive * 3u),
-        getRTIndex(geometry, primitive * 3u + 1u),
-        getRTIndex(geometry, primitive * 3u + 2u));
-    vec2 uv = getRTVertexUV(geometry, idx.x) * bary.x +
-        getRTVertexUV(geometry, idx.y) * bary.y +
-        getRTVertexUV(geometry, idx.z) * bary.z +
-        vec2(geometry.m_uv_shift_x, geometry.m_uv_shift_y);
-    // grass.vert has a white vertex color (the vertex color of the mesh is the
-    // weight of the wind)
-    float vertex_alpha = 1.0;
-    if (geometry.m_shading_type != RT_SHADING_GRASS)
-    {
-        vertex_alpha = (getRTVertexColor(geometry, idx.x).a * bary.x +
-            getRTVertexColor(geometry, idx.y).a * bary.y +
-            getRTVertexColor(geometry, idx.z).a * bary.z) *
-            getVertexColor(geometry.m_vertex_color).a;
-    }
-    float lod = clamp(log2(1.0 + hit_distance * 0.5), 0.0, 8.0);
-    int base = int(geometry.m_material_id) * TOTAL_MESH_TEXTURE_LAYER;
-    return sampleHitTexture(base, 0, uv, min(lod, 1.0)).a * vertex_alpha >= 0.5;
-}
-
-// A ray query can't be a parameter of a function, so it's a macro, the ray
-// goes through the candidates which are discarded
-#define RT_PROCEED(query) \
-    while (rayQueryProceedEXT(query)) \
-    { \
-        if (rayQueryGetIntersectionTypeEXT(query, false) == \
-            gl_RayQueryCandidateIntersectionTriangleEXT && \
-            passesAlphaTest( \
-            uint(rayQueryGetIntersectionInstanceCustomIndexEXT(query, false)) + \
-            uint(rayQueryGetIntersectionGeometryIndexEXT(query, false)), \
-            uint(rayQueryGetIntersectionPrimitiveIndexEXT(query, false)), \
-            rayQueryGetIntersectionBarycentricsEXT(query, false), \
-            rayQueryGetIntersectionTEXT(query, false))) \
-            rayQueryConfirmIntersectionEXT(query); \
-    }
-
-// Whether the sun is blocked at a world position (a ray query can't be a
-// parameter of a function, but it can be a local one)
-float getSunShadow(vec3 position, vec3 normal, vec3 sun_direction)
-{
-    rayQueryEXT shadow_query;
-    rayQueryInitializeEXT(shadow_query, u_tlas,
-        gl_RayFlagsTerminateOnFirstHitEXT, 0xFF,
-        position + normal * RT_RAY_MIN, RT_RAY_MIN, sun_direction,
-        RT_RAY_MAX);
-    RT_PROCEED(shadow_query)
-    return rayQueryGetIntersectionTypeEXT(shadow_query, true) ==
-        gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
-}
-
-vec4 sampleHitTexture(int base, int layer, vec2 uv, float lod)
-{
-    return textureLod(f_mesh_textures[GE_SAMPLE_TEX_INDEX(base + layer)], uv,
-        lod);
-}
+#include "utils/rt_scene.glsl"
 
 // The albedo of solid.frag and normalmap.frag (hue, vertex color and the
 // texture)
@@ -405,7 +233,12 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
     vec3 sun_direction = normalize(u_global_light.m_sun_direction);
     float shadow = 1.0;
     if (u_shadow_size != 0 && dot(normal, sun_direction) > 0.0)
-        shadow = getSunShadow(world_position, normal, sun_direction);
+    {
+        float view_depth =
+            (u_camera.m_view_matrix * vec4(world_position, 1.0)).z;
+        shadow = getSunShadow(world_position, normal, sun_direction,
+            view_depth);
+    }
 
     // Same as handlePBRDeferred, in world space (no sun disk, no ssao)
     vec3 irradiance = vec3(0.0);
@@ -452,8 +285,9 @@ void main()
     float cosine = dot(reflected, eyedir);
 
     rayQueryEXT ray_query;
-    rayQueryInitializeEXT(ray_query, u_tlas, gl_RayFlagsNoneEXT, 0xFF,
-        world_position, RT_RAY_MIN, world_reflection, RT_RAY_MAX);
+    rayQueryInitializeEXT(ray_query, u_tlas,
+        gl_RayFlagsCullBackFacingTrianglesEXT, 0xFF, world_position,
+        RT_RAY_MIN, world_reflection, RT_RAY_MAX);
     RT_PROCEED(ray_query)
     if (rayQueryGetIntersectionTypeEXT(ray_query, true) ==
         gl_RayQueryCommittedIntersectionNoneEXT)
