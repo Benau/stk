@@ -33,6 +33,9 @@ layout (constant_id = 11) const bool u_bloom_blend = false;
 // Of deferred_pbr.frag, the ambient light is multiplied by the ambient
 // occlusion (GEVulkanSSAO)
 layout (constant_id = 12) const bool u_ssao = false;
+// The GST_* shadows which are ray traced (getRTShadowType()), they have no
+// shadow map so u_shadow_type doesn't have them
+layout (constant_id = 13) const uint u_rt_shadow_type = 0;
 
 vec3 convertColor(vec3 input_color)
 {

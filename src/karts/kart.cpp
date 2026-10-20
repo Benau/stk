@@ -94,6 +94,7 @@
 #include <IDummyTransformationSceneNode.h>
 #include <ISceneManager.h>
 #include <IVideoDriver.h>
+#include <ge_main.hpp>
 
 #include <algorithm> // for min and max
 #include <iostream>
@@ -3394,7 +3395,8 @@ void Kart::updateGraphics(float dt)
     if (!GUIEngine::isNoGraphics() && m_kart_properties
         ->getShadowMaterial()->getSamplerPath(0) != "unicolor_white")
     {
-        bool shadow_enabled = CVS->isShadowEnabled() &&
+        bool shadow_enabled = (CVS->isShadowEnabled() ||
+            (GE::getRTShadowType() & GE::GST_SUN) != 0) &&
             Track::getCurrentTrack()->hasShadows();
         if (supports_shadow && shadow_enabled && m_shadow)
             m_shadow.reset();

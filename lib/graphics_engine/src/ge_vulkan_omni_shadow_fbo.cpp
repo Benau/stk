@@ -149,7 +149,7 @@ GEVulkanOmniShadowFBO::GEVulkanOmniShadowFBO(GEVulkanDriver* vk,
                                              GEVulkanDrawCall* master_dc,
                                              irr::scene::ILightSceneNode* sun)
                      : GEVulkanShadowFBO(vk, shadow_size, master_dc, sun,
-                                         getGEConfig()->m_shadow_type ==
+                                         getShadowType() ==
                                          GST_COMBINED ?
                                          getGEConfig()->m_point_shadow_limit *
                                          OMNI_FACES_PER_LIGHT + GVSCC_COUNT:

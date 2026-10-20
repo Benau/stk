@@ -232,7 +232,12 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
     vec3 world_position = ray_origin + ray_direction * hit_distance;
     vec3 sun_direction = normalize(u_global_light.m_sun_direction);
     float shadow = 1.0;
-    if (u_shadow_size != 0 && dot(normal, sun_direction) > 0.0)
+    // Same as the lighting pass: the sun has a shadow if it has a shadow map or
+    // it's ray traced
+    const bool sun_shadow =
+        ((u_shadow_type & GST_SUN) != 0 && u_shadow_size != 0) ||
+        (u_rt_shadow_type & GST_SUN) != 0;
+    if (sun_shadow && dot(normal, sun_direction) > 0.0)
     {
         float view_depth =
             (u_camera.m_view_matrix * vec4(world_position, 1.0)).z;
