@@ -47,6 +47,8 @@ void RayTracingSettingsDialog::beforeAddingWidgets()
         ->setState(UserConfigParams::m_ray_tracing);
     getWidget<CheckBoxWidget>("rt_reflection")
         ->setState(UserConfigParams::m_ray_tracing_reflection);
+    getWidget<CheckBoxWidget>("rt_shadow")
+        ->setState(UserConfigParams::m_ray_tracing_shadow);
     getWidget<CheckBoxWidget>("rt_dynamic_objects")
         ->setState(UserConfigParams::m_ray_tracing_dynamic_objects);
     getWidget<CheckBoxWidget>("rt_foliage")
@@ -63,6 +65,7 @@ void RayTracingSettingsDialog::updateActivation()
     enabled->setActive(m_supported);
     bool on = m_supported && enabled->getState();
     getWidget<CheckBoxWidget>("rt_reflection")->setActive(on);
+    getWidget<CheckBoxWidget>("rt_shadow")->setActive(on);
     getWidget<CheckBoxWidget>("rt_dynamic_objects")->setActive(on);
     getWidget<CheckBoxWidget>("rt_foliage")->setActive(on);
     getWidget<CheckBoxWidget>("rt_grass")->setActive(on);
@@ -92,10 +95,14 @@ GUIEngine::EventPropagation RayTracingSettingsDialog::processEvent(
                 const bool prev_enabled = UserConfigParams::m_ray_tracing;
                 const bool prev_reflection =
                     UserConfigParams::m_ray_tracing_reflection;
+                const bool prev_shadow =
+                    UserConfigParams::m_ray_tracing_shadow;
                 UserConfigParams::m_ray_tracing =
                     getWidget<CheckBoxWidget>("rt_enabled")->getState();
                 UserConfigParams::m_ray_tracing_reflection =
                     getWidget<CheckBoxWidget>("rt_reflection")->getState();
+                UserConfigParams::m_ray_tracing_shadow =
+                    getWidget<CheckBoxWidget>("rt_shadow")->getState();
                 UserConfigParams::m_ray_tracing_dynamic_objects =
                     getWidget<CheckBoxWidget>("rt_dynamic_objects")
                     ->getState();
@@ -109,10 +116,13 @@ GUIEngine::EventPropagation RayTracingSettingsDialog::processEvent(
                 // Dynamic objects, foliage and grass are handled by the ray traced
                 // scene itself (it's built again if needed), the others
                 // change which passes the deferred FBO has, and the solid
-                // reflection which is used (RT overrides SSR)
+                // reflection which is used (RT overrides SSR), and the shadow
+                // is ray traced or uses the shadow map of GEConfig::m_shadow_size
+                // (the draw calls are created again)
                 if (prev_enabled != UserConfigParams::m_ray_tracing ||
                     prev_reflection !=
-                    UserConfigParams::m_ray_tracing_reflection)
+                    UserConfigParams::m_ray_tracing_reflection ||
+                    prev_shadow != UserConfigParams::m_ray_tracing_shadow)
                 {
                     GE::getVKDriver()->updateDriver();
                 }

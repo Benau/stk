@@ -841,7 +841,7 @@ void GEVulkanDrawCall::prepare(GEVulkanCamera* cam)
     {
         m_light_handler = new GEVulkanLightHandler(vk);
         irr::scene::ILightSceneNode* sun = sm->getSunNode(sm);
-        if (getGEConfig()->m_shadow_size > 0 && sun)
+        if (getShadowSize() > 0 && sun)
         {
             if (getGEConfig()->m_point_shadow_limit >
                 getGEConfig()->m_max_pointlights)
@@ -849,19 +849,19 @@ void GEVulkanDrawCall::prepare(GEVulkanCamera* cam)
                 getGEConfig()->m_point_shadow_limit =
                     getGEConfig()->m_max_pointlights;
             }
-            switch (getGEConfig()->m_shadow_type)
+            switch (getShadowType())
             {
             case GST_SUN:
                 m_shadow_fbo = new GEVulkanShadowFBO(vk,
-                    getGEConfig()->m_shadow_size, this, sun);
+                    getShadowSize(), this, sun);
                 break;
             case GST_POINTLIGHT:
                 m_shadow_fbo = new GEVulkanOmniShadowFBO(vk,
-                    getGEConfig()->m_shadow_size, this, sun);
+                    getShadowSize(), this, sun);
                 break;
             case GST_COMBINED:
                 m_shadow_fbo = new GEVulkanCombinedShadowFBO(vk,
-                    getGEConfig()->m_shadow_size, this, sun);
+                    getShadowSize(), this, sun);
                 break;
             default:
                 break;
@@ -1400,6 +1400,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         VkBool32 m_bloom;
         VkBool32 m_bloom_blend;
         VkBool32 m_ssao;
+        uint32_t m_rt_shadow_type;
     };
     Constants constants = {};
     constants.m_ibl = getGEConfig()->m_pbr && getGEConfig()->m_ibl &&
@@ -1436,11 +1437,13 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     }
     if (m_shadow_fbo)
     {
-        constants.m_shadow_size = getGEConfig()->m_shadow_size;
-        constants.m_shadow_type = getGEConfig()->m_shadow_type;
+        constants.m_shadow_size = getShadowSize();
+        constants.m_shadow_type = getShadowType();
         constants.m_point_shadow_limit = getGEConfig()->m_point_shadow_limit;
     }
-    std::array<VkSpecializationMapEntry, 13> specialization_entries = {};
+    // The shadows which have no shadow map
+    constants.m_rt_shadow_type = getRTShadowType();
+    std::array<VkSpecializationMapEntry, 14> specialization_entries = {};
     specialization_entries[0].constantID = 0;
     specialization_entries[0].offset = offsetof(Constants, m_ibl);
     specialization_entries[0].size = sizeof(VkBool32);
@@ -1482,6 +1485,9 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     specialization_entries[12].constantID = 12;
     specialization_entries[12].offset = offsetof(Constants, m_ssao);
     specialization_entries[12].size = sizeof(VkBool32);
+    specialization_entries[13].constantID = 13;
+    specialization_entries[13].offset = offsetof(Constants, m_rt_shadow_type);
+    specialization_entries[13].size = sizeof(uint32_t);
     VkSpecializationInfo specialization_info = {};
     specialization_info.mapEntryCount = specialization_entries.size();
     specialization_info.pMapEntries = specialization_entries.data();

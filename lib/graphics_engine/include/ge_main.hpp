@@ -87,6 +87,12 @@ struct GERayTracingConfig
     // Grass (the grass material has a wind animation in its vertex shader) is
     // in the traced scene, it's baked every frame by a compute shader
     bool m_grass;
+    // The shadows which are ray traced instead of using shadow maps, the sun
+    // for now (see getRTShadowType(), the point lights and spot lights still
+    // use GEConfig::m_shadow_size and m_point_shadow_limit). The shadow map of
+    // the sun is not created then, whatever GEConfig::m_shadow_size is, and it
+    // is used again (with GEConfig::m_shadow_size) if this is false
+    bool m_shadow;
     // ------------------------------------------------------------------------
     GERayTracingConfig()
     {
@@ -95,6 +101,7 @@ struct GERayTracingConfig
         m_dynamic_objects = false;
         m_alphatest = false;
         m_grass = false;
+        m_shadow = false;
     }
 };
 enum GEShadowType : unsigned
@@ -157,6 +164,18 @@ bool isSolidRayTracing();
 bool isSolidSSR();
 bool isSolidHiZ();
 GESolidReflectionType getSolidReflection();
+// The bits of GEConfig::m_shadow_type which are ray traced (GST_SUN with
+// GERayTracingConfig::m_shadow), GST_NONE if ray tracing or the pbr shaders are
+// off. A track without shadow of the sun (no GST_SUN in m_shadow_type) has no
+// ray traced shadow of it either
+GEShadowType getRTShadowType();
+// The shadows which use shadow maps, GEConfig::m_shadow_type without the ones
+// of getRTShadowType(), use it (not GEConfig::m_shadow_type) to create the
+// shadow maps and in the shaders
+GEShadowType getShadowType();
+// GEConfig::m_shadow_size if there is any shadow map (getShadowType() isn't
+// GST_NONE), otherwise 0
+unsigned getShadowSize();
 void setVideoDriver(irr::video::IVideoDriver* driver);
 void setShaderFolder(const std::string& path);
 irr::video::IVideoDriver* getDriver();

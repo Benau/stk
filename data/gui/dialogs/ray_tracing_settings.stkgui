@@ -24,9 +24,18 @@
 
         <div layout="horizontal-row" width="100%" proportion="1">
             <spacer width="70" height="10"/>
+            <checkbox id="rt_shadow"/>
+            <spacer width="10" height="10"/>
+            <label text="Realistic shadows" I18N="Ray tracing settings"/>
+        </div>
+
+        <spacer height="4" width="10" />
+
+        <div layout="horizontal-row" width="100%" proportion="1">
+            <spacer width="70" height="10"/>
             <checkbox id="rt_dynamic_objects"/>
             <spacer width="10" height="10"/>
-            <label text="Reflect karts and items" I18N="Ray tracing settings"/>
+            <label text="Karts and items" I18N="Ray tracing settings"/>
         </div>
 
         <spacer height="4" width="10" />
@@ -35,7 +44,7 @@
             <spacer width="70" height="10"/>
             <checkbox id="rt_foliage"/>
             <spacer width="10" height="10"/>
-            <label text="Reflect plants and fences" I18N="Ray tracing settings"/>
+            <label text="Plants and fences" I18N="Ray tracing settings"/>
         </div>
 
         <spacer height="4" width="10" />
@@ -44,7 +53,7 @@
             <spacer width="70" height="10"/>
             <checkbox id="rt_grass"/>
             <spacer width="10" height="10"/>
-            <label text="Reflect moving plants" I18N="Ray tracing settings"/>
+            <label text="Moving plants" I18N="Ray tracing settings"/>
         </div>
 
         <spacer height="10" width="10" />

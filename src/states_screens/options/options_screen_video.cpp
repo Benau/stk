@@ -657,6 +657,7 @@ void OptionsScreenVideo::setRayTracing()
     rt.m_dynamic_objects = UserConfigParams::m_ray_tracing_dynamic_objects;
     rt.m_alphatest = UserConfigParams::m_ray_tracing_alphatest;
     rt.m_grass = UserConfigParams::m_ray_tracing_grass;
+    rt.m_shadow = UserConfigParams::m_ray_tracing_shadow;
 }   // setRayTracing
 
 #endif // ifndef SERVER_ONLY

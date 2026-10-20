@@ -352,6 +352,23 @@ GESolidReflectionType getSolidReflection()
     return isSolidRayTracing() ? GSRT_DISABLED : g_config.m_solid_reflection;
 }
 
+GEShadowType getRTShadowType()
+{
+    if (!g_config.m_pbr || !g_config.m_ray_tracing.m_shadow || !isRayTracing())
+        return GST_NONE;
+    return GEShadowType(g_config.m_shadow_type & GST_SUN);
+}
+
+GEShadowType getShadowType()
+{
+    return GEShadowType(g_config.m_shadow_type & ~getRTShadowType());
+}
+
+unsigned getShadowSize()
+{
+    return getShadowType() == GST_NONE ? 0 : g_config.m_shadow_size;
+}
+
 bool isSolidSSR()
 {
     return isSolidReflectionSSR(getSolidReflection());

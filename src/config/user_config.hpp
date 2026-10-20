@@ -1038,6 +1038,9 @@ namespace UserConfigParams
     PARAM_PREFIX BoolUserConfigParam        m_ray_tracing_reflection
             PARAM_DEFAULT(BoolUserConfigParam(true, "ray_tracing_reflection",
             &m_graphics_quality, "Ray traced reflection of solid materials"));
+    PARAM_PREFIX BoolUserConfigParam        m_ray_tracing_shadow
+            PARAM_DEFAULT(BoolUserConfigParam(false, "ray_tracing_shadow",
+            &m_graphics_quality, "Ray traced shadow of the sun"));
     PARAM_PREFIX BoolUserConfigParam        m_ray_tracing_dynamic_objects
             PARAM_DEFAULT(BoolUserConfigParam(false,
             "ray_tracing_dynamic_objects", &m_graphics_quality,
