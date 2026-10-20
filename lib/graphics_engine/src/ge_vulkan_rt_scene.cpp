@@ -657,8 +657,7 @@ VkAccelerationStructureInstanceKHR GEVulkanRTScene::getStaticInstance() const
     instance.instanceCustomIndex = 0;
     instance.mask = 0xFF;
     instance.instanceShaderBindingTableRecordOffset = 0;
-    instance.flags =
-        VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+    instance.flags = 0;
     instance.accelerationStructureReference =
         vkGetAccelerationStructureDeviceAddressKHR(m_vk->getDevice(),
         &address_info);
@@ -1636,8 +1635,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
         instance.instanceCustomIndex = (uint32_t)geometry_count;
         instance.mask = 0xFF;
         instance.instanceShaderBindingTableRecordOffset = 0;
-        instance.flags =
-            VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+        instance.flags = 0;
         instance.accelerationStructureReference = blas->m_address;
         instances[instance_count++] = instance;
 
@@ -1728,8 +1726,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
         instance.instanceCustomIndex = first_geometry;
         instance.mask = 0xFF;
         instance.instanceShaderBindingTableRecordOffset = 0;
-        instance.flags =
-            VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+        instance.flags = 0;
         instance.accelerationStructureReference = blas->m_address;
         instances[instance_count++] = instance;
     }
@@ -1858,8 +1855,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
                 instance.instanceCustomIndex = (uint32_t)geometry_count;
                 instance.mask = 0xFF;
                 instance.instanceShaderBindingTableRecordOffset = 0;
-                instance.flags =
-                    VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+                instance.flags = 0;
                 instance.accelerationStructureReference = m_skin_set->m_address;
                 instances[instance_count++] = instance;
                 for (unsigned g = 0; g < skins.size(); g++)
