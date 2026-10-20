@@ -11,6 +11,7 @@ class GEVulkanBloom;
 class GEVulkanGlowOutline;
 class GEVulkanHiZDepth;
 class GEVulkanLightScatter;
+class GEVulkanRTShadow;
 class GEVulkanSSAO;
 
 // Same output as GEVulkanDeferredFBO, but every stage is its own traditional
@@ -84,6 +85,11 @@ private:
     // Same, NULL if the ambient occlusion is not enabled
     std::unique_ptr<GEVulkanSSAO> m_ssao;
 
+    // The visibility of the ray traced shadows which the lighting pass samples,
+    // it is always created (inactive without ray tracing) so the descriptor of
+    // the g-buffer is valid
+    std::unique_ptr<GEVulkanRTShadow> m_rt_shadow;
+
     // Same, NULL if bloom is not enabled
     std::unique_ptr<GEVulkanBloom> m_bloom;
 
@@ -112,9 +118,13 @@ public:
     // ------------------------------------------------------------------------
     static bool needsSolidSSR();
     // ------------------------------------------------------------------------
-    // True when solid materials reflect the ray traced scene (no history is
-    // needed)
+    // True when ray tracing is on (the FBO has the passes of it, which of them
+    // is rendered is decided every frame by isSolidRayTracing() and
+    // getRTShadowType(), so the FBO doesn't change with them)
     static bool needsSolidRT();
+    // ------------------------------------------------------------------------
+    // True when the ray traced scene is needed by any effect
+    static bool needsRTScene();
     // ------------------------------------------------------------------------
     static bool resolveSwapchainOutput(GEVulkanDriver* vk,
                                        const core::dimension2d<u32>& size,

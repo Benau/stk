@@ -5,6 +5,9 @@ layout(binding = 2) uniform sampler2D u_depth;
 // Full size ambient occlusion of GEVulkanSSAO, used if u_ssao (a transparent
 // texture is bound if not)
 layout(binding = 3) uniform sampler2D u_ssao_texture;
+// Visibility of the sun of GEVulkanRTShadow (layer 0), used if
+// u_rt_shadow_type has the sun (a dummy texture is bound if not)
+layout(binding = 4) uniform sampler2DArray u_rt_shadow_texture;
 #define GE_LOAD_GBUFFER(tex) texelFetch(tex, ivec2(gl_FragCoord.xy), 0)
 #else
 layout (input_attachment_index = 0, binding = 0) uniform subpassInput u_color;
@@ -40,12 +43,18 @@ void main()
     vec3 eyedir = -normalize(xpos);
     vec3 normal = (u_camera.m_view_matrix * vec4(world_normal, 0.0)).xyz;
     float ao = 1.0;
+    float rt_shadow = 1.0;
 #ifdef SPLIT
     if (u_ssao)
         ao = texelFetch(u_ssao_texture, ivec2(gl_FragCoord.xy), 0).x;
+    if ((u_rt_shadow_type & GST_SUN) != 0)
+    {
+        rt_shadow = texelFetch(u_rt_shadow_texture,
+            ivec3(gl_FragCoord.xy, 0), 0).x;
+    }
 #endif
     vec3 hdr = handlePBRDeferred(diffuse_color, pbr, world_normal, eyedir,
-        normal, 1.0 - pbr.x, world_position, xpos.z, ao);
+        normal, 1.0 - pbr.x, world_position, xpos.z, ao, rt_shadow);
     hdr += accumulateLights(u_push_constants.m_fullscreen_light_count,
         diffuse_color, normal, xpos, eyedir, 1.0 - pbr.x, pbr.y,
         world_position.xyz);

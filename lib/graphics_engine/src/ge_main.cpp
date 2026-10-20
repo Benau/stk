@@ -296,7 +296,10 @@ void refreshDeferredSplit()
     // passes, and sampled by the lighting pass
     if (g_config.m_ssao)
         g_config.m_deferred_split |= 1 << 4;
-    if (isSolidRayTracing())
+    // The passes of ray tracing (the lighting pass needs the visibility of the
+    // ray traced shadows from a compute shader before it), which of them
+    // is rendered doesn't change the FBO
+    if (isRayTracing())
         g_config.m_deferred_split |= 1 << 5;
 }
 

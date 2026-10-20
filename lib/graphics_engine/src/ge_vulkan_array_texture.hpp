@@ -56,7 +56,8 @@ public:
     GEVulkanArrayTexture(VkFormat internal_format,
                          VkImageViewType type, const core::dimension2du& size,
                          unsigned layer_count, video::SColor unicolor,
-                         VkImageLayout first_layout = VK_IMAGE_LAYOUT_UNDEFINED);
+                         VkImageLayout first_layout = VK_IMAGE_LAYOUT_UNDEFINED,
+                         bool create_mipmap = true);
     // ------------------------------------------------------------------------
     virtual ~GEVulkanArrayTexture()                                          {}
     // ------------------------------------------------------------------------

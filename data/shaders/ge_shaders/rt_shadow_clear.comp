@@ -1,0 +1,26 @@
+// Fills the visibility of GEVulkanRTShadow with 1.0 (lit) for the viewport of
+// a camera, when there is no ray traced scene to trace (the menus, or before
+// it is built), the lighting pass samples it all the same
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+#ifdef SHADER_STORAGE_IMAGE_EXTENDED_FORMATS
+#define RT_SHADOW_FORMAT r8
+#else
+#define RT_SHADOW_FORMAT r32f
+#endif
+
+layout(set = 2, binding = 2, RT_SHADOW_FORMAT) uniform writeonly image2DArray u_out;
+
+layout(push_constant) uniform PushConstants
+{
+    // Same as rt_shadow.comp
+    ivec4 m_rect;
+} pc;
+
+void main()
+{
+    const ivec2 pixel = pc.m_rect.xy + ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, pc.m_rect.zw)))
+        return;
+    imageStore(u_out, ivec3(pixel, 0), vec4(1.0));
+}
