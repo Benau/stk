@@ -114,17 +114,20 @@ GUIEngine::EventPropagation RayTracingSettingsDialog::processEvent(
                 OptionsScreenVideo::setRayTracing();
 
                 // Dynamic objects, foliage and grass are handled by the ray traced
-                // scene itself (it's built again if needed), the others
-                // change which passes the deferred FBO has, and the solid
-                // reflection which is used (RT overrides SSR), and the shadow
-                // is ray traced or uses the shadow map of GEConfig::m_shadow_size
-                // (the draw calls are created again)
+                // scene itself (it's built again if needed). The reflection
+                // and the shadow only change which passes are rendered and the
+                // pipelines (the shadow is ray traced or uses the shadow map
+                // of GEConfig::m_shadow_size), which the draw calls created
+                // again have.
+                const bool shadow_changed =
+                    prev_shadow != UserConfigParams::m_ray_tracing_shadow;
+                const bool reflection_changed =
+                    prev_reflection != UserConfigParams::m_ray_tracing_reflection;
                 if (prev_enabled != UserConfigParams::m_ray_tracing ||
-                    prev_reflection !=
-                    UserConfigParams::m_ray_tracing_reflection ||
-                    prev_shadow != UserConfigParams::m_ray_tracing_shadow)
+                    reflection_changed || shadow_changed)
                 {
-                    GE::getVKDriver()->updateDriver();
+                    GE::getVKDriver()->updateDriver(reflection_changed ||
+                        shadow_changed);
                 }
             }
 #endif

@@ -96,6 +96,7 @@ set(GE_SOURCES
     src/ge_vulkan_hiz_depth.cpp
     src/ge_vulkan_light_handler.cpp
     src/ge_vulkan_light_scatter.cpp
+    src/ge_vulkan_rt_shadow.cpp
     src/ge_vulkan_ssao.cpp
     src/ge_vulkan_mesh_cache.cpp
     src/ge_vulkan_rt_scene.cpp

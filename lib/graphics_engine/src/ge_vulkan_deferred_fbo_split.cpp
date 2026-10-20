@@ -11,6 +11,7 @@
 #include "ge_vulkan_hiz_depth.hpp"
 #include "ge_vulkan_light_scatter.hpp"
 #include "ge_vulkan_skybox_renderer.hpp"
+#include "ge_vulkan_rt_shadow.hpp"
 #include "ge_vulkan_ssao.hpp"
 
 #include <array>
@@ -211,8 +212,14 @@ bool GEVulkanDeferredFBOSplit::needsSolidSSR()
 // ----------------------------------------------------------------------------
 bool GEVulkanDeferredFBOSplit::needsSolidRT()
 {
-    return isSolidRayTracing();
+    return getGEConfig()->m_pbr && isRayTracing();
 }   // needsSolidRT
+
+// ----------------------------------------------------------------------------
+bool GEVulkanDeferredFBOSplit::needsRTScene()
+{
+    return isSolidRayTracing() || getRTShadowType() != GST_NONE;
+}   // needsRTScene
 
 // ----------------------------------------------------------------------------
 bool GEVulkanDeferredFBOSplit::resolveSwapchainOutput(GEVulkanDriver* vk,
@@ -258,6 +265,26 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
             GE::logMessage(GE::GLL_ERROR,
                 "Failed to initialize ambient occlusion: %s", e.what());
             m_ssao.reset();
+        }
+    }
+    // Also before the descriptor of the g-buffer (it's sampled by the lighting
+    // pass), inactive if it can't be used
+    {
+        const bool rt_shadow = supports_compute && needsSolidRT();
+        try
+        {
+            m_rt_shadow.reset(new GEVulkanRTShadow(vk, getSize(),
+                m_depth_texture, m_attachments[GVDFT_NORMAL],
+                getRTShadowType() != GST_NONE));
+        }
+        catch (const std::exception& e)
+        {
+            if (!rt_shadow)
+                throw;
+            GE::logMessage(GE::GLL_ERROR,
+                "Failed to initialize ray traced shadow: %s", e.what());
+            m_rt_shadow.reset(new GEVulkanRTShadow(vk, getSize(),
+                m_depth_texture, m_attachments[GVDFT_NORMAL], false));
         }
     }
     initSplitGBufferDescriptor(vk);
@@ -361,8 +388,11 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
     // Same bindings as the input attachments in deferred_pbr.frag and
     // deferred_pointlight.frag: 0 = color, 1 = normal (with pbr data), 2 = depth
     // and 3 = ambient occlusion (only deferred_pbr.frag, a transparent texture
-    // which is not used if there is none, specialization constant u_ssao)
-    std::array<VkDescriptorImageInfo, 4> image_infos = {};
+    // which is not used if there is none, specialization constant u_ssao), 4 =
+    // the array of the visibility of the ray traced shadows (only
+    // deferred_pbr.frag, specialization constant u_rt_shadow_type, a dummy one
+    // if it's not used)
+    std::array<VkDescriptorImageInfo, 5> image_infos = {};
     image_infos[0].sampler = vk->getSampler(GVS_NEAREST);
     image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     image_infos[0].imageView =
@@ -392,6 +422,9 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
                 (VkImageView)vk->getTransparentTexture()->getTextureHandler();
         }
     }
+    image_infos[4].sampler = vk->getSampler(GVS_NEAREST);
+    image_infos[4].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    image_infos[4].imageView = m_rt_shadow->getImageView();
     createSamplerDescriptor(vk, image_infos.size(),
         &m_descriptor_layout[GVDFP_HDR], &m_descriptor_pool[GVDFP_HDR],
         &m_descriptor_set[GVDFP_HDR], image_infos.data(), "GVDFP_HDR");
@@ -764,6 +797,9 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
     // shaders only)
     if (m_ssao)
         m_ssao->render(cmd, p);
+    // And the visibility of the ray traced shadows (the sun)
+    if (m_rt_shadow)
+        m_rt_shadow->render(cmd, p);
 
     // 3. lighting, the background is the clear color of hdr
     {
@@ -782,7 +818,7 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
             // glow outline is above it
             if (solid_ssr)
                 q.first->renderSolidSSR(m_vk, cmd);
-            else if (m_solid_rt)
+            else if (m_solid_rt && isSolidRayTracing())
                 q.first->renderSolidRT(m_vk, cmd);
             // Above everything which is lit, the glow outline is not over the
             // meshes

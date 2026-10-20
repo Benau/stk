@@ -344,7 +344,9 @@ GEVulkanRTScene::GEVulkanRTScene(GEVulkanDriver* vk)
     for (auto& b : bindings)
     {
         b.descriptorCount = 1;
-        b.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        // The compute shader of GEVulkanRTShadow traces it too
+        b.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT |
+            VK_SHADER_STAGE_COMPUTE_BIT;
     }
     VkDescriptorSetLayoutCreateInfo layout_info = {};
     layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -2147,7 +2149,8 @@ void GEVulkanRTScene::buildTopLevel(VkCommandBuffer cmd)
     vkCmdPipelineBarrier(cmd,
         VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, NULL, 0,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, NULL, 0,
         NULL);
 }   // buildTopLevel
 

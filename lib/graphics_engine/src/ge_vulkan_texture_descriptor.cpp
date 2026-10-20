@@ -69,7 +69,9 @@ std::shared_ptr<VkDescriptorSetLayout> GEVulkanTextureDescriptor::createLayout(
         m_single_descriptor ? capacity * m_max_layer : 1;
     texture_layout_binding[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     texture_layout_binding[0].pImmutableSamplers = NULL;
-    texture_layout_binding[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // The compute shader of GEVulkanRTShadow samples the textures of the hits
+    texture_layout_binding[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT |
+        VK_SHADER_STAGE_COMPUTE_BIT;
     if (!m_single_descriptor)
     {
         texture_layout_binding.resize(m_max_layer, texture_layout_binding[0]);

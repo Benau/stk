@@ -643,6 +643,12 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
         // For createUnicolorTextures
         GE::setVideoDriver(this);
         createUnicolorTextures();
+        m_mesh_texture_descriptor = new GEVulkanTextureDescriptor(
+            GEVulkanShaderManager::getSamplerSize(),
+            GEVulkanShaderManager::getMeshTextureLayer(),
+            GEVulkanFeatures::supportsBindMeshTexturesAtOnce());
+        if (GEVulkanFeatures::supportsRayQuery())
+            m_rt_scene = new GEVulkanRTScene(this);
     }
     catch (std::exception& e)
     {
@@ -672,12 +678,6 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
         createCommandBuffers();
         GEVulkan2dRenderer::init(this);
         m_skybox_renderer = new GEVulkanSkyBoxRenderer();
-        m_mesh_texture_descriptor = new GEVulkanTextureDescriptor(
-            GEVulkanShaderManager::getSamplerSize(),
-            GEVulkanShaderManager::getMeshTextureLayer(),
-            GEVulkanFeatures::supportsBindMeshTexturesAtOnce());
-        if (GEVulkanFeatures::supportsRayQuery())
-            m_rt_scene = new GEVulkanRTScene(this);
         GECompressorASTC4x4::init();
         GECompressorBPTCBC7::init();
         GEMaterialManager::init();
@@ -1992,7 +1992,7 @@ bool GEVulkanDriver::endScene()
             break;
         }
     }
-    if (in_game && GEVulkanDeferredFBOSplit::needsSolidRT() && m_rt_scene)
+    if (in_game && GEVulkanDeferredFBOSplit::needsRTScene() && m_rt_scene)
     {
         // Geometries with alpha tested materials are only in a scene which
         // was built with the setting on

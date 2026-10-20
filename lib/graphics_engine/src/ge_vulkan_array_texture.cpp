@@ -301,7 +301,8 @@ GEVulkanArrayTexture::GEVulkanArrayTexture(VkFormat internal_format,
                                            const core::dimension2du& size,
                                            unsigned layer_count,
                                            video::SColor unicolor,
-                                           VkImageLayout first_layout)
+                                           VkImageLayout first_layout,
+                                           bool create_mipmap)
 {
     m_layer_count = layer_count;
     m_image_view_type = type;
@@ -309,7 +310,7 @@ GEVulkanArrayTexture::GEVulkanArrayTexture(VkFormat internal_format,
     m_vulkan_device = m_vk->getDevice();
     m_image = VK_NULL_HANDLE;
     m_vma_allocation = VK_NULL_HANDLE;
-    m_has_mipmaps = true;
+    m_has_mipmaps = create_mipmap;
     m_locked_data = NULL;
     m_internal_format = internal_format;
     if (size.Width < 4 || size.Height < 4)
@@ -350,7 +351,7 @@ GEVulkanArrayTexture::GEVulkanArrayTexture(VkFormat internal_format,
                 VK_IMAGE_LAYOUT_GENERAL);
         }
         GEVulkanCommandLoader::endSingleTimeCommands(command_buffer);
-        createImageView(VK_IMAGE_ASPECT_COLOR_BIT);
+        createImageView(VK_IMAGE_ASPECT_COLOR_BIT, false/*create_srgb_view*/);
     }
 }   // GEVulkanArrayTexture
 
