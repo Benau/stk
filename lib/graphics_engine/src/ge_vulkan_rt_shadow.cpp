@@ -12,6 +12,8 @@
 #include "ge_vulkan_texture_descriptor.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 
@@ -22,7 +24,9 @@ namespace
 // Same as the push constants of rt_shadow.comp and rt_shadow_clear.comp
 struct RTShadowPushConstants
 {
+    // x0, y0, x1, y1 (exclusive) in texels of the image
     int32_t m_rect[4];
+    float m_scale;
 };
 
 // ----------------------------------------------------------------------------
@@ -32,6 +36,37 @@ uint32_t groups(int32_t size)
     return (uint32_t)(std::max(size, 0) + 7) / 8;
 }   // groups
 
+// ----------------------------------------------------------------------------
+// Size of the image of a render target, at least 1 texel
+irr::core::dimension2d<irr::u32> scaledSize(
+                                    const irr::core::dimension2d<irr::u32>& size,
+                                    float scale)
+{
+    return irr::core::dimension2d<irr::u32>(
+        std::max(1u, (irr::u32)std::ceil((float)size.Width * scale)),
+        std::max(1u, (irr::u32)std::ceil((float)size.Height * scale)));
+}   // scaledSize
+
+// ----------------------------------------------------------------------------
+// The texels of the image which belong to a rect of the render target (the
+// one of a viewport), same as rtShadowTexelRect of rt_shadow_grid.glsl: the
+// texel t samples the pixel floor((t + 0.5) / scale), so it's in the rect if
+// x0 <= (t + 0.5) / scale < x1. The rects of the viewports don't overlap so
+// the texel rects don't
+std::array<int32_t, 4> texelRect(const std::array<int32_t, 4>& rect,
+                                 float scale,
+                                 const irr::core::dimension2d<irr::u32>& max)
+{
+    std::array<int32_t, 4> out = {};
+    for (unsigned i = 0; i < 4; i++)
+        out[i] = (int32_t)std::ceil((float)rect[i] * scale - 0.5f);
+    out[0] = std::max(out[0], 0);
+    out[1] = std::max(out[1], 0);
+    out[2] = std::min(out[2], (int32_t)max.Width);
+    out[3] = std::min(out[3], (int32_t)max.Height);
+    return out;
+}   // texelRect
+
 }   // anonymous namespace
 
 // ----------------------------------------------------------------------------
@@ -40,7 +75,8 @@ GEVulkanRTShadow::GEVulkanRTShadow(GEVulkanDriver* vk,
                                    GEVulkanAttachmentTexture* depth,
                                    GEVulkanAttachmentTexture* normal,
                                    bool active)
-                : GEVulkanPostProcessing(vk, size), m_mask(NULL),
+                : GEVulkanPostProcessing(vk, size),
+                  m_scale(active ? getRTShadowScale() : 1.0f), m_mask(NULL),
                   m_storage_view(VK_NULL_HANDLE), m_layout(VK_NULL_HANDLE),
                   m_pool(VK_NULL_HANDLE), m_set(VK_NULL_HANDLE),
                   m_data_layout(VK_NULL_HANDLE),
@@ -49,13 +85,14 @@ GEVulkanRTShadow::GEVulkanRTShadow(GEVulkanDriver* vk,
 {
     try
     {
-        // Visibility in [0, 1], R8 needs the extended storage formats
-        VkFormat format = VK_FORMAT_R32_SFLOAT;
+        // Visibility in [0, 1] (x) and linear depth (y) of the surface of the
+        // texel, RG32F is a storage format without the extended ones
+        VkFormat format = VK_FORMAT_R32G32_SFLOAT;
         if (GEVulkanFeatures::supportsShaderStorageImageExtendedFormats())
-            format = VK_FORMAT_R8_UNORM;
+            format = VK_FORMAT_R16G16_SFLOAT;
         // 4 is the minimum size of the image
-        const irr::core::dimension2d<irr::u32> mask_size = active ? size :
-            irr::core::dimension2d<irr::u32>(4, 4);
+        const irr::core::dimension2d<irr::u32> mask_size = active ?
+            scaledSize(size, m_scale) : irr::core::dimension2d<irr::u32>(4, 4);
         m_mask = new GEVulkanArrayTexture(format, VK_IMAGE_VIEW_TYPE_2D_ARRAY,
             mask_size, LAYERS, irr::video::SColor(0),
             VK_IMAGE_LAYOUT_GENERAL, false/*create_mipmap*/);
@@ -320,8 +357,15 @@ bool GEVulkanRTShadow::render(VkCommandBuffer cmd,
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipeline_layout, 2, 1, &m_set, 0, NULL);
     RTShadowPushConstants pc = {};
+    pc.m_scale = m_scale;
+    const irr::core::dimension2d<irr::u32> mask_size =
+        scaledSize(m_size, m_scale);
     for (const Viewport& vp : viewports)
     {
+        const std::array<int32_t, 4> rect =
+            texelRect(vp.m_rect, m_scale, mask_size);
+        if (rect[2] <= rect[0] || rect[3] <= rect[1])
+            continue;
         if (traced)
         {
             // The camera and the global light of the viewport
@@ -329,11 +373,11 @@ bool GEVulkanRTShadow::render(VkCommandBuffer cmd,
                 VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline_layout, 1);
         }
         for (unsigned i = 0; i < 4; i++)
-            pc.m_rect[i] = vp.m_rect[i];
+            pc.m_rect[i] = rect[i];
         vkCmdPushConstants(cmd, m_pipeline_layout,
             VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-        vkCmdDispatch(cmd, groups(vp.m_rect[2] - vp.m_rect[0]),
-            groups(vp.m_rect[3] - vp.m_rect[1]), 1);
+        vkCmdDispatch(cmd, groups(rect[2] - rect[0]),
+            groups(rect[3] - rect[1]), 1);
     }
 
     // Sampled by the lighting pass

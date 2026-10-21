@@ -19,10 +19,11 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 #define MESH_TEXTURES_SET 3
 
+// Visibility (x) and linear depth (y), see utils/rt_shadow_filter.glsl
 #ifdef SHADER_STORAGE_IMAGE_EXTENDED_FORMATS
-#define RT_SHADOW_FORMAT r8
+#define RT_SHADOW_FORMAT rg16f
 #else
-#define RT_SHADOW_FORMAT r32f
+#define RT_SHADOW_FORMAT rg32f
 #endif
 
 layout(set = 2, binding = 0) uniform sampler2D u_depth;
@@ -31,9 +32,11 @@ layout(set = 2, binding = 2, RT_SHADOW_FORMAT) uniform writeonly image2DArray u_
 
 layout(push_constant) uniform PushConstants
 {
-    // x0, y0, x1, y1 (exclusive) in pixels of the g-buffer: the viewport of
-    // one camera
+    // x0, y0, x1, y1 (exclusive) in texels of the output: the texels of the
+    // viewport of one camera (rtShadowTexelRect)
     ivec4 m_rect;
+    // Size of the output relative to the g-buffer
+    float m_scale;
 } pc;
 
 #include "utils/camera.glsl"
@@ -43,22 +46,29 @@ layout(push_constant) uniform PushConstants
 #include "utils/get_vertex_color.glsl"
 #include "utils/sample_mesh_texture.glsl"
 #include "utils/global_light_data.glsl"
+#include "utils/rt_shadow_grid.glsl"
 #include "utils/rt_utils.glsl"
 #include "utils/rt_scene.glsl"
 
 void main()
 {
-    const ivec2 pixel = pc.m_rect.xy + ivec2(gl_GlobalInvocationID.xy);
-    if (any(greaterThanEqual(pixel, pc.m_rect.zw)))
+    const ivec2 texel = pc.m_rect.xy + ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(texel, pc.m_rect.zw)))
         return;
+    // The pixel of the g-buffer of the texel, it's in the viewport
+    const ivec2 pixel = rtShadowTapPixel(texel, pc.m_scale,
+        rtShadowPixelRect(u_camera.m_viewport, textureSize(u_depth, 0)));
 
     float visibility = 1.0;
+    // Distance along the view direction of the surface, 0 is the sky
+    float linear_depth = 0.0;
     const float depth = texelFetch(u_depth, pixel, 0).x;
     // Reverse z, 0 is the sky
     if (depth != 0.0)
     {
         vec3 xpos = getPosFromUVDepth(vec3(vec2(pixel) + 0.5, depth),
             u_camera.m_viewport, u_camera.m_inverse_projection_matrix);
+        linear_depth = xpos.z;
         vec3 world_normal = DecodeNormal(texelFetch(u_normal, pixel, 0).xy);
         vec3 sun_direction = normalize(u_global_light.m_sun_direction);
         // A surface facing away from the sun has no sun light anyway, the
@@ -71,5 +81,5 @@ void main()
                 sun_direction, xpos.z);
         }
     }
-    imageStore(u_out, ivec3(pixel, 0), vec4(visibility));
+    imageStore(u_out, ivec3(texel, 0), vec4(visibility, linear_depth, 0.0, 0.0));
 }
