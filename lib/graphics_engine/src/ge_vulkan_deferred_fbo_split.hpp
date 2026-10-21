@@ -160,6 +160,8 @@ public:
     // Same for the ambient occlusion which the lighting pass samples (the
     // fourth binding of GVDFP_HDR)
     bool hasSSAO() const                             { return m_ssao != NULL; }
+    // Size of the ray traced shadow relative to the FBO, 1.0 if there is none
+    float getRTShadowScale() const;
     // ------------------------------------------------------------------------
     // Same for the blend texture (lens dust) of the bloom
     bool hasBloomBlend() const        { return m_bloom_blend_texture != NULL; }

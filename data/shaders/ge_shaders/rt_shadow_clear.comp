@@ -3,10 +3,11 @@
 // it is built), the lighting pass samples it all the same
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
+// Same as rt_shadow.comp
 #ifdef SHADER_STORAGE_IMAGE_EXTENDED_FORMATS
-#define RT_SHADOW_FORMAT r8
+#define RT_SHADOW_FORMAT rg16f
 #else
-#define RT_SHADOW_FORMAT r32f
+#define RT_SHADOW_FORMAT rg32f
 #endif
 
 layout(set = 2, binding = 2, RT_SHADOW_FORMAT) uniform writeonly image2DArray u_out;
@@ -15,12 +16,13 @@ layout(push_constant) uniform PushConstants
 {
     // Same as rt_shadow.comp
     ivec4 m_rect;
+    float m_scale;
 } pc;
 
 void main()
 {
-    const ivec2 pixel = pc.m_rect.xy + ivec2(gl_GlobalInvocationID.xy);
-    if (any(greaterThanEqual(pixel, pc.m_rect.zw)))
+    const ivec2 texel = pc.m_rect.xy + ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(texel, pc.m_rect.zw)))
         return;
-    imageStore(u_out, ivec3(pixel, 0), vec4(1.0));
+    imageStore(u_out, ivec3(texel, 0), vec4(1.0, 0.0, 0.0, 0.0));
 }

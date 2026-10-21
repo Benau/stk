@@ -658,6 +658,7 @@ void OptionsScreenVideo::setRayTracing()
     rt.m_alphatest = UserConfigParams::m_ray_tracing_alphatest;
     rt.m_grass = UserConfigParams::m_ray_tracing_grass;
     rt.m_shadow = UserConfigParams::m_ray_tracing_shadow;
+    rt.m_shadow_scale = UserConfigParams::m_ray_tracing_shadow_scale;
 }   // setRayTracing
 
 #endif // ifndef SERVER_ONLY

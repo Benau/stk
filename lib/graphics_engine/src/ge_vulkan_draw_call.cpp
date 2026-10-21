@@ -1401,8 +1401,10 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         VkBool32 m_bloom_blend;
         VkBool32 m_ssao;
         uint32_t m_rt_shadow_type;
+        float m_rt_shadow_scale;
     };
     Constants constants = {};
+    constants.m_rt_shadow_scale = 1.0f;
     constants.m_ibl = getGEConfig()->m_pbr && getGEConfig()->m_ibl &&
         GEVulkanFeatures::supportsComputeInMainQueue() && m_has_skybox;
     float ts = GEVulkanEnvironmentMap::getSpecularEnvironmentMapSize().Width;
@@ -1421,6 +1423,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
             constants.m_bloom = split->hasBloom();
             constants.m_bloom_blend = split->hasBloomBlend();
             constants.m_ssao = split->hasSSAO();
+            constants.m_rt_shadow_scale = split->getRTShadowScale();
         }
     }
     constants.m_solid_reflection = getSolidReflection();
@@ -1443,7 +1446,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     }
     // The shadows which have no shadow map
     constants.m_rt_shadow_type = getRTShadowType();
-    std::array<VkSpecializationMapEntry, 14> specialization_entries = {};
+    std::array<VkSpecializationMapEntry, 15> specialization_entries = {};
     specialization_entries[0].constantID = 0;
     specialization_entries[0].offset = offsetof(Constants, m_ibl);
     specialization_entries[0].size = sizeof(VkBool32);
@@ -1488,6 +1491,9 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     specialization_entries[13].constantID = 13;
     specialization_entries[13].offset = offsetof(Constants, m_rt_shadow_type);
     specialization_entries[13].size = sizeof(uint32_t);
+    specialization_entries[14].constantID = 14;
+    specialization_entries[14].offset = offsetof(Constants, m_rt_shadow_scale);
+    specialization_entries[14].size = sizeof(float);
     VkSpecializationInfo specialization_info = {};
     specialization_info.mapEntryCount = specialization_entries.size();
     specialization_info.pMapEntries = specialization_entries.data();

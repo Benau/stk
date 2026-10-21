@@ -18,6 +18,10 @@ class GEVulkanArrayTexture;
 // map. Without a scene (the menus, before it's built), rt_shadow_clear.comp
 // fills it with 1.0.
 //
+// The image has the size of the render target times getRTShadowScale() (one
+// ray per texel), the lighting pass filters it to the full resolution without
+// crossing the silhouettes or the viewports (utils/rt_shadow_filter.glsl).
+//
 // The image is an array so the layers after the sun can be the visibility of
 // the point lights later, and the lighting shaders don't need to change. It
 // is also created (with the size of the minimum, and nothing is rendered) if
@@ -28,6 +32,11 @@ class GEVulkanRTShadow : public GEVulkanPostProcessing
 private:
     // Number of layers of the image, the sun is the first
     static const unsigned LAYERS = 1;
+
+    // Size of the image relative to the render target, getRTShadowScale() when
+    // it was created (so it's the same as the specialization constant of the
+    // lighting pass, which is read from getScale()). 1.0 if it's not active
+    float m_scale;
 
     // In general layout all the time (storage image and sampled)
     GEVulkanArrayTexture* m_mask;
@@ -89,6 +98,11 @@ public:
     VkImageView getImageView() const;
     // ------------------------------------------------------------------------
     bool isActive() const              { return m_pipeline != VK_NULL_HANDLE; }
+    // ------------------------------------------------------------------------
+    // Size of the image relative to the render target. The image is the grid
+    // of the whole render target (rt_shadow_grid.glsl), a viewport only writes
+    // the texels which have their pixel inside of it
+    float getScale() const                                 { return m_scale; }
 };   // GEVulkanRTShadow
 
 }

@@ -93,6 +93,12 @@ struct GERayTracingConfig
     // the sun is not created then, whatever GEConfig::m_shadow_size is, and it
     // is used again (with GEConfig::m_shadow_size) if this is false
     bool m_shadow;
+    // Resolution of the ray traced shadow relative to the size of the render
+    // target (like the render scale), in [0.25, 1.0] (see getRTShadowScale()).
+    // One ray is traced per texel, the lighting pass filters it (depth and
+    // normal aware, never across the viewports of the splitscreen) to the full
+    // resolution. Needs the render target to be created again if it changes
+    float m_shadow_scale;
     // ------------------------------------------------------------------------
     GERayTracingConfig()
     {
@@ -102,6 +108,7 @@ struct GERayTracingConfig
         m_alphatest = false;
         m_grass = false;
         m_shadow = false;
+        m_shadow_scale = 1.0f;
     }
 };
 enum GEShadowType : unsigned
@@ -169,6 +176,8 @@ GESolidReflectionType getSolidReflection();
 // off. A track without shadow of the sun (no GST_SUN in m_shadow_type) has no
 // ray traced shadow of it either
 GEShadowType getRTShadowType();
+// GERayTracingConfig::m_shadow_scale clamped to [0.25, 1.0]
+float getRTShadowScale();
 // The shadows which use shadow maps, GEConfig::m_shadow_type without the ones
 // of getRTShadowType(), use it (not GEConfig::m_shadow_type) to create the
 // shadow maps and in the shaders

@@ -362,6 +362,12 @@ GEShadowType getRTShadowType()
     return GEShadowType(g_config.m_shadow_type & GST_SUN);
 }
 
+float getRTShadowScale()
+{
+    return std::min(std::max(g_config.m_ray_tracing.m_shadow_scale, 0.25f),
+        1.0f);
+}
+
 GEShadowType getShadowType()
 {
     return GEShadowType(g_config.m_shadow_type & ~getRTShadowType());
