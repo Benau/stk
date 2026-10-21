@@ -359,7 +359,7 @@ GEShadowType getRTShadowType()
 {
     if (!g_config.m_pbr || !g_config.m_ray_tracing.m_shadow || !isRayTracing())
         return GST_NONE;
-    return GEShadowType(g_config.m_shadow_type & GST_SUN);
+    return GEShadowType(g_config.m_shadow_type & GST_COMBINED);
 }
 
 float getRTShadowScale()

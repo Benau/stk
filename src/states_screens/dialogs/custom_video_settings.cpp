@@ -311,6 +311,8 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
                 bool need_recreate_swapchain =
                     GE::getGEConfig()->m_solid_reflection != prev_solid ||
                     GE::getGEConfig()->m_displace_reflection != prev_displace;
+                if (GE::isRayTracing() && prev_shadow_type != GE::getGEConfig()->m_shadow_type)
+                    need_recreate_swapchain = true;
                 if (need_recreate_swapchain || pbr_changed || ibl_changed ||
                     glow_changed || light_scatter_changed || bloom_changed ||
                     ssao_changed ||

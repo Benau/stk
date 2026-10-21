@@ -1,14 +1,16 @@
-// Ray traced shadow of the sun (GEVulkanRTShadow), between the g-buffer and the
-// lighting pass: the visibility of the sun (1.0 is lit) of every pixel of the
-// viewport of a camera, which the lighting pass (deferred_pbr.frag) uses
-// instead of the shadow map. The ray goes from the surface to the sun in the
-// ray traced scene (getSunShadow of utils/rt_scene.glsl, the same as the one of
-// the hits of the reflection), so it has no range of a cascade, and a shadow
-// of a node of the scene (karts, items, plants if they're in it) like the other
-// ray traced effects.
+// Ray traced shadow of the sun, the point lights and the spot lights
+// (GEVulkanRTShadow), between the g-buffer and the lighting pass: the
+// visibility (1.0 is lit) of every pixel of the viewport of a camera, which the
+// lighting pass (deferred_pbr.frag and deferred_pointlight.frag) uses instead
+// of the shadow map. The ray goes from the surface to the sun or the light in
+// the ray traced scene (getSunShadow and getLightShadow of utils/rt_scene.glsl,
+// the first is the same as the one of the hits of the reflection), so it has no
+// range of a cascade, and a shadow of a node of the scene (karts, items, plants
+// if they're in it) like the other ray traced effects.
 //
-// Layer 0 of the output is the sun, the other layers are for the point lights
-// later.
+// Layer 0 of the output is the sun, the other layers are the point lights and
+// the spot lights (see utils/rt_shadow_layer.glsl), every layer is the z of a
+// thread.
 //
 // Set 0 is the one of GEVulkanRTScene, set 1 the camera and the global light,
 // set 2 the depth and the normal of the g-buffer and the output, and set 3 the
@@ -37,6 +39,10 @@ layout(push_constant) uniform PushConstants
     ivec4 m_rect;
     // Size of the output relative to the g-buffer
     float m_scale;
+    // Bits of GEShadowType which are traced (the sun, the lights)
+    int m_types;
+    // Number of layers of lights (the layers after the sun)
+    int m_lights;
 } pc;
 
 #include "utils/camera.glsl"
@@ -49,9 +55,13 @@ layout(push_constant) uniform PushConstants
 #include "utils/rt_shadow_grid.glsl"
 #include "utils/rt_utils.glsl"
 #include "utils/rt_scene.glsl"
+#include "utils/rt_shadow_layer.glsl"
 
 void main()
 {
+    const int layer = rtShadowLayer();
+    if (!rtShadowLayerActive(layer, u_global_light.m_light_count))
+        return;
     const ivec2 texel = pc.m_rect.xy + ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(texel, pc.m_rect.zw)))
         return;
@@ -70,16 +80,13 @@ void main()
             u_camera.m_viewport, u_camera.m_inverse_projection_matrix);
         linear_depth = xpos.z;
         vec3 world_normal = DecodeNormal(texelFetch(u_normal, pixel, 0).xy);
-        vec3 sun_direction = normalize(u_global_light.m_sun_direction);
-        // A surface facing away from the sun has no sun light anyway, the
-        // visibility stays 1.0 without a ray
-        if (dot(world_normal, sun_direction) > 0.0)
-        {
-            vec3 world_position = (u_camera.m_inverse_view_matrix *
-                vec4(xpos, 1.0)).xyz;
-            visibility = getSunShadow(world_position, world_normal,
-                sun_direction, xpos.z);
-        }
+        vec3 world_position = (u_camera.m_inverse_view_matrix *
+            vec4(xpos, 1.0)).xyz;
+        visibility = rtShadowLayerVisibility(layer, world_position,
+            world_normal, xpos.z);
     }
-    imageStore(u_out, ivec3(texel, 0), vec4(visibility, linear_depth, 0.0, 0.0));
+    // Every layer has the depth, so a tap of the filter of the lighting pass
+    // is one fetch
+    imageStore(u_out, ivec3(texel, layer),
+        vec4(visibility, linear_depth, 0.0, 0.0));
 }

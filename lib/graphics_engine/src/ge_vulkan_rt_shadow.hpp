@@ -11,27 +11,33 @@ class GEVulkanArrayTexture;
 // (only one for all the viewports of it, like GEVulkanSSAO). It's a compute
 // shader between the g-buffer and the lighting render pass:
 //
-// rt_shadow.comp: the visibility of the sun (1.0 is lit) of every pixel, a
-// ray from the surface to the sun traced in the ray traced scene
-// (GEVulkanRTScene), the same query as the shadow of the hits of the
-// reflection. The lighting pass samples it (layer 0) instead of the shadow
-// map. Without a scene (the menus, before it's built), rt_shadow_clear.comp
-// fills it with 1.0.
+// rt_shadow.comp: the visibility of the sun, the point lights and the spot
+// lights (1.0 is lit) of every pixel, a ray from the surface to the sun or the
+// center of the light traced in the ray traced scene (GEVulkanRTScene), the
+// same query as the shadow of the hits of the reflection. The lighting pass
+// samples it instead of the shadow maps. Without a scene (the menus, before
+// it's built), rt_shadow_clear.comp fills it with 1.0.
 //
 // The image has the size of the render target times getRTShadowScale() (one
 // ray per texel), the lighting pass filters it to the full resolution without
 // crossing the silhouettes or the viewports (utils/rt_shadow_filter.glsl).
 //
-// The image is an array so the layers after the sun can be the visibility of
-// the point lights later, and the lighting shaders don't need to change. It
-// is also created (with the size of the minimum, and nothing is rendered) if
-// there is no ray tracing so the lighting pass has a valid descriptor
-// of that type
+// The image is an array: layer 0 is the sun and the layer 1 + i is the
+// visibility of the light i (a point light or a spot light) of the lights of
+// the camera, the first GEConfig::m_point_shadow_limit of them have one, as
+// with the shadow maps (so the lighting pass samples the layer of the index it
+// already has). The pass does all the layers at once (a layer is the z of a
+// thread), and a light which doesn't reach a pixel has no ray there. Every
+// layer has the visibility and the linear depth, so the filter is the same for
+// all of them. It is also created (with the size of the minimum, and nothing is
+// rendered) if there is no ray tracing so the lighting pass has a valid
+// descriptor of that type
 class GEVulkanRTShadow : public GEVulkanPostProcessing
 {
 private:
-    // Number of layers of the image, the sun is the first
-    static const unsigned LAYERS = 1;
+    // Number of layers of the image, the sun is the first (then the lights
+    // which have a shadow, if they are ray traced)
+    unsigned m_layers;
 
     // Size of the image relative to the render target, getRTShadowScale() when
     // it was created (so it's the same as the specialization constant of the
@@ -41,8 +47,8 @@ private:
     // In general layout all the time (storage image and sampled)
     GEVulkanArrayTexture* m_mask;
 
-    // The storage image view of the first mip level (the view of the texture
-    // has all of them)
+    // The storage image view of the first mip level and all the layers (the
+    // view of the texture has all of the mip levels)
     VkImageView m_storage_view;
 
     // Binding 0 is the depth and 1 is the normal of the g-buffer (combined
@@ -88,7 +94,7 @@ public:
     // ------------------------------------------------------------------------
     // Renders the visibility of all the viewports between the g-buffer and the
     // lighting render pass (must be outside of render pass). Returns false if
-    // there is nothing to render (the sun is not ray traced), the image has no
+    // there is nothing to render (nothing is ray traced), the image has no
     // valid content then
     virtual bool render(VkCommandBuffer cmd,
                         const std::vector<std::pair<GEVulkanDrawCall*,
