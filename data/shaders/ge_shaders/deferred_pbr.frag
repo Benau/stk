@@ -5,9 +5,12 @@ layout(binding = 2) uniform sampler2D u_depth;
 // Full size ambient occlusion of GEVulkanSSAO, used if u_ssao (a transparent
 // texture is bound if not)
 layout(binding = 3) uniform sampler2D u_ssao_texture;
-// Visibility of the sun of GEVulkanRTShadow (layer 0), used if
-// u_rt_shadow_type has the sun (a dummy texture is bound if not)
+// Visibility of the sun (layer 0) and of the point lights and spot lights
+// (layer 1 + the index of the light) of GEVulkanRTShadow, used if
+// u_rt_shadow_type has them (a dummy texture is bound if not)
 layout(binding = 4) uniform sampler2DArray u_rt_shadow_texture;
+// Enables the filter of it in utils/pbr_light.glsl
+#define HAS_RT_SHADOW_TEXTURE
 #define GE_LOAD_GBUFFER(tex) texelFetch(tex, ivec2(gl_FragCoord.xy), 0)
 #else
 layout (input_attachment_index = 0, binding = 0) uniform subpassInput u_color;
@@ -25,10 +28,6 @@ layout(push_constant) uniform Constants
 
 #include "utils/unproject_position.glsl"
 #include "utils/handle_pbr.glsl"
-#ifdef SPLIT
-#include "utils/rt_shadow_grid.glsl"
-#include "utils/rt_shadow_filter.glsl"
-#endif
 #include "../utils/decodeNormal.frag"
 
 void main()
@@ -53,7 +52,7 @@ void main()
         ao = texelFetch(u_ssao_texture, ivec2(gl_FragCoord.xy), 0).x;
     if ((u_rt_shadow_type & GST_SUN) != 0)
     {
-        rt_shadow = sampleRTShadow(xpos, normal);
+        rt_shadow = sampleRTShadow(xpos, normal, 0);
     }
 #endif
     vec3 hdr = handlePBRDeferred(diffuse_color, pbr, world_normal, eyedir,

@@ -87,11 +87,14 @@ struct GERayTracingConfig
     // Grass (the grass material has a wind animation in its vertex shader) is
     // in the traced scene, it's baked every frame by a compute shader
     bool m_grass;
-    // The shadows which are ray traced instead of using shadow maps, the sun
-    // for now (see getRTShadowType(), the point lights and spot lights still
-    // use GEConfig::m_shadow_size and m_point_shadow_limit). The shadow map of
-    // the sun is not created then, whatever GEConfig::m_shadow_size is, and it
-    // is used again (with GEConfig::m_shadow_size) if this is false
+    // The shadows which are ray traced instead of using shadow maps: all the
+    // ones of GEConfig::m_shadow_type, the sun and the point lights and spot
+    // lights if they are on there (the first GEConfig::m_point_shadow_limit
+    // lights of the rendered ones have a shadow, as with shadow maps), so the
+    // setting of the point light shadows is the one of GEConfig (see
+    // getRTShadowType()). No shadow map is created then, whatever
+    // GEConfig::m_shadow_size is, and they are used again (with
+    // GEConfig::m_shadow_size) if this is false
     bool m_shadow;
     // Resolution of the ray traced shadow relative to the size of the render
     // target (like the render scale), in [0.25, 1.0] (see getRTShadowScale()).
@@ -171,10 +174,10 @@ bool isSolidRayTracing();
 bool isSolidSSR();
 bool isSolidHiZ();
 GESolidReflectionType getSolidReflection();
-// The bits of GEConfig::m_shadow_type which are ray traced (GST_SUN with
+// The bits of GEConfig::m_shadow_type which are ray traced (all of them with
 // GERayTracingConfig::m_shadow), GST_NONE if ray tracing or the pbr shaders are
 // off. A track without shadow of the sun (no GST_SUN in m_shadow_type) has no
-// ray traced shadow of it either
+// ray traced shadow of it either, and the same for the point lights
 GEShadowType getRTShadowType();
 // GERayTracingConfig::m_shadow_scale clamped to [0.25, 1.0]
 float getRTShadowScale();

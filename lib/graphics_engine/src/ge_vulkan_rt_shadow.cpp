@@ -27,6 +27,10 @@ struct RTShadowPushConstants
     // x0, y0, x1, y1 (exclusive) in texels of the image
     int32_t m_rect[4];
     float m_scale;
+    // Bits of GEShadowType which are traced
+    int32_t m_types;
+    // Number of layers of lights (the layers after the sun)
+    int32_t m_lights;
 };
 
 // ----------------------------------------------------------------------------
@@ -75,7 +79,7 @@ GEVulkanRTShadow::GEVulkanRTShadow(GEVulkanDriver* vk,
                                    GEVulkanAttachmentTexture* depth,
                                    GEVulkanAttachmentTexture* normal,
                                    bool active)
-                : GEVulkanPostProcessing(vk, size),
+                : GEVulkanPostProcessing(vk, size), m_layers(1),
                   m_scale(active ? getRTShadowScale() : 1.0f), m_mask(NULL),
                   m_storage_view(VK_NULL_HANDLE), m_layout(VK_NULL_HANDLE),
                   m_pool(VK_NULL_HANDLE), m_set(VK_NULL_HANDLE),
@@ -93,8 +97,15 @@ GEVulkanRTShadow::GEVulkanRTShadow(GEVulkanDriver* vk,
         // 4 is the minimum size of the image
         const irr::core::dimension2d<irr::u32> mask_size = active ?
             scaledSize(size, m_scale) : irr::core::dimension2d<irr::u32>(4, 4);
+        // The lights which have a shadow are the first ones, the limit is the
+        // same as the shadow maps of the lights
+        if (active && (getRTShadowType() & GST_POINTLIGHT) != 0)
+        {
+            m_layers += std::min(getGEConfig()->m_point_shadow_limit,
+                getGEConfig()->m_max_pointlights);
+        }
         m_mask = new GEVulkanArrayTexture(format, VK_IMAGE_VIEW_TYPE_2D_ARRAY,
-            mask_size, LAYERS, irr::video::SColor(0),
+            mask_size, m_layers, irr::video::SColor(0),
             VK_IMAGE_LAYOUT_GENERAL, false/*create_mipmap*/);
         if (active)
         {
@@ -168,7 +179,7 @@ void GEVulkanRTShadow::createDescriptors(GEVulkanAttachmentTexture* depth,
     view_info.subresourceRange.baseMipLevel = 0;
     view_info.subresourceRange.levelCount = 1;
     view_info.subresourceRange.baseArrayLayer = 0;
-    view_info.subresourceRange.layerCount = LAYERS;
+    view_info.subresourceRange.layerCount = m_layers;
     if (vkCreateImageView(device, &view_info, NULL, &m_storage_view) !=
         VK_SUCCESS)
         throw std::runtime_error("vkCreateImageView failed for GEVulkanRTShadow");
@@ -308,7 +319,8 @@ bool GEVulkanRTShadow::render(VkCommandBuffer cmd,
     const std::vector<std::pair<GEVulkanDrawCall*,
     GEVulkanCamera*> >& p)
 {
-    if (!isActive() || (getRTShadowType() & GST_SUN) == 0)
+    const GEShadowType types = getRTShadowType();
+    if (!isActive() || types == GST_NONE)
         return false;
     std::vector<Viewport> viewports;
     for (auto& q : p)
@@ -358,6 +370,9 @@ bool GEVulkanRTShadow::render(VkCommandBuffer cmd,
         m_pipeline_layout, 2, 1, &m_set, 0, NULL);
     RTShadowPushConstants pc = {};
     pc.m_scale = m_scale;
+    pc.m_types = (int32_t)types;
+    // The layers after the sun are the lights
+    pc.m_lights = (int32_t)m_layers - 1;
     const irr::core::dimension2d<irr::u32> mask_size =
         scaledSize(m_size, m_scale);
     for (const Viewport& vp : viewports)
@@ -376,8 +391,9 @@ bool GEVulkanRTShadow::render(VkCommandBuffer cmd,
             pc.m_rect[i] = rect[i];
         vkCmdPushConstants(cmd, m_pipeline_layout,
             VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        // The layers are the z, the ones which are not used return at once
         vkCmdDispatch(cmd, groups(rect[2] - rect[0]),
-            groups(rect[3] - rect[1]), 1);
+            groups(rect[3] - rect[1]), m_layers);
     }
 
     // Sampled by the lighting pass

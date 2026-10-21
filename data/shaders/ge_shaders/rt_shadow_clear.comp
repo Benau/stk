@@ -1,6 +1,7 @@
 // Fills the visibility of GEVulkanRTShadow with 1.0 (lit) for the viewport of
 // a camera, when there is no ray traced scene to trace (the menus, or before
-// it is built), the lighting pass samples it all the same
+// it is built), the lighting pass samples it all the same. Every layer is the z
+// of a thread
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 // Same as rt_shadow.comp
@@ -24,5 +25,6 @@ void main()
     const ivec2 texel = pc.m_rect.xy + ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(texel, pc.m_rect.zw)))
         return;
-    imageStore(u_out, ivec3(texel, 0), vec4(1.0, 0.0, 0.0, 0.0));
+    imageStore(u_out, ivec3(texel, int(gl_GlobalInvocationID.z)),
+        vec4(1.0, 0.0, 0.0, 0.0));
 }

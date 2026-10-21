@@ -197,3 +197,30 @@ float getSunShadow(vec3 position, vec3 normal, vec3 sun_direction,
     return max(visibility,
         smoothstep(RT_SHADOW_FADE_START, RT_SHADOW_FADE_END, view_depth));
 }
+
+// Whether a point light or a spot light is blocked at a world position (1 is
+// lit): a hard shadow, one ray to the center of the light. The ray stops a bit
+// before the light, so the mesh of a lamp doesn't shadow it. The caller
+// already knows that the light reaches the position (range, cone and facing),
+// see rtShadowLightReaches of utils/rt_shadow_layer.glsl
+float getLightShadow(vec3 position, vec3 normal, vec3 light_position,
+                     float view_depth)
+{
+    if (view_depth >= RT_SHADOW_FADE_END)
+        return 1.0;
+    vec3 to_light = light_position - position;
+    float light_distance = length(to_light);
+    rayQueryEXT shadow_query;
+    rayQueryInitializeEXT(shadow_query, u_tlas,
+        gl_RayFlagsTerminateOnFirstHitEXT |
+        gl_RayFlagsCullFrontFacingTrianglesEXT, 0xFF,
+        position + normal * RT_RAY_MIN, RT_RAY_MIN,
+        to_light / max(light_distance, 1.0e-4),
+        max(light_distance - 0.1, RT_RAY_MIN * 2.0));
+    RT_PROCEED(shadow_query)
+    float visibility = rayQueryGetIntersectionTypeEXT(shadow_query, true) ==
+        gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
+    // Fades to lit like the sun, a light has a range anyway
+    return max(visibility,
+        smoothstep(RT_SHADOW_FADE_START, RT_SHADOW_FADE_END, view_depth));
+}

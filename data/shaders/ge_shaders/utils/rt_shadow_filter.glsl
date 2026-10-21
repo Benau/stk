@@ -1,15 +1,16 @@
-// Filters the visibility of the sun of GEVulkanRTShadow (layer 0, a scaled
-// grid, see rt_shadow_grid.glsl) to the full resolution pixel of the lighting
-// pass: a tent of up to RT_SHADOW_FILTER_RADIUS texels (1 is bilinear, 2 is
-// 4x4 texels, like a PCF kernel of a shadow map), times how far the surface of the
-// texel is from the plane of the pixel (so the shadow of a kart is not spread
-// to the ground behind it or the opposite), and the texels which belong to
-// another viewport are ignored. The radius of the tent is
-// RT_SHADOW_FILTER_WORLD_RADIUS in the world (so the softness is the same for
-// a near and a far object, like a PCF kernel which is in the space of the
-// shadow map) but at least 1 texel and at most RT_SHADOW_FILTER_RADIUS texels
+// Filters the visibility of a layer of GEVulkanRTShadow (layer 0 is the sun,
+// layer 1 + i is the light i, a scaled grid, see rt_shadow_grid.glsl) to the
+// full resolution pixel of the lighting pass: a tent of up to
+// RT_SHADOW_FILTER_RADIUS texels (1 is bilinear, 2 is 4x4 texels, like a PCF
+// kernel of a shadow map), times how far the surface of the texel is from the
+// plane of the pixel (so the shadow of a kart is not spread to the ground
+// behind it or the opposite), and the texels which belong to another viewport
+// are ignored. The radius of the tent is RT_SHADOW_FILTER_WORLD_RADIUS in the
+// world (so the softness is the same for a near and a far object, like a PCF
+// kernel which is in the space of the shadow map) but at least 1 texel and at
+// most RT_SHADOW_FILTER_RADIUS texels
 //
-// A texel of the image has the visibility (x) and the linear depth (y, the
+// A texel of every layer has the visibility (x) and the linear depth (y, the
 // distance along the view direction, 0 for the sky) of the pixel which its ray
 // started from, written once by rt_shadow.comp, so a tap is one fetch and a few
 // multiply-adds instead of the depth buffer and an unprojection
@@ -26,7 +27,7 @@
 #define RT_SHADOW_PLANE_TOLERANCE_SCALE 0.01
 #define RT_SHADOW_PLANE_TOLERANCE_BIAS 0.02
 
-float sampleRTShadow(vec3 view_position, vec3 view_normal)
+float sampleRTShadow(vec3 view_position, vec3 view_normal, int layer)
 {
     const float scale = u_rt_shadow_scale;
     const ivec4 rect = rtShadowPixelRect(u_camera.m_viewport,
@@ -75,7 +76,7 @@ float sampleRTShadow(vec3 view_position, vec3 view_normal)
             if (tent.x * tent.y <= 0.0)
                 continue;
             const vec2 tap = texelFetch(u_rt_shadow_texture,
-                ivec3(texel, 0), 0).xy;
+                ivec3(texel, layer), 0).xy;
             // The linear depth, 0 is the sky
             if (tap.y <= 0.0)
                 continue;
