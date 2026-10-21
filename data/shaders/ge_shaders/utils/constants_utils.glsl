@@ -36,6 +36,9 @@ layout (constant_id = 12) const bool u_ssao = false;
 // The GST_* shadows which are ray traced (getRTShadowType()), they have no
 // shadow map so u_shadow_type doesn't have them
 layout (constant_id = 13) const uint u_rt_shadow_type = 0;
+// Of deferred_pbr.frag, the scale of the image of the ray traced shadow
+// (GEVulkanRTShadow::getScale())
+layout (constant_id = 14) const float u_rt_shadow_scale = 1.0;
 
 vec3 convertColor(vec3 input_color)
 {

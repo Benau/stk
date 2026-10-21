@@ -383,6 +383,12 @@ void GEVulkanDeferredFBOSplit::initLightingCompositeDescriptor(
 }   // initLightingCompositeDescriptor
 
 // ----------------------------------------------------------------------------
+float GEVulkanDeferredFBOSplit::getRTShadowScale() const
+{
+    return m_rt_shadow ? m_rt_shadow->getScale() : 1.0f;
+}   // getRTShadowScale
+
+// ----------------------------------------------------------------------------
 void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
 {
     // Same bindings as the input attachments in deferred_pbr.frag and

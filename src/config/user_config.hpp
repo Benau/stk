@@ -1041,6 +1041,11 @@ namespace UserConfigParams
     PARAM_PREFIX BoolUserConfigParam        m_ray_tracing_shadow
             PARAM_DEFAULT(BoolUserConfigParam(false, "ray_tracing_shadow",
             &m_graphics_quality, "Ray traced shadow of the sun"));
+    PARAM_PREFIX FloatUserConfigParam       m_ray_tracing_shadow_scale
+            PARAM_DEFAULT(FloatUserConfigParam(1.0f,
+            "ray_tracing_shadow_scale", &m_graphics_quality,
+            "Resolution of the ray traced shadow relative to the render "
+            "resolution (0.25 to 1.0)"));
     PARAM_PREFIX BoolUserConfigParam        m_ray_tracing_dynamic_objects
             PARAM_DEFAULT(BoolUserConfigParam(false,
             "ray_tracing_dynamic_objects", &m_graphics_quality,

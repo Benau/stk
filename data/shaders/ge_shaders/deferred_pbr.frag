@@ -25,6 +25,10 @@ layout(push_constant) uniform Constants
 
 #include "utils/unproject_position.glsl"
 #include "utils/handle_pbr.glsl"
+#ifdef SPLIT
+#include "utils/rt_shadow_grid.glsl"
+#include "utils/rt_shadow_filter.glsl"
+#endif
 #include "../utils/decodeNormal.frag"
 
 void main()
@@ -49,8 +53,7 @@ void main()
         ao = texelFetch(u_ssao_texture, ivec2(gl_FragCoord.xy), 0).x;
     if ((u_rt_shadow_type & GST_SUN) != 0)
     {
-        rt_shadow = texelFetch(u_rt_shadow_texture,
-            ivec3(gl_FragCoord.xy, 0), 0).x;
+        rt_shadow = sampleRTShadow(xpos, normal);
     }
 #endif
     vec3 hdr = handlePBRDeferred(diffuse_color, pbr, world_normal, eyedir,
