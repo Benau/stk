@@ -841,14 +841,16 @@ void GEVulkanDrawCall::prepare(GEVulkanCamera* cam)
     {
         m_light_handler = new GEVulkanLightHandler(vk);
         irr::scene::ILightSceneNode* sun = sm->getSunNode(sm);
+        // Also the limit of the ray traced shadows of the point lights (the
+        // layers of GEVulkanRTShadow)
+        if (getGEConfig()->m_point_shadow_limit >
+            getGEConfig()->m_max_pointlights)
+        {
+            getGEConfig()->m_point_shadow_limit =
+                getGEConfig()->m_max_pointlights;
+        }
         if (getShadowSize() > 0 && sun)
         {
-            if (getGEConfig()->m_point_shadow_limit >
-                getGEConfig()->m_max_pointlights)
-            {
-                getGEConfig()->m_point_shadow_limit =
-                    getGEConfig()->m_max_pointlights;
-            }
             switch (getShadowType())
             {
             case GST_SUN:
@@ -1442,8 +1444,10 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     {
         constants.m_shadow_size = getShadowSize();
         constants.m_shadow_type = getShadowType();
-        constants.m_point_shadow_limit = getGEConfig()->m_point_shadow_limit;
     }
+    // The point lights which have a shadow, with a shadow map or ray traced
+    if (m_shadow_fbo || (getRTShadowType() & GST_POINTLIGHT) != 0)
+        constants.m_point_shadow_limit = getGEConfig()->m_point_shadow_limit;
     // The shadows which have no shadow map
     constants.m_rt_shadow_type = getRTShadowType();
     std::array<VkSpecializationMapEntry, 15> specialization_entries = {};

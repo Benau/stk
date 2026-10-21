@@ -2,6 +2,11 @@
 layout(binding = 0) uniform sampler2D u_color;
 layout(binding = 1) uniform sampler2D u_normal;
 layout(binding = 2) uniform sampler2D u_depth;
+// Of GEVulkanRTShadow (the same descriptor set as deferred_pbr.frag), used if
+// u_rt_shadow_type has the point lights
+layout(binding = 4) uniform sampler2DArray u_rt_shadow_texture;
+// Enables the filter of it in utils/pbr_light.glsl
+#define HAS_RT_SHADOW_TEXTURE
 #define GE_LOAD_GBUFFER(tex) texelFetch(tex, ivec2(gl_FragCoord.xy), 0)
 #else
 layout (input_attachment_index = 0, binding = 0) uniform subpassInput u_color;

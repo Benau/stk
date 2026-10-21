@@ -184,6 +184,30 @@ float sampleOmniShadow(int light_id, vec3 light_pos, vec3 world_pos)
     return getShadowPCF(u_shadow_map, uv, layer, depth);
 }
 
+#ifdef HAS_RT_SHADOW_TEXTURE
+#include "rt_shadow_grid.glsl"
+#include "rt_shadow_filter.glsl"
+// Visibility of a point light or a spot light with the ray traced shadow
+// (GEVulkanRTShadow), layer 1 + the index of the light, filtered to the pixel
+// (xpos and normal are in view space). 1.0 if the light has none (the lights
+// are not ray traced, or it's not one of the first u_point_shadow_limit)
+float getLightRTShadow(int light, vec3 xpos, vec3 normal)
+{
+    if ((u_rt_shadow_type & GST_POINTLIGHT) != 0 &&
+        light < int(u_point_shadow_limit) &&
+        light + 1 < textureSize(u_rt_shadow_texture, 0).z)
+    {
+        return sampleRTShadow(xpos, normal, light + 1);
+    }
+    return 1.0;
+}
+#else
+float getLightRTShadow(int light, vec3 xpos, vec3 normal)
+{
+    return 1.0;
+}
+#endif
+
 vec3 accumulateLights(int light_count, vec3 diffuse_color, vec3 normal,
                       vec3 xpos, vec3 eyedir, float perceptual_roughness,
                       float metallic, vec3 world_position)
@@ -228,6 +252,8 @@ vec3 accumulateLights(int light_count, vec3 diffuse_color, vec3 normal,
                 u_global_light.m_lights[i].m_position_radius.xyz, world_position);
             diffuse_specular *= shadow;
         }
+        else
+            diffuse_specular *= getLightRTShadow(i, xpos, normal);
         float attenuation = 20. / (1. + distance_sq);
         float radius = u_global_light.m_lights[i].m_position_radius.w;
         attenuation *= (radius - distance) / radius;
@@ -277,6 +303,8 @@ vec3 calculateLight(int i, vec3 diffuse_color, vec3 normal, vec3 xpos,
             u_global_light.m_lights[i].m_position_radius.xyz, world_position);
         diffuse_specular *= shadow;
     }
+    else
+        diffuse_specular *= getLightRTShadow(i, xpos, normal);
     float attenuation = 20. / (1. + distance_sq);
     float radius = u_global_light.m_lights[i].m_position_radius.w;
     attenuation *= (radius - distance) / radius;
