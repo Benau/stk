@@ -192,11 +192,17 @@ void GEVulkanTextureDescriptor::updateDescriptor()
             bool cur_srgb = it->first[i].second;
             if (!cur_layer)
                 continue;
-            if (tdd.m_texture_observers[i].expired() &&
-                tdd.m_image_views[i] != VK_NULL_HANDLE)
+            if (tdd.m_texture_observers[i].expired())
             {
-                image_views_changed = true;
-                tdd.m_image_views[i] = VK_NULL_HANDLE;
+                // The texture is destroyed and cur_layer is dangling, never
+                // touch it again. This has to be checked every time (not only
+                // when the image view was valid previously), because the
+                // entry stays alive while any other layer is still alive
+                if (tdd.m_image_views[i] != VK_NULL_HANDLE)
+                {
+                    image_views_changed = true;
+                    tdd.m_image_views[i] = VK_NULL_HANDLE;
+                }
                 continue;
             }
             all_layers_expired = false;
@@ -300,7 +306,22 @@ std::shared_ptr<int>& GEVulkanTextureDescriptor::getTextureID(
     }
     auto it = m_texture_list.find(key);
     if (it != m_texture_list.end())
-        return it->second.m_slot;
+    {
+        // The key is compared by pointers, a destroyed texture can have its
+        // address reused by a new one before updateDescriptor removes the
+        // entry, so bind the observer to the texture which is alive now
+        TextureDescriptorData& tdd = it->second;
+        for (unsigned i = 0; i < m_max_layer; i++)
+        {
+            GEVulkanTexture* t = key[i].first;
+            if (t && tdd.m_texture_observers[i].expired())
+            {
+                tdd.m_texture_observers[i] = t->getTextureObserver();
+                tdd.m_image_views[i] = VK_NULL_HANDLE;
+            }
+        }
+        return tdd.m_slot;
+    }
 
     // Stable slot allocation: prefer recycled IDs from expired entries,
     // fall back to a fresh counter value.
