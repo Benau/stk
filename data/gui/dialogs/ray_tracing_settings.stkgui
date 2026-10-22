@@ -17,7 +17,16 @@
             <spacer width="70" height="10"/>
             <checkbox id="rt_reflection"/>
             <spacer width="10" height="10"/>
-            <label text="Realistic reflections" I18N="Ray tracing settings"/>
+            <label text="Realistic solid reflections" I18N="Ray tracing settings"/>
+        </div>
+
+        <spacer height="4" width="10" />
+
+        <div layout="horizontal-row" width="100%" proportion="1">
+            <spacer width="70" height="10"/>
+            <checkbox id="rt_displace_reflection"/>
+            <spacer width="10" height="10"/>
+            <label text="Realistic water reflections" I18N="Ray tracing settings"/>
         </div>
 
         <spacer height="4" width="10" />
