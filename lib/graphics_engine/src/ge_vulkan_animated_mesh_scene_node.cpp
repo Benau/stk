@@ -31,11 +31,8 @@ GEVulkanAnimatedMeshSceneNode::GEVulkanAnimatedMeshSceneNode(irr::scene::IAnimat
 }   // GEVulkanAnimatedMeshSceneNode
 
 // ----------------------------------------------------------------------------
-void GEVulkanAnimatedMeshSceneNode::OnRegisterSceneNode()
+void GEVulkanAnimatedMeshSceneNode::refreshTextureDescriptorID()
 {
-    if (!IsVisible)
-        return;
-
     if (m_ge_materials.empty() ||
         (m_first_render_info &&
         m_first_render_info->hasTransparencySetting() &&
@@ -80,7 +77,15 @@ void GEVulkanAnimatedMeshSceneNode::OnRegisterSceneNode()
             m_texture_descriptor_ids[i] = *slot;
         }
     }
+}   // refreshTextureDescriptorID
 
+// ----------------------------------------------------------------------------
+void GEVulkanAnimatedMeshSceneNode::OnRegisterSceneNode()
+{
+    if (!IsVisible)
+        return;
+
+    refreshTextureDescriptorID();
     SceneManager->registerNodeForRendering(this, scene::ESNRP_SOLID);
     ISceneNode::OnRegisterSceneNode();
 }   // OnRegisterSceneNode

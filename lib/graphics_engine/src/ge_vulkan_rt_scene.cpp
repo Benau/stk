@@ -12,7 +12,6 @@
 #include "ge_vulkan_features.hpp"
 #include "ge_vulkan_mesh_cache.hpp"
 #include "ge_vulkan_shader_manager.hpp"
-#include "ge_vulkan_texture_descriptor.hpp"
 #include "mini_glm.hpp"
 
 #include "IMeshSceneNode.h"
@@ -124,6 +123,7 @@ void collectNode(irr::scene::ISceneNode* node, std::vector<RTSource>& sources,
             mesh = static_cast<irr::scene::IMeshSceneNode*>(node)->getMesh();
         if (mesh)
         {
+            bool refreshed = false;
             for (unsigned i = 0; i < mesh->getMeshBufferCount(); i++)
             {
                 irr::scene::IMeshBuffer* b = mesh->getMeshBuffer(i);
@@ -147,6 +147,11 @@ void collectNode(irr::scene::ISceneNode* node, std::vector<RTSource>& sources,
                 uint32_t type = 0;
                 if (!getShadingType(node->getMaterialType(i), &type))
                     continue;
+                if (!refreshed)
+                {
+                    node->refreshTextureDescriptorID();
+                    refreshed = true;
+                }
                 sources.push_back({ buffer, node, i, type });
             }
         }
@@ -202,6 +207,7 @@ void collectDynamicNode(irr::scene::ISceneNode* node,
             mesh = static_cast<irr::scene::IMeshSceneNode*>(node)->getMesh();
         if (mesh)
         {
+            bool refreshed = false;
             static irr::video::E_MATERIAL_TYPE grass_type =
                 GEMaterialManager::getIrrMaterialType("grass");
             DynamicSource source;
@@ -231,6 +237,11 @@ void collectDynamicNode(irr::scene::ISceneNode* node,
                 uint32_t type = 0;
                 if (!getShadingType(node->getMaterialType(i), &type))
                     continue;
+                if (!refreshed)
+                {
+                    node->refreshTextureDescriptorID();
+                    refreshed = true;
+                }
                 DynamicSource& target = is_grass ? grass_source : source;
                 target.m_buffer_mask |= (uint64_t)1 << i;
                 target.m_buffers.push_back(i);
@@ -248,6 +259,7 @@ void collectDynamicNode(irr::scene::ISceneNode* node,
             static_cast<GEVulkanAnimatedMeshSceneNode*>(node)->getMesh();
         if (mesh && !static_cast<GESPM*>(mesh)->isStatic())
         {
+            bool refreshed = false;
             for (unsigned i = 0; i < mesh->getMeshBufferCount(); i++)
             {
                 irr::scene::IMeshBuffer* b = mesh->getMeshBuffer(i);
@@ -267,6 +279,11 @@ void collectDynamicNode(irr::scene::ISceneNode* node,
                 uint32_t type = 0;
                 if (!getShadingType(node->getMaterialType(i), &type))
                     continue;
+                if (!refreshed)
+                {
+                    node->refreshTextureDescriptorID();
+                    refreshed = true;
+                }
                 skins.push_back({ node, buffer, i, type });
             }
         }
@@ -280,16 +297,12 @@ void collectDynamicNode(irr::scene::ISceneNode* node,
 
 // ----------------------------------------------------------------------------
 // What changes of a geometry of a dynamic node (the material id of the mesh
-// textures, uv shift, hue and custom vertex color), the slot is kept alive
+// textures, uv shift, hue and custom vertex color)
 void setDynamicMaterial(GERTGeometry& info, irr::scene::ISceneNode* node,
-                        unsigned material_index, GEVulkanTextureDescriptor* td,
-                        std::vector<std::shared_ptr<int> >& slots)
+                        unsigned material_index)
 {
     irr::video::SMaterial& m = node->getMaterial(material_index);
-    std::shared_ptr<int> slot = td->getTextureID(m,
-        GEMaterialManager::getMaterial(node->getMaterialType(material_index)));
-    slots.push_back(slot);
-    info.m_material_id = (uint32_t)*slot;
+    info.m_material_id = node->getTextureDescriptorID(material_index);
     const irr::video::SMaterial& cm = m;
     const irr::core::matrix4& texture_matrix = cm.getTextureMatrix(0);
     info.m_uv_shift[0] = texture_matrix[8];
@@ -494,7 +507,7 @@ void GEVulkanRTScene::clear()
         m_retired_skin_sets.empty() &&
         m_blas == VK_NULL_HANDLE &&
         m_data_buffer == VK_NULL_HANDLE && !m_geometry_data &&
-        m_geometry_sources.empty() && m_texture_ids.empty())
+        m_geometry_sources.empty())
         return;
     m_vk->waitIdle();
     VmaAllocator allocator = m_vk->getVmaAllocator();
@@ -550,7 +563,6 @@ void GEVulkanRTScene::clear()
     m_blas = VK_NULL_HANDLE;
     m_blas_buffer = m_data_buffer = VK_NULL_HANDLE;
     m_blas_memory = m_data_memory = VK_NULL_HANDLE;
-    m_texture_ids.clear();
     m_geometry_count = 0;
     m_triangle_count = 0;
 }   // clear
@@ -1556,7 +1568,6 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
             vmaFlushAllocation(allocator, t.m_instance_memory, 0,
                 sizeof(VkAccelerationStructureInstanceKHR));
             t.m_dirty = true;
-            t.m_slots.clear();
         }
         t.m_instance_count = 1;
         t.m_instance_static = true;
@@ -1601,10 +1612,8 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
         collectDynamicNode(root, sources, grass_sources, skins,
             root->isTrulyVisible());
     }
-    t.m_slots.clear();
     VkAccelerationStructureInstanceKHR* instances =
         (VkAccelerationStructureInstanceKHR*)t.m_instance_mapped;
-    GEVulkanTextureDescriptor* td = m_vk->getMeshTextureDescriptor();
     uint32_t instance_count = 1;
     size_t geometry_count = static_count;
     for (DynamicSource& s : sources)
@@ -1646,7 +1655,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
         for (unsigned g = 0; g < blas->m_infos.size(); g++)
         {
             GERTGeometry info = blas->m_infos[g];
-            setDynamicMaterial(info, node, s.m_buffers[g], td, t.m_slots);
+            setDynamicMaterial(info, node, s.m_buffers[g]);
             mapped_addr[geometry_count++] = info;
         }
     }
@@ -1679,7 +1688,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
         for (unsigned g = 0; g < blas->m_infos.size(); g++)
         {
             GERTGeometry info = blas->m_infos[g];
-            setDynamicMaterial(info, node, s.m_buffers[g], td, t.m_slots);
+            setDynamicMaterial(info, node, s.m_buffers[g]);
             infos.push_back(info);
             uint32_t hue_bits, shift_x_bits, shift_y_bits;
             memcpy(&hue_bits, &info.m_hue, sizeof(uint32_t));
@@ -1866,7 +1875,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
                 {
                     GERTGeometry info = m_skin_set->m_infos[g];
                     setDynamicMaterial(info, skins[g].m_node,
-                        skins[g].m_material_index, td, t.m_slots);
+                        skins[g].m_material_index);
                     mapped_addr[geometry_count++] = info;
                 }
                 t.m_skin_dispatches = dispatches;
@@ -2188,7 +2197,6 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
     std::vector<uint32_t> indices;
     std::vector<GERTGeometry> infos;
     std::vector<std::pair<uint32_t, uint32_t> > counts;
-    GEVulkanTextureDescriptor* td = m_vk->getMeshTextureDescriptor();
     for (RTSource& s : sources)
     {
         GESPMBuffer* buffer = s.m_buffer;
@@ -2205,13 +2213,8 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
         GERTGeometry info = {};
         info.m_vertex_offset = (uint32_t)vertices.size();
         info.m_index_offset = (uint32_t)indices.size();
-        // Slots are shared with the node (same material gives the same slot)
-        // and kept alive by us
-        std::shared_ptr<int>& slot = td->getTextureID(m,
-            GEMaterialManager::getMaterial(s.m_node->getMaterialType(
-            s.m_material_index)));
-        m_texture_ids.push_back(slot);
-        info.m_material_id = (uint32_t)*slot;
+        info.m_material_id = s.m_node->getTextureDescriptorID(
+            s.m_material_index);
         info.m_shading_type = s.m_shading_type;
         // Same as ObjectData::init, update() keeps them current, the const
         // overload doesn't create a texture matrix
