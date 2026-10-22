@@ -1,3 +1,17 @@
+// The mask of the displace materials (the shift of the distortion, like water)
+// and, if its reflection is on (u_displace_reflection), the reflection color
+// which displace_transparent.frag blends over them: screen space (SSR) or
+// ray traced.
+//
+// displace_mask_rt.frag is this shader with DISPLACE_RT defined, the reflected
+// ray is traced in the ray traced scene (GEVulkanRTScene) with the shading of
+// the hits shared with the reflection of the solid materials (see
+// utils/rt_reflection.glsl) instead of the screen, which has no history and no
+// screen edges. It uses the pipeline layout of solid_rt.frag (GEVulkanDrawCall::
+// m_solid_rt_layout: the scene is set 0, the environment is set 3 and the mesh
+// textures, also the one of the mask of this material, are the bindless set 4),
+// so displace_mask_rt.frag defines DISPLACE_ENV_SET and MESH_TEXTURES_SET. The
+// environment is the fallback of both
 layout(location = 1) in vec2 f_uv;
 layout(location = 5) in vec3 f_normal;
 layout(location = 8) in vec4 f_world_position;
@@ -12,25 +26,48 @@ layout(push_constant) uniform Constants
     vec4 m_displace_direction;
 } u_push_constants;
 
+// The set of the environment (skybox, and the cubemaps of the hits) in the
+// pipeline layout, the mesh textures are MESH_TEXTURES_SET of
+// utils/sample_mesh_texture.glsl
+#ifndef DISPLACE_ENV_SET
+#define DISPLACE_ENV_SET 2
+#endif
 #include "utils/camera.glsl"
 #include "utils/constants_utils.glsl"
+#include "utils/sample_mesh_texture.glsl"
+#include "../utils/displace_utils.frag"
+
+layout (set = DISPLACE_ENV_SET, binding = 2) uniform samplerCube u_skybox_texture;
+#ifdef DISPLACE_RT
+// The environment for the shading of a hit (the same set as the skybox), and
+// u_shadow_map is only to share pbr_light.glsl
+layout (set = DISPLACE_ENV_SET, binding = 0) uniform samplerCube u_diffuse;
+layout (set = DISPLACE_ENV_SET, binding = 1) uniform samplerCube u_specular;
+layout (set = DISPLACE_ENV_SET, binding = 3) uniform sampler2DArrayShadow
+    u_shadow_map;
+#include "utils/pbr_utils.glsl"
+#include "utils/get_vertex_color.glsl"
+#include "../utils/rgb_conversion.frag"
+#include "utils/global_light_data.glsl"
+#include "utils/pbr_light.glsl"
+#include "utils/rt_utils.glsl"
+#include "utils/rt_scene.glsl"
+#include "utils/rt_reflection.glsl"
+#else
+layout (set = 3, binding = 0) uniform sampler2D u_displace_color;
+layout (set = 3, binding = 1) uniform sampler2DShadow u_depth;
+layout (set = 3, binding = 2) uniform sampler2D u_hiz_depth;
+
 // Iteration limit of the hiz trace (0 uses the depth buffer)
 const uint u_hiz_iterations =
     u_displace_reflection == DISPLACE_REFLECTION_SSR_HIZ400 ? 400u :
     u_displace_reflection == DISPLACE_REFLECTION_SSR_HIZ200 ? 200u :
     u_displace_reflection == DISPLACE_REFLECTION_SSR_HIZ100 ? 100u : 0u;
-#include "utils/sample_mesh_texture.glsl"
-#include "../utils/displace_utils.frag"
-
-layout (set = 2, binding = 2) uniform samplerCube u_skybox_texture;
-layout (set = 3, binding = 0) uniform sampler2D u_displace_color;
-layout (set = 3, binding = 1) uniform sampler2DShadow u_depth;
-layout (set = 3, binding = 2) uniform sampler2D u_hiz_depth;
-
 #ifdef PBR_ENABLED
 #define SSR_HIZ
 #endif
 #include "../utils/ssr.glsl"
+#endif
 
 void main()
 {
@@ -88,6 +125,19 @@ void main()
             return;
         }
 
+#ifdef DISPLACE_RT
+        vec4 result;
+        // The hit is lit in hdr, the displace color is after the tonemap
+        vec3 hdr;
+        if (traceReflection(f_world_position.xyz, normalize(world_reflection),
+            hdr))
+        {
+            float fresnel = (1.0 - NdotV) * (1.0 - NdotV);
+            result = mix(fallback, vec4(convertColor(hdr), 1.0), fresnel);
+        }
+        else
+            result = fallback;
+#else
         vec4 result;
         vec2 viewport_scale = u_camera.m_viewport.zw / u_camera.m_screensize.xy;
         vec2 viewport_offset = u_camera.m_viewport.xy / u_camera.m_screensize.xy;
@@ -136,6 +186,7 @@ void main()
                 viewport_coords.y < 0. || viewport_coords.y > 1.);
             result = dbgColor(hit, outside, viewport_coords, dbgStart);
         }
+#endif
 #endif
         o_displace_ssr = result;
     }

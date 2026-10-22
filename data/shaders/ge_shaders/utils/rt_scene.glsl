@@ -1,6 +1,7 @@
 // The ray traced scene (GEVulkanRTScene) as seen by a shader: its bindings
-// (set 0), the geometry data of a hit and the ray queries shared by the passes
-// which trace it (solid_rt.frag, and the ray traced shadows later).
+// (set RT_SCENE_SET, 0 by default), the geometry data of a hit and the ray
+// queries shared by the passes which trace it (solid_rt.frag,
+// displace_mask_rt.frag, the ray traced shadows).
 //
 // The shader which includes this file must have, before it, the include of
 // utils/constants_utils.glsl, utils/get_vertex_color.glsl,
@@ -8,9 +9,13 @@
 // utils/rt_utils.glsl, and keep #extension GL_EXT_ray_query : require in its
 // own file (GEVulkanShaderManager looks for it there to use GLSL 4.60)
 
-layout(set = 0, binding = 0) uniform accelerationStructureEXT u_tlas;
+// The set of the scene in the pipeline layout of the pass, 0 if it's not defined
+#ifndef RT_SCENE_SET
+#define RT_SCENE_SET 0
+#endif
+layout(set = RT_SCENE_SET, binding = 0) uniform accelerationStructureEXT u_tlas;
 // Vertices (8 words, see above) of all geometries, then their indices
-layout(set = 0, binding = 1, std430) readonly buffer RTData
+layout(set = RT_SCENE_SET, binding = 1, std430) readonly buffer RTData
 {
     uint u_rt_data[];
 };
@@ -27,12 +32,12 @@ struct RTGeometry
     uint m_vertex_color;
     uint m_flags;
 };
-layout(set = 0, binding = 2, std430) readonly buffer RTGeometries
+layout(set = RT_SCENE_SET, binding = 2, std430) readonly buffer RTGeometries
 {
     RTGeometry u_rt_geometries[];
 };
 // The mesh cache of the driver, vertices, then indices
-layout(set = 0, binding = 3, std430) readonly buffer RTMeshCache
+layout(set = RT_SCENE_SET, binding = 3, std430) readonly buffer RTMeshCache
 {
     uint u_mesh_cache[];
 };

@@ -1038,6 +1038,11 @@ namespace UserConfigParams
     PARAM_PREFIX BoolUserConfigParam        m_ray_tracing_reflection
             PARAM_DEFAULT(BoolUserConfigParam(true, "ray_tracing_reflection",
             &m_graphics_quality, "Ray traced reflection of solid materials"));
+    PARAM_PREFIX BoolUserConfigParam        m_ray_tracing_displace_reflection
+            PARAM_DEFAULT(BoolUserConfigParam(false,
+            "ray_tracing_displace_reflection", &m_graphics_quality,
+            "Ray traced reflection of displace materials (water), it "
+            "overrides the screen space one"));
     PARAM_PREFIX BoolUserConfigParam        m_ray_tracing_shadow
             PARAM_DEFAULT(BoolUserConfigParam(false, "ray_tracing_shadow",
             &m_graphics_quality, "Ray traced shadow of the sun"));

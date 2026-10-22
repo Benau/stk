@@ -47,6 +47,8 @@ void RayTracingSettingsDialog::beforeAddingWidgets()
         ->setState(UserConfigParams::m_ray_tracing);
     getWidget<CheckBoxWidget>("rt_reflection")
         ->setState(UserConfigParams::m_ray_tracing_reflection);
+    getWidget<CheckBoxWidget>("rt_displace_reflection")
+        ->setState(UserConfigParams::m_ray_tracing_displace_reflection);
     getWidget<CheckBoxWidget>("rt_shadow")
         ->setState(UserConfigParams::m_ray_tracing_shadow);
     getWidget<CheckBoxWidget>("rt_dynamic_objects")
@@ -65,6 +67,7 @@ void RayTracingSettingsDialog::updateActivation()
     enabled->setActive(m_supported);
     bool on = m_supported && enabled->getState();
     getWidget<CheckBoxWidget>("rt_reflection")->setActive(on);
+    getWidget<CheckBoxWidget>("rt_displace_reflection")->setActive(on);
     getWidget<CheckBoxWidget>("rt_shadow")->setActive(on);
     getWidget<CheckBoxWidget>("rt_dynamic_objects")->setActive(on);
     getWidget<CheckBoxWidget>("rt_foliage")->setActive(on);
@@ -95,12 +98,17 @@ GUIEngine::EventPropagation RayTracingSettingsDialog::processEvent(
                 const bool prev_enabled = UserConfigParams::m_ray_tracing;
                 const bool prev_reflection =
                     UserConfigParams::m_ray_tracing_reflection;
+                const bool prev_displace_reflection =
+                    UserConfigParams::m_ray_tracing_displace_reflection;
                 const bool prev_shadow =
                     UserConfigParams::m_ray_tracing_shadow;
                 UserConfigParams::m_ray_tracing =
                     getWidget<CheckBoxWidget>("rt_enabled")->getState();
                 UserConfigParams::m_ray_tracing_reflection =
                     getWidget<CheckBoxWidget>("rt_reflection")->getState();
+                UserConfigParams::m_ray_tracing_displace_reflection =
+                    getWidget<CheckBoxWidget>("rt_displace_reflection")
+                    ->getState();
                 UserConfigParams::m_ray_tracing_shadow =
                     getWidget<CheckBoxWidget>("rt_shadow")->getState();
                 UserConfigParams::m_ray_tracing_dynamic_objects =
@@ -114,15 +122,18 @@ GUIEngine::EventPropagation RayTracingSettingsDialog::processEvent(
                 OptionsScreenVideo::setRayTracing();
 
                 // Dynamic objects, foliage and grass are handled by the ray traced
-                // scene itself (it's built again if needed). The reflection
+                // scene itself (it's built again if needed). The reflections
                 // and the shadow only change which passes are rendered and the
                 // pipelines (the shadow is ray traced or uses the shadow map
-                // of GEConfig::m_shadow_size), which the draw calls created
-                // again have.
+                // of GEConfig::m_shadow_size, the displace reflection is ray
+                // traced or uses GEConfig::m_displace_reflection, which is not
+                // changed), which the draw calls created again have.
                 const bool shadow_changed =
                     prev_shadow != UserConfigParams::m_ray_tracing_shadow;
                 const bool reflection_changed =
-                    prev_reflection != UserConfigParams::m_ray_tracing_reflection;
+                    prev_reflection != UserConfigParams::m_ray_tracing_reflection ||
+                    prev_displace_reflection !=
+                    UserConfigParams::m_ray_tracing_displace_reflection;
                 if (prev_enabled != UserConfigParams::m_ray_tracing ||
                     reflection_changed || shadow_changed)
                 {

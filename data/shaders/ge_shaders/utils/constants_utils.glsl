@@ -18,6 +18,8 @@ const uint DISPLACE_REFLECTION_SSR_FAST = 1;
 const uint DISPLACE_REFLECTION_SSR_HIZ100 = 2;
 const uint DISPLACE_REFLECTION_SSR_HIZ200 = 3;
 const uint DISPLACE_REFLECTION_SSR_HIZ400 = 4;
+// Ray traced, the displace mask is rendered by displace_mask_rt.frag
+const uint DISPLACE_REFLECTION_RT = 5;
 layout (constant_id = 3) const uint u_solid_reflection = 0;
 layout (constant_id = 4) const uint u_displace_reflection = 0;
 layout (constant_id = 5) const uint u_shadow_size = 0;

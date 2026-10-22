@@ -60,7 +60,12 @@ enum GEDisplaceReflectionType : unsigned
     GDRT_SSR_HIZ100,
     GDRT_SSR_HIZ200,
     GDRT_SSR_HIZ400,
+    // Number of the settings, which can't be set to GEConfig::
+    // m_displace_reflection
     GDRT_COUNT,
+    // Reflection traced in the ray traced scene, it's what getDisplaceReflection()
+    // returns (never a value of the setting) when isDisplaceRayTracing()
+    GDRT_RT = GDRT_COUNT,
 };
 inline bool isSolidReflectionSSR(GESolidReflectionType t)
                 { return t >= GSRT_SSR_FAST && t <= GSRT_SSR_HIZ400; }
@@ -77,6 +82,10 @@ struct GERayTracingConfig
     // Reflection of the solid materials is traced, it overrides
     // GEConfig::m_solid_reflection (SSR is not used when it's on)
     bool m_solid_reflection;
+    // Reflection of the displace materials (water, or anything which uses the
+    // displace mask) is traced, it overrides GEConfig::m_displace_reflection
+    // (the setting is not changed, it is used again if this is false)
+    bool m_displace_reflection;
     // Moving nodes (GRTT_DYNAMIC) are in the traced scene too, including the
     // skinned (animated) meshes
     bool m_dynamic_objects;
@@ -107,6 +116,7 @@ struct GERayTracingConfig
     {
         m_enabled = false;
         m_solid_reflection = false;
+        m_displace_reflection = false;
         m_dynamic_objects = false;
         m_alphatest = false;
         m_grass = false;
@@ -169,6 +179,14 @@ bool isRayTracing();
 // True if the reflection of the solid materials is traced (which overrides
 // GEConfig::m_solid_reflection), needs the pbr shaders
 bool isSolidRayTracing();
+// Same for the reflection of the displace materials (GERayTracingConfig::
+// m_displace_reflection)
+bool isDisplaceRayTracing();
+// What the displace reflection is with isDisplaceRayTracing() taken into
+// account: GDRT_RT if it's ray traced, GEConfig::m_displace_reflection
+// otherwise. Everything which needs the displace reflection (the attachments
+// of the FBO, the HiZ depth, the shaders) uses it instead of the setting
+GEDisplaceReflectionType getDisplaceReflection();
 // What the solid reflection is with isSolidRayTracing() taken into account,
 // only use these (not GEConfig::m_solid_reflection) to know if SSR is used
 bool isSolidSSR();

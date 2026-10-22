@@ -19,7 +19,7 @@ bool GEVulkanHiZDepth::isEnabled(bool has_displace_fbo)
 {
     return (isSolidHiZ() ||
         (has_displace_fbo &&
-        isDisplaceReflectionHiZ(getGEConfig()->m_displace_reflection))) &&
+        isDisplaceReflectionHiZ(getDisplaceReflection()))) &&
         GEVulkanFeatures::supportsComputeInMainQueue();
 }   // isEnabled
 

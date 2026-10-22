@@ -654,6 +654,8 @@ void OptionsScreenVideo::setRayTracing()
     GE::GERayTracingConfig& rt = GE::getGEConfig()->m_ray_tracing;
     rt.m_enabled = UserConfigParams::m_ray_tracing;
     rt.m_solid_reflection = UserConfigParams::m_ray_tracing_reflection;
+    rt.m_displace_reflection =
+        UserConfigParams::m_ray_tracing_displace_reflection;
     rt.m_dynamic_objects = UserConfigParams::m_ray_tracing_dynamic_objects;
     rt.m_alphatest = UserConfigParams::m_ray_tracing_alphatest;
     rt.m_grass = UserConfigParams::m_ray_tracing_grass;

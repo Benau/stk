@@ -269,6 +269,18 @@ protected:
     // it has the mesh textures so it's created with m_pipeline_layout
     VkPipelineLayout m_solid_rt_layout;
 
+    // The layout the sets are bound with in renderPipeline: m_pipeline_layout,
+    // or m_solid_rt_layout if the pipeline is the ray traced displace mask (the
+    // layouts are not compatible, even if the set of the camera is the same)
+    VkPipelineLayout m_render_layout;
+
+    // The displace materials trace their reflection (isDisplaceRayTracing()):
+    // m_solid_rt_layout is also the layout of their mask pipeline (the scene,
+    // the camera, the environment and the bindless mesh textures are all it
+    // needs, see displace_mask_rt.frag), so it's the same condition. If the FBO
+    // has no ray traced scene, the reflection is the fast screen space one
+    bool hasDisplaceRT() const;
+
     std::vector<VkPipelineLayout> m_deferred_layouts;
 
     std::unordered_map<std::string, PipelineData> m_graphics_pipelines;
@@ -324,7 +336,7 @@ protected:
                             std::vector<uint32_t>& dynamic_offsets)
     {
         vkCmdBindDescriptorSets(cmd,
-            VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline_layout, 1, 1,
+            VK_PIPELINE_BIND_POINT_GRAPHICS, m_render_layout, 1, 1,
             &m_data_descriptor_sets[current_buffer_idx],
             dynamic_offsets.size(), dynamic_offsets.data());
     }

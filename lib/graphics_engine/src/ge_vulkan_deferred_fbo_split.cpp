@@ -218,7 +218,8 @@ bool GEVulkanDeferredFBOSplit::needsSolidRT()
 // ----------------------------------------------------------------------------
 bool GEVulkanDeferredFBOSplit::needsRTScene()
 {
-    return isSolidRayTracing() || getRTShadowType() != GST_NONE;
+    return isSolidRayTracing() || isDisplaceRayTracing() ||
+        getRTShadowType() != GST_NONE;
 }   // needsRTScene
 
 // ----------------------------------------------------------------------------
