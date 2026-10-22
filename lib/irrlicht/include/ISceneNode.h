@@ -805,6 +805,7 @@ namespace scene
 		void setUpdatedAbsTrans(bool val) { UpdatedAbsTrans = val; }
 		virtual void resetFirstRenderInfo(std::shared_ptr<GE::GERenderInfo> ri) {}
 		virtual s32 getTextureDescriptorID(u32 i) const { return 0; }
+		virtual void refreshTextureDescriptorID() {}
 		virtual const core::quaternion& getAbsoluteRotation() const
 		{
 			static core::quaternion identity;

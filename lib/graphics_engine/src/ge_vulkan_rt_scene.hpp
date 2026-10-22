@@ -220,9 +220,6 @@ private:
         // GEVulkanMeshCache::getUpdateCount of the mesh cache buffer in the
         // descriptor set of this index
         uint64_t m_cache_version;
-        // Slots of the mesh texture descriptor used by the dynamic
-        // instances, alive until this index is used again
-        std::vector<std::shared_ptr<int> > m_slots;
         // What skin_rt.comp does for this index (the skinned BLAS is updated)
         struct SkinDispatch
         {
@@ -454,9 +451,6 @@ private:
     bool m_warned_dynamic_limit;
     // See getBuiltAlphatest()
     bool m_built_alphatest;
-
-    // Keep the slots of the mesh texture descriptor alive
-    std::vector<std::shared_ptr<int> > m_texture_ids;
 
     uint32_t m_geometry_count;
 

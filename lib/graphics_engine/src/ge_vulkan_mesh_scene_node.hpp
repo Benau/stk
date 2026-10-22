@@ -62,6 +62,8 @@ public:
         return m_texture_descriptor_ids[i];
     }
     // ------------------------------------------------------------------------
+    virtual void refreshTextureDescriptorID();
+    // ------------------------------------------------------------------------
     virtual void updateAbsolutePosition();
     // ------------------------------------------------------------------------
     virtual const irr::core::quaternion& getAbsoluteRotation() const
