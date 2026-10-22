@@ -290,7 +290,7 @@ void refreshDeferredSplit()
     // separated), and the HiZ depth is generated after the g-buffer. The
     // FAST displace reflection only samples the depth buffer
     if (isSolidSSR() ||
-        isDisplaceReflectionHiZ(g_config.m_displace_reflection))
+        isDisplaceReflectionHiZ(getDisplaceReflection()))
         g_config.m_deferred_split |= 1 << 3;
     // The ambient occlusion is computed between the g-buffer and the lighting
     // passes, and sampled by the lighting pass
@@ -348,6 +348,17 @@ bool isSolidRayTracing()
 {
     return g_config.m_pbr && g_config.m_ray_tracing.m_solid_reflection &&
         isRayTracing();
+}
+
+bool isDisplaceRayTracing()
+{
+    return g_config.m_pbr && g_config.m_ray_tracing.m_displace_reflection &&
+        isRayTracing();
+}
+
+GEDisplaceReflectionType getDisplaceReflection()
+{
+    return isDisplaceRayTracing() ? GDRT_RT : g_config.m_displace_reflection;
 }
 
 GESolidReflectionType getSolidReflection()
