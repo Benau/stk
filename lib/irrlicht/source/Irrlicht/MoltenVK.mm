@@ -7,6 +7,7 @@
 
 #ifdef DLOPEN_MOLTENVK
 PFN_vkGetPhysicalDeviceMetalFeaturesMVK vkGetPhysicalDeviceMetalFeaturesMVK = NULL;
+extern "C" void detectRayQuery();
 
 namespace irr
 {
@@ -48,6 +49,7 @@ MoltenVK::MoltenVK()
             break;
         }
     }
+    detectRayQuery();
 }   // MoltenVK
 
 // ----------------------------------------------------------------------------

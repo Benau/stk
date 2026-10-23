@@ -46,6 +46,7 @@ extern "C" void init_objc(SDL_SysWMinfo* info, float* top, float* bottom, float*
     }
 }
 
+extern "C" void detectRayQuery();
 #ifdef main
 #undef main
 #endif
@@ -57,5 +58,6 @@ int main(int argc, char *argv[])
     NSString* model = [NSString stringWithCString:system_info.machine
         encoding:NSUTF8StringEncoding];
     getConfigForDevice([model UTF8String]);
+    detectRayQuery();
     return SDL_UIKitRunApp(argc, argv, ios_main);
 }

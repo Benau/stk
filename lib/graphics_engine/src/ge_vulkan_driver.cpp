@@ -42,6 +42,8 @@
 #include <stdexcept>
 #include "../source/Irrlicht/os.h"
 
+extern "C" int enableRayQuery();
+
 extern "C" VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
     VkDebugUtilsMessageTypeFlagsEXT message_type,
@@ -876,15 +878,18 @@ void GEVulkanDriver::createInstance(SDL_Window* window)
     static VkBool32 setting_false = VK_FALSE;
     static VkBool32 setting_true = VK_TRUE;
 
-    static std::vector<VkLayerSettingEXT> settings(2);
+    static std::vector<VkLayerSettingEXT> settings(3);
     settings[0].pLayerName = "MoltenVK";
     settings[0].pSettingName = "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS";
     settings[0].type = VK_LAYER_SETTING_TYPE_BOOL32_EXT;
-    settings[0].pValues = &setting_false;
+    settings[0].pValues = enableRayQuery() ? &setting_true : &setting_false;
     settings[0].valueCount = 1;
     settings[1] = settings[0];
     settings[1].pSettingName = "MVK_CONFIG_FULL_IMAGE_VIEW_SWIZZLE";
     settings[1].pValues = &setting_true;
+    settings[2] = settings[0];
+    settings[2].pSettingName = "MVK_CONFIG_ENABLE_EXPERIMENTAL_RAY_TRACING";
+    settings[2].pValues = enableRayQuery() ? &setting_true : &setting_false;
 #ifdef MVK_SHADER_DUMP
     // HOME is the app's sandbox root on iOS.
     const char* home = std::getenv("HOME");
@@ -898,14 +903,14 @@ void GEVulkanDriver::createInstance(SDL_Window* window)
         shader_dump_dir += "/Documents/MVKShaderDump";
         shader_dump_dir_value = shader_dump_dir.c_str();
 
-        if (settings.size() < 3)
-            settings.resize(3);
+        if (settings.size() < 4)
+            settings.resize(4);
 
-        settings[2] = settings[0];
-        settings[2].pSettingName = "MVK_CONFIG_SHADER_DUMP_DIR";
-        settings[2].type = VK_LAYER_SETTING_TYPE_STRING_EXT;
-        settings[2].pValues = &shader_dump_dir_value;
-        settings[2].valueCount = 1;
+        settings[3] = settings[0];
+        settings[3].pSettingName = "MVK_CONFIG_SHADER_DUMP_DIR";
+        settings[3].type = VK_LAYER_SETTING_TYPE_STRING_EXT;
+        settings[3].pValues = &shader_dump_dir_value;
+        settings[3].valueCount = 1;
     }
 #endif
 
