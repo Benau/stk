@@ -42,6 +42,7 @@ uint32_t g_as_max_geometry_count = 0;
 uint32_t g_as_scratch_alignment = 256;
 }   // GEVulkanFeatures
 
+extern "C" int enableRayQuery();
 // ============================================================================
 void GEVulkanFeatures::init(GEVulkanDriver* vk)
 {
@@ -217,32 +218,11 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
     }
 
 #if defined(__APPLE__)
-    bool missing_vkGetPhysicalDeviceProperties2 =
-        !vkGetPhysicalDeviceProperties2;
-    if (!missing_vkGetPhysicalDeviceProperties2 &&
-        !g_supports_bind_textures_at_once && dynamic_indexing)
+    if (enableRayQuery() == 1)
     {
-        // Required for moltenvk argument buffers
-        VkPhysicalDeviceProperties2 props1 = {};
-        props1.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-        VkPhysicalDeviceDescriptorIndexingProperties props2 = {};
-        props2.sType =
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
-        props1.pNext = &props2;
-        vkGetPhysicalDeviceProperties2(vk->getPhysicalDevice(), &props1);
-        if (props2.sType ==
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES)
-        {
-            g_max_sampler_supported = std::min(
-            {
-                props2.maxPerStageDescriptorUpdateAfterBindSamplers,
-                props2.maxPerStageDescriptorUpdateAfterBindSampledImages,
-                props2.maxDescriptorSetUpdateAfterBindSamplers,
-                props2.maxDescriptorSetUpdateAfterBindSampledImages
-            });
-            g_supports_bind_textures_at_once =
-                g_max_sampler_supported >= max_sampler_size;
-        }
+        // We checked for MTLArgumentBuffersTier2 support
+        g_supports_bind_textures_at_once = true;
+        g_max_sampler_supported = 1e6;
     }
 
     MVKPhysicalDeviceMetalFeatures mvk_features = {};
