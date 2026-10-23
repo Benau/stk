@@ -399,6 +399,7 @@ namespace GE
         }
         SDL_Window* getSDLWindow() const       { return m_params.m_sdl_window; }
         GESPM* getBillboardQuad() const             { return m_billboard_quad; }
+        void removeBillboardQuad();
         int getCurrentBufferIdx() const         { return m_current_buffer_idx; }
         void addDynamicSPMBuffer(GEVulkanDynamicSPMBuffer* buffer)
                                        { m_dynamic_spm_buffers.insert(buffer); }

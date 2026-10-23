@@ -739,11 +739,7 @@ void GEVulkanDriver::destroyVulkan()
         m_transparent_texture->drop();
         m_transparent_texture = NULL;
     }
-    if (m_billboard_quad)
-    {
-        getVulkanMeshCache()->removeMesh(m_billboard_quad);
-        m_billboard_quad = NULL;
-    }
+    removeBillboardQuad();
 
     if (m_irrlicht_device->getSceneManager())
     {
@@ -772,6 +768,17 @@ void GEVulkanDriver::destroyVulkan()
     delete m_vk.get();
     m_vk.release();
 }   // destroyVulkan
+
+// ----------------------------------------------------------------------------
+void GEVulkanDriver::removeBillboardQuad()
+{
+    if (m_billboard_quad)
+    {
+        if (m_irrlicht_device->getSceneManager())
+            getVulkanMeshCache()->removeMesh(m_billboard_quad);
+        m_billboard_quad = NULL;
+    }
+}   // removeBillboardQuad
 
 // ----------------------------------------------------------------------------
 void GEVulkanDriver::createUnicolorTextures()

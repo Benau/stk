@@ -36,6 +36,13 @@ void GEVulkanMeshCache::meshCacheChanged()
 }   // meshCacheChanged
 
 // ----------------------------------------------------------------------------
+void GEVulkanMeshCache::clear()
+{
+    m_vk->removeBillboardQuad();
+    irr::scene::CMeshCache::clear();
+}   // clear
+
+// ----------------------------------------------------------------------------
 void GEVulkanMeshCache::updateCache()
 {
     if (!GEVulkanFeatures::supportsBaseVertexRendering())
