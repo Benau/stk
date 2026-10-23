@@ -75,6 +75,7 @@ public:
                                 bool complain_if_not_found=true,
                                 bool strip_path=true, bool install=true, bool create_if_not_found=true);
     void      addSharedMaterial(const std::string& filename, bool deprecated = false);
+    void      addSharedMaterialFromString(const std::string& xml, bool deprecated = false);
     bool      pushTempMaterial (const std::string& filename, bool deprecated = false);
     bool      pushTempMaterial (const XMLNode *root, const std::string& filename, bool deprecated = false);
     void      popTempMaterial  ();
