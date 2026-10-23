@@ -565,6 +565,7 @@ void GEVulkanDrawCall::generate(GEVulkanDriver* vk)
 
     size_t min_size = 1024;
 start:
+    bool shader_draw_params = GEVulkanFeatures::supportsShaderDrawParameters();
     m_cmds.clear();
     m_materials_data.clear();
 
@@ -611,6 +612,11 @@ start:
         bool skip_instance_key = false;
         for (auto& q : p.first.second)
         {
+            if (!shader_draw_params)
+            {
+                skip_instance_key = true;
+                break;
+            }
             irr::scene::ISceneNode* node = q.first;
             const irr::core::matrix4& texture_matrix =
                 q.second.getTextureMatrix(0);
@@ -661,8 +667,8 @@ start:
                     goto start;
                 }
                 ObjectData* obj = (ObjectData*)mapped_addr;
-                obj->init(node, bind_mesh_textures ? -1 : material_id,
-                    skinning_offset, q.second);
+                obj->init(node, bind_mesh_textures && shader_draw_params ?
+                    -1 : material_id, skinning_offset, q.second);
                 written_size += sizeof(ObjectData);
                 mapped_addr += sizeof(ObjectData);
             }
@@ -734,7 +740,7 @@ start:
     }
 
     size_t materials_padded_size = 0;
-    if (bind_mesh_textures && !m_cmds.empty())
+    if (shader_draw_params && bind_mesh_textures && !m_cmds.empty())
     {
         std::string cur_shader = m_cmds[0].m_shader;
         for (unsigned i = 0; i < m_cmds.size(); i++)
@@ -2431,8 +2437,16 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
         if (bind_mesh_textures && sbo_buffer != VK_NULL_HANDLE)
         {
             sbo_info_material.buffer = sbo_buffer;
-            sbo_info_material.offset = m_object_data_padded_size;
-            sbo_info_material.range = m_materials_padded_size;
+            if (GEVulkanFeatures::supportsShaderDrawParameters())
+            {
+                sbo_info_material.offset = m_object_data_padded_size;
+                sbo_info_material.range = m_materials_padded_size;
+            }
+            else
+            {
+                sbo_info_material.offset = 0;
+                sbo_info_material.range = m_object_data_padded_size;
+            }
             data_set.push_back({});
             VkWriteDescriptorSet& ds = data_set.back();
             ds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
