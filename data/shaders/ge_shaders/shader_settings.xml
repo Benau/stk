@@ -106,6 +106,19 @@
         </shaders>
     </setting>
 
+    <setting name="bubble">
+        <properties>
+            <alphablend>true</alphablend>
+            <depth-write>false</depth-write>
+            <backface-culling>false</backface-culling>
+            <nonpbr-fallback>alphablend</nonpbr-fallback>
+        </properties>
+        <shaders>
+            <vertex>spm.vert</vertex>
+            <fragment>bubble.frag</fragment>
+        </shaders>
+    </setting>
+
     <setting name="displace">
         <properties>
             <alphablend>true</alphablend>
