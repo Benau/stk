@@ -2026,6 +2026,19 @@ bool GEVulkanDriver::endScene()
 
     GEVulkan2dRenderer::updateTextureDescriptor();
     m_mesh_texture_descriptor->updateDescriptor();
+    const auto recreate_swap_chain = [this](bool handle_surface)
+    {
+        destroySwapChainRelated(handle_surface);
+        try
+        {
+            createSwapChainRelated(handle_surface);
+        }
+        catch (std::exception&)
+        {
+            // Swapchain creation can fail while minimized
+            destroySwapChainRelated(handle_surface);
+        }
+    };
     if (m_vk->in_flight_fences.empty() || vkWaitForFences(m_vk->device, 1,
         &m_vk->in_flight_fences[m_current_frame], VK_TRUE, 2000000000) ==
         VK_TIMEOUT)
@@ -2033,22 +2046,11 @@ bool GEVulkanDriver::endScene()
         // Attempt to restore after out focus in gnome fullscreen
         video::CNullDriver::endScene();
         GEVulkan2dRenderer::clear();
-        destroySwapChainRelated(false/*handle_surface*/);
-        try
-        {
-            createSwapChainRelated(false/*handle_surface*/);
-        }
-        catch (std::exception& e)
-        {
-            // When minimized in Windows swapchain depth buffer will fail to
-            // create
-            destroySwapChainRelated(false/*handle_surface*/);
-        }
+        recreate_swap_chain(false/*handle_surface*/);
         return true;
     }
 
     VkFence fence = m_vk->in_flight_fences[m_current_frame];
-    vkResetFences(m_vk->device, 1, &fence);
     vkResetCommandPool(m_vk->device, m_vk->command_pools[m_current_frame], 0);
 
     VkSemaphore semaphore = m_vk->image_available_semaphores[m_current_semaphore];
@@ -2056,14 +2058,24 @@ bool GEVulkanDriver::endScene()
         std::numeric_limits<uint64_t>::max(), semaphore, VK_NULL_HANDLE,
         &m_image_index);
 
-    if (result != VK_SUCCESS)
+    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
     {
         video::CNullDriver::endScene();
         GEVulkan2dRenderer::clear();
+        if (result == VK_ERROR_OUT_OF_DATE_KHR ||
+            result == VK_ERROR_SURFACE_LOST_KHR)
+            recreate_swap_chain(result == VK_ERROR_SURFACE_LOST_KHR);
         return false;
     }
+    // SUBOPTIMAL still acquires an image and signals the semaphore, so it must
+    // be submitted/presented before its semaphore and swapchain are replaced.
+    const bool acquire_suboptimal = result == VK_SUBOPTIMAL_KHR;
 
     buildCommandBuffers();
+    // Reset only after a successful acquisition. Otherwise this fence would
+    // never be signaled by a queue submission, causing the next frame to wait
+    // for the full timeout before attempting recovery.
+    vkResetFences(m_vk->device, 1, &fence);
 
     VkSemaphore wait_semaphores[] = {m_vk->image_available_semaphores[m_current_semaphore]};
     VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
@@ -2120,10 +2132,20 @@ bool GEVulkanDriver::endScene()
         result = vkQueuePresentKHR(present_queue, &present_info);
         ul.unlock();
     }
-    if (!video::CNullDriver::endScene())
+    const bool end_scene_result = video::CNullDriver::endScene();
+    if (result == VK_ERROR_SURFACE_LOST_KHR)
+    {
+        recreate_swap_chain(true/*handle_surface*/);
         return false;
+    }
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR ||
+        (acquire_suboptimal && result == VK_SUCCESS))
+    {
+        recreate_swap_chain(false/*handle_surface*/);
+        return false;
+    }
 
-    return (result != VK_ERROR_OUT_OF_DATE_KHR && result != VK_SUBOPTIMAL_KHR);
+    return end_scene_result && result == VK_SUCCESS;
 }   // endScene
 
 // ----------------------------------------------------------------------------
