@@ -93,6 +93,7 @@ enum GEVulkanPipelineType : unsigned
     // Same as above, but the reflection is traced in the ray traced scene,
     // see solid_rt.frag
     GVPT_SOLID_RT,
+    GVPT_BUBBLE,
 };
 
 struct GEMaterial;
@@ -173,6 +174,10 @@ private:
                       GEVulkanPipelineType pt);
     // ------------------------------------------------------------------------
     void createPipelineLayout(GEVulkanDriver* vk);
+    // ------------------------------------------------------------------------
+    bool bindRTLayout(GEVulkanDriver* vk, VkCommandBuffer cmd,
+                      int current_buffer_idx,
+                      std::vector<uint32_t>& dynamic_offsets);
     // ------------------------------------------------------------------------
     virtual const GEVulkanDrawCall* getMasterDrawCall() const  { return this; }
 

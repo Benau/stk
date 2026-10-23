@@ -1071,8 +1071,26 @@ void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
         drawing_order = drawing_order + 1;
         settings.m_shader_name = p.first;
         settings.m_material = p.second;
+        settings.m_pipeline_type = GVPT_TRANSPARENT;
         if (is_displace)
             settings.m_pipeline_type = GVPT_DISPLACE_COLOR;
+        else if (p.first == "bubble")
+        {
+            if (m_solid_rt_layout != VK_NULL_HANDLE)
+            {
+                settings.m_custom_pl = m_solid_rt_layout;
+                settings.m_pipeline_type = GVPT_BUBBLE;
+                createPipeline(vk, settings, dp_cache);
+                settings.m_custom_pl = VK_NULL_HANDLE;
+            }
+            else
+            {
+                m_fallback_materials[
+                    GEMaterialManager::getIrrMaterialType("bubble")] =
+                    GEMaterialManager::getIrrMaterialType("alphablend");
+            }
+            continue;
+        }
         createPipeline(vk, settings, dp_cache);
         if (is_displace && m_lightning_mesh != NULL)
         {
@@ -2116,6 +2134,30 @@ bool GEVulkanDrawCall::hasDisplaceRT() const
 }   // hasDisplaceRT
 
 // ----------------------------------------------------------------------------
+bool GEVulkanDrawCall::bindRTLayout(GEVulkanDriver* vk, VkCommandBuffer cmd,
+                                    int current_buffer_idx,
+                                    std::vector<uint32_t>& dynamic_offsets)
+{
+    // Ray traced reflection (displace_mask_rt.frag or bubble.frag), the layout
+    // is not compatible with the one of the sets bound before (the first set
+    // is the scene), so all of them are bound again. The mesh textures are the
+    // same bindless ones
+    GEVulkanRTScene* rt_scene = vk->getRTScene();
+    if (m_solid_rt_layout == VK_NULL_HANDLE || !rt_scene ||
+        !rt_scene->isReady())
+        return false;
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_solid_rt_layout, 0, 1,
+        rt_scene->getDescriptorSet(current_buffer_idx), 0, NULL);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_solid_rt_layout, 3, 1, getEnvDescriptorSet(vk), 0, NULL);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_solid_rt_layout, 4, 1,
+        m_texture_descriptor->getDescriptorSet(), 0, NULL);
+    return true;
+}   // bindRTLayout
+
+// ----------------------------------------------------------------------------
 void GEVulkanDrawCall::renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
                                       GEVulkanPipelineType pt,
                                       bool& rebind_base_vertex)
@@ -2125,8 +2167,7 @@ void GEVulkanDrawCall::renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
 
     int current_buffer_idx = vk->getCurrentBufferIdx();
 
-    m_render_layout = pt == GVPT_DISPLACE_MASK && hasDisplaceRT() ?
-        m_solid_rt_layout : m_pipeline_layout;
+    m_render_layout = m_pipeline_layout;
     std::vector<uint32_t> dynamic_offsets = getDefaultDynamicOffsets();
     if (getGEConfig()->m_pbr)
     {
@@ -2142,25 +2183,10 @@ void GEVulkanDrawCall::renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
             if (dfbo && dfbo->getAttachment<GVDFT_DISPLACE_COLOR>() &&
                 hasDisplaceRT())
             {
-                // Ray traced reflection (displace_mask_rt.frag), the layout
-                // is not compatible with the one of the sets bound before (the
-                // first set is the scene), so all of them are bound again. The
-                // mesh textures are the same bindless ones
-                GEVulkanRTScene* rt_scene = vk->getRTScene();
-                if (!rt_scene || !rt_scene->isReady())
+                if (!bindRTLayout(vk, cmd, current_buffer_idx,
+                    dynamic_offsets))
                     return;
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    m_solid_rt_layout, 0, 1,
-                    rt_scene->getDescriptorSet(current_buffer_idx), 0, NULL);
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    m_solid_rt_layout, 1, 1,
-                    &m_data_descriptor_sets[current_buffer_idx],
-                    dynamic_offsets.size(), dynamic_offsets.data());
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    m_solid_rt_layout, 3, 1, getEnvDescriptorSet(vk), 0, NULL);
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    m_solid_rt_layout, 4, 1,
-                    m_texture_descriptor->getDescriptorSet(), 0, NULL);
+                m_render_layout = m_solid_rt_layout;
             }
             else if (dfbo && dfbo->getAttachment<GVDFT_DISPLACE_COLOR>())
             {
@@ -2182,6 +2208,13 @@ void GEVulkanDrawCall::renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
                     m_pipeline_layout, 3, 1,
                     dfbo->getDescriptorSet(GVDFP_DISPLACE_COLOR), 0, NULL);
             }
+            break;
+        }
+        case GVPT_BUBBLE:
+        {
+            if (!bindRTLayout(vk, cmd, current_buffer_idx, dynamic_offsets))
+                return;
+            m_render_layout = m_solid_rt_layout;
             break;
         }
         default:
@@ -2726,20 +2759,15 @@ void GEVulkanDrawCall::renderSolidSSR(GEVulkanDriver* vk, VkCommandBuffer cmd)
 // ----------------------------------------------------------------------------
 void GEVulkanDrawCall::renderSolidRT(GEVulkanDriver* vk, VkCommandBuffer cmd)
 {
-    GEVulkanRTScene* rt_scene = vk->getRTScene();
-    if (m_solid_rt_layout == VK_NULL_HANDLE || !rt_scene ||
-        !rt_scene->isReady() || m_visible_nodes.empty())
+    int current_buffer_idx = vk->getCurrentBufferIdx();
+    std::vector<uint32_t> dynamic_offsets = getDefaultDynamicOffsets();
+    if (m_visible_nodes.empty() ||
+        !bindRTLayout(vk, cmd, current_buffer_idx, dynamic_offsets))
         return;
     auto& pl = m_graphics_pipelines.at("solid_rt").m_pipelines;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
         *pl[GVPT_SOLID_RT]);
-    // The scene
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_solid_rt_layout, 0, 1,
-        rt_scene->getDescriptorSet(vk->getCurrentBufferIdx()), 0, NULL);
     // Camera
-    int current_buffer_idx = vk->getCurrentBufferIdx();
-    std::vector<uint32_t> dynamic_offsets = getDefaultDynamicOffsets();
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
         m_solid_rt_layout, 1, 1, &m_data_descriptor_sets[current_buffer_idx],
         dynamic_offsets.size(), dynamic_offsets.data());
@@ -2747,13 +2775,6 @@ void GEVulkanDrawCall::renderSolidRT(GEVulkanDriver* vk, VkCommandBuffer cmd)
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
         m_solid_rt_layout, 2, 1,
         vk->getRTTTexture()->getDescriptorSet(GVDFP_HDR), 0, NULL);
-    // Environment (not used yet, a miss keeps the lit specular IBL)
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_solid_rt_layout, 3, 1, getEnvDescriptorSet(vk), 0, NULL);
-    // Textures of the hits
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_solid_rt_layout, 4, 1, m_texture_descriptor->getDescriptorSet(), 0,
-        NULL);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }   // renderSolidRT
 
