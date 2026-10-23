@@ -36,7 +36,7 @@ void main()
     f_uv = v_uv;
     f_uv_two = v_uv_two;
     f_material_id = u_object_buffer.m_objects[gl_InstanceIndex].m_material_id;
-#ifdef BIND_MESH_TEXTURES_AT_ONCE
+#if defined(BIND_MESH_TEXTURES_AT_ONCE) && defined(SHADER_DRAW_PARAMETERS)
     if (f_material_id < 0)
         f_material_id = u_material_ids.m_material_id[gl_DrawIDARB];
 #endif

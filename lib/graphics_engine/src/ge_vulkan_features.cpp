@@ -413,8 +413,7 @@ bool GEVulkanFeatures::supportsPartiallyBound()
 // ----------------------------------------------------------------------------
 bool GEVulkanFeatures::supportsBindMeshTexturesAtOnce()
 {
-    if (!supportsBindTexturesAtOnce() || !g_supports_multi_draw_indirect ||
-        !g_supports_shader_draw_parameters)
+    if (!supportsBindTexturesAtOnce() || !g_supports_multi_draw_indirect)
         return false;
     const unsigned sampler_count = GEVulkanShaderManager::getSamplerSize() *
         GEVulkanShaderManager::getMeshTextureLayer();
