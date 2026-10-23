@@ -123,9 +123,6 @@ public:
     // getRTShadowType(), so the FBO doesn't change with them)
     static bool needsSolidRT();
     // ------------------------------------------------------------------------
-    // True when the ray traced scene is needed by any effect
-    static bool needsRTScene();
-    // ------------------------------------------------------------------------
     static bool resolveSwapchainOutput(GEVulkanDriver* vk,
                                        const core::dimension2d<u32>& size,
                                        bool swapchain_output);

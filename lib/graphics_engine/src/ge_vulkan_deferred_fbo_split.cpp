@@ -216,13 +216,6 @@ bool GEVulkanDeferredFBOSplit::needsSolidRT()
 }   // needsSolidRT
 
 // ----------------------------------------------------------------------------
-bool GEVulkanDeferredFBOSplit::needsRTScene()
-{
-    return isSolidRayTracing() || isDisplaceRayTracing() ||
-        getRTShadowType() != GST_NONE;
-}   // needsRTScene
-
-// ----------------------------------------------------------------------------
 bool GEVulkanDeferredFBOSplit::resolveSwapchainOutput(GEVulkanDriver* vk,
                                             const core::dimension2d<u32>& size,
                                             bool swapchain_output)
@@ -864,6 +857,11 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
                 rebind_base_vertex);
             q.first->renderPipeline(m_vk, cmd, GVPT_TRANSPARENT,
                 rebind_base_vertex);
+            if (m_solid_rt)
+            {
+                q.first->renderPipeline(m_vk, cmd, GVPT_BUBBLE,
+                    rebind_base_vertex);
+            }
         }
     }
     // The pass leaves the output in shader read only layout, the lighting pass
@@ -994,6 +992,7 @@ VkRenderPass GEVulkanDeferredFBOSplit::getRenderPassForPipeline(
     case GVPT_DEFERRED_CONVERT_COLOR:
     case GVPT_GHOST_DEPTH:
     case GVPT_TRANSPARENT:
+    case GVPT_BUBBLE:
         return getRTTRenderPass(GVDSP_TONEMAP);
     case GVPT_DISPLACE_MASK:
         return getRTTRenderPass(GVDSP_DISPLACE_MASK);
