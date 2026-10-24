@@ -94,6 +94,9 @@
 #include <algorithm>
 #include <cmath>
 #include <irrlicht.h>
+#include <fstream>
+#include <iterator>
+#include <regex>
 
 #ifndef SERVER_ONLY
 #include <SDL.h>
@@ -1233,12 +1236,22 @@ void IrrDriver::commonInit()
     file_manager->pushTextureSearchPath(file_manager->getAsset(FileManager::MODEL,""), "models");
     const std::string materials_file =
         file_manager->getAssetChecked(FileManager::MODEL, "materials.xml");
+    std::ifstream file(materials_file);
+    std::string materials_xml((std::istreambuf_iterator<char>(file)),
+        std::istreambuf_iterator<char>());
+    if (m_video_driver->getDriverType() == video::EDT_VULKAN)
+    {
+        const std::regex
+            pattern(R"((^|\n)(?=[^\n]*bubblegum[^"\s]*\.png)([^\n]*?)(shader=")[^"]*(")([^\n]*))");
+        materials_xml = std::regex_replace(materials_xml, pattern, "$1$2$3bubble$4$5");
+    }
+
     // Some of the materials might be needed later, so just add them all permanently
     // (i.e. as shared). Adding them temporarily will actually not be possible: powerup_manager
     // adds some permanent icon materials, which would (with the current implementation)
     // make the temporary materials permanent anyway.
     if (materials_file != "")
-        material_manager->addSharedMaterial(materials_file);
+        material_manager->addSharedMaterialFromString(materials_xml);
 
     powerup_manager->loadPowerupsModels();
     ItemManager::loadDefaultItemMeshes();

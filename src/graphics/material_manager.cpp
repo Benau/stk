@@ -299,6 +299,38 @@ void MaterialManager::addSharedMaterial(const std::string& filename, bool deprec
 }   // addSharedMaterial
 
 //-----------------------------------------------------------------------------
+void MaterialManager::addSharedMaterialFromString(const std::string& xml,
+                                                  bool deprecated)
+{
+    if (xml.empty())
+    {
+        throw std::runtime_error(
+            "FATAL: Empty in-memory materials XML\n");
+    }
+
+    XMLNode* root = file_manager->createXMLTreeFromString(xml);
+    if (!root || root->getName() != "materials")
+    {
+        if (root)
+            delete root;
+        throw std::runtime_error(
+            "FATAL: Parsing error in in-memory materials XML\n");
+    }
+
+    const bool success = pushTempMaterial(
+        root, "<in-memory materials>", deprecated);
+    delete root;
+
+    if (!success)
+    {
+        throw std::runtime_error(
+            "FATAL: Parsing error in in-memory materials XML\n");
+    }
+
+    m_shared_material_index = (int)m_materials.size();
+}   // addSharedMaterialFromString
+
+//-----------------------------------------------------------------------------
 bool MaterialManager::pushTempMaterial(const std::string& filename, bool deprecated)
 {
     XMLNode *root = file_manager->createXMLTree(filename);
