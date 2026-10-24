@@ -578,6 +578,7 @@ begin:
             GE::getGEConfig()->m_glow_outline = UserConfigParams::m_glow;
             GE::getGEConfig()->m_light_scatter =
                 UserConfigParams::m_light_scatter;
+            GE::getGEConfig()->m_god_rays = UserConfigParams::m_light_shaft;
             GE::getGEConfig()->m_ssao = UserConfigParams::m_ssao;
             GE::getGEConfig()->m_bloom = UserConfigParams::m_bloom;
             OptionsScreenVideo::setRayTracing();

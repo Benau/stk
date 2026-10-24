@@ -232,8 +232,15 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
             UserConfigParams::m_ssao = ssao;
             UserConfigParams::m_ssr =
                 advanced_pipeline && getWidget<CheckBoxWidget>("ssr")->getState();
-            UserConfigParams::m_light_shaft =
-                advanced_pipeline && getWidget<CheckBoxWidget>("lightshaft")->getState();
+            bool god_rays_changed = false;
+            bool god_rays = advanced_pipeline &&
+                getWidget<CheckBoxWidget>("lightshaft")->getState();
+            if (UserConfigParams::m_light_shaft != god_rays)
+            {
+                god_rays_changed = true;
+                GE::getGEConfig()->m_god_rays = god_rays;
+            }
+            UserConfigParams::m_light_shaft = god_rays;
 
             bool degraded_ibl = !advanced_pipeline || !getWidget<CheckBoxWidget>("ibl")->getState();
             if (UserConfigParams::m_degraded_IBL != degraded_ibl)
@@ -315,7 +322,7 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
                     need_recreate_swapchain = true;
                 if (need_recreate_swapchain || pbr_changed || ibl_changed ||
                     glow_changed || light_scatter_changed || bloom_changed ||
-                    ssao_changed ||
+                    ssao_changed || god_rays_changed ||
                     prev_shadow_size != GE::getGEConfig()->m_shadow_size ||
                     prev_shadow_type != GE::getGEConfig()->m_shadow_type)
                     GE::getVKDriver()->updateDriver(need_recreate_swapchain, pbr_changed, ibl_changed);
@@ -391,7 +398,7 @@ void CustomVideoSettingsDialog::updateActivation()
     getWidget<CheckBoxWidget>("mlaa")->setActive(light);
     getWidget<CheckBoxWidget>("ssao")->setActive(light || (vk && real_light));
     getWidget<CheckBoxWidget>("ssr")->setActive(light || (vk && real_light));
-    getWidget<CheckBoxWidget>("lightshaft")->setActive(light);
+    getWidget<CheckBoxWidget>("lightshaft")->setActive(light || (vk && real_light));
     getWidget<CheckBoxWidget>("ibl")->setActive(light || (vk && real_light));
     getWidget<CheckBoxWidget>("glow")->setActive(light || (vk && real_light));
     getWidget<CheckBoxWidget>("bloom")->setActive(light || (vk && real_light));
