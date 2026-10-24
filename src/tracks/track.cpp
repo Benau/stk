@@ -332,6 +332,7 @@ void Track::cleanup()
     {
         GE::GEVulkanDriver* vk = GE::getVKDriver();
         vk->setFogEnabled(false);
+        vk->setGodRays(false);
         // Clear the RT scene before STK does its mesh cleanup
         vk->clearRTScene();
     }
@@ -1778,7 +1779,28 @@ void Track::updateDriverFog()
             m_fog_end, m_fog_max);
     }
     if (driver->getDriverType() == video::EDT_VULKAN)
-        GE::getVKDriver()->setFogEnabled(fog);
+    {
+        GE::GEVulkanDriver* vk = GE::getVKDriver();
+        vk->setFogEnabled(fog);
+        // The sun of the light shafts (GEConfig::m_god_rays), the same sphere
+        // as the OpenGL renderer (radius 1 scaled by 20) but it's not a mesh
+        // in the scene. The color is multiplied by the opacity.
+        // The color is not converted to linear on purpose (unlike the other
+        // colors in GE): the OpenGL renderer uses the value of scene.xml as it
+        // is (SColorf, see PostProcessing::renderGodRays) and adds the rays to
+        // its linear hdr color buffer (before the tonemap and the bloom), so
+        // it is treated as linear there. It's the same here for the same
+        // look, converting it makes the rays darker than the OpenGL renderer
+        if (m_godrays)
+        {
+            const video::SColorf c(m_godrays_color);
+            vk->setGodRays(true, m_godrays_position, 20.0f,
+                core::vector3df(c.getRed(), c.getGreen(), c.getBlue()),
+                m_godrays_opacity);
+        }
+        else
+            vk->setGodRays(false);
+    }
 #endif
 }   // updateDriverFog
 
