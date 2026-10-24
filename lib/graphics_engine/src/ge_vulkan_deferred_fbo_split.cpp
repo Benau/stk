@@ -9,6 +9,7 @@
 #include "ge_vulkan_features.hpp"
 #include "ge_vulkan_glow_outline.hpp"
 #include "ge_vulkan_hiz_depth.hpp"
+#include "ge_vulkan_god_rays.hpp"
 #include "ge_vulkan_light_scatter.hpp"
 #include "ge_vulkan_skybox_renderer.hpp"
 #include "ge_vulkan_rt_shadow.hpp"
@@ -310,6 +311,20 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
             m_light_scatter.reset();
         }
     }
+    if (supports_compute && getGEConfig()->m_god_rays)
+    {
+        try
+        {
+            m_god_rays.reset(new GEVulkanGodRays(vk, getSize(),
+                m_depth_texture));
+        }
+        catch (const std::exception& e)
+        {
+            GE::logMessage(GE::GLL_ERROR,
+                "Failed to initialize god rays: %s", e.what());
+            m_god_rays.reset();
+        }
+    }
     if (supports_compute && getGEConfig()->m_bloom)
     {
         try
@@ -324,7 +339,7 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
             m_bloom.reset();
         }
     }
-    if (m_glow_outline || m_light_scatter)
+    if (m_glow_outline || m_light_scatter || m_god_rays)
         initLightingCompositeDescriptor(vk);
     // After the bloom, which is in it
     initSplitConvertColorDescriptor(vk);
@@ -349,7 +364,7 @@ void GEVulkanDeferredFBOSplit::initLightingCompositeDescriptor(
     VkImageView unused = VK_NULL_HANDLE;
     if (vk->getTransparentTexture())
         unused = (VkImageView)vk->getTransparentTexture()->getTextureHandler();
-    std::array<VkDescriptorImageInfo, 3> image_infos = {};
+    std::array<VkDescriptorImageInfo, 4> image_infos = {};
     for (VkDescriptorImageInfo& info : image_infos)
     {
         info.sampler = vk->getSampler(GVS_SKYBOX);
@@ -368,6 +383,11 @@ void GEVulkanDeferredFBOSplit::initLightingCompositeDescriptor(
     {
         image_infos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         image_infos[2].imageView = m_light_scatter->getImageView();
+    }
+    if (m_god_rays)
+    {
+        image_infos[3].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[3].imageView = m_god_rays->getImageView();
     }
     createSamplerDescriptor(vk, image_infos.size(),
         &m_descriptor_layout[GVDFP_LIGHTING_COMPOSITE],
@@ -793,6 +813,8 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
     // And light scattering of the lights in the fog (compute shaders only)
     const bool has_light_scatter = m_light_scatter &&
         m_light_scatter->render(cmd, p);
+    // And the light shafts of the sun (compute shaders only)
+    const bool has_god_rays = m_god_rays && m_god_rays->render(cmd, p);
     // And the ambient occlusion which the lighting pass samples (compute
     // shaders only)
     if (m_ssao)
@@ -822,10 +844,10 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
                 q.first->renderSolidRT(m_vk, cmd);
             // Above everything which is lit, the glow outline is not over the
             // meshes
-            if (has_glow_outline || has_light_scatter)
+            if (has_glow_outline || has_light_scatter || has_god_rays)
             {
                 q.first->renderLightingComposite(m_vk, cmd, has_glow_outline,
-                    has_light_scatter);
+                    has_light_scatter, has_god_rays);
             }
         }
         vkCmdEndRenderPass(cmd);

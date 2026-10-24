@@ -41,6 +41,8 @@ layout (constant_id = 13) const uint u_rt_shadow_type = 0;
 // Of deferred_pbr.frag, the scale of the image of the ray traced shadow
 // (GEVulkanRTShadow::getScale())
 layout (constant_id = 14) const float u_rt_shadow_scale = 1.0;
+// Of lighting_composite.frag, the light shafts (GEVulkanGodRays) are added
+layout (constant_id = 15) const bool u_god_rays = false;
 
 vec3 convertColor(vec3 input_color)
 {

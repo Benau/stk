@@ -11,6 +11,7 @@ class GEVulkanBloom;
 class GEVulkanGlowOutline;
 class GEVulkanHiZDepth;
 class GEVulkanLightScatter;
+class GEVulkanGodRays;
 class GEVulkanRTShadow;
 class GEVulkanSSAO;
 
@@ -28,8 +29,11 @@ class GEVulkanSSAO;
 //   [scatter   : compute shaders only, light scattering of the lights in the
 //                fog, see GEVulkanLightScatter, if it's enabled and any
 //                viewport has fog and lights]
-//   lighting   : (g-buffer as textures) -> hdr, skybox, [blurred glow and
-//                light scattering, added together]
+//   [god rays  : compute shaders only, light shafts of the sun, see
+//                GEVulkanGodRays, if it's enabled and the track has a sun for
+//                them]
+//   lighting   : (g-buffer as textures) -> hdr, skybox, [blurred glow,
+//                light scattering and light shafts, added together]
 //   [bloom     : compute shaders only, bloom of the finished hdr, see
 //                GEVulkanBloom, if it's enabled and any viewport has anything
 //                to draw]
@@ -81,6 +85,9 @@ private:
 
     // Same, NULL if light scattering is not enabled
     std::unique_ptr<GEVulkanLightScatter> m_light_scatter;
+
+    // Same, NULL if the light shafts are not enabled
+    std::unique_ptr<GEVulkanGodRays> m_god_rays;
 
     // Same, NULL if the ambient occlusion is not enabled
     std::unique_ptr<GEVulkanSSAO> m_ssao;
@@ -148,6 +155,10 @@ public:
     // Same for GVPT_LIGHTING_COMPOSITE (GVDFP_LIGHTING_COMPOSITE is the
     // descriptor of it), which draws them both
     bool hasLightScatter() const            { return m_light_scatter != NULL; }
+    // ------------------------------------------------------------------------
+    // Same for the light shafts (the fourth binding of
+    // GVDFP_LIGHTING_COMPOSITE), also drawn by GVPT_LIGHTING_COMPOSITE
+    bool hasGodRays() const                      { return m_god_rays != NULL; }
     // ------------------------------------------------------------------------
     // Same for the bloom which deferred_convert_color.frag adds to hdr
     // (the second binding of GVDFP_CONVERT_COLOR, the widest level of it and

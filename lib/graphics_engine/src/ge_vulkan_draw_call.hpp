@@ -219,6 +219,9 @@ protected:
     // Same, the FBO has light scattering (GEVulkanLightScatter)
     bool m_light_scatter;
 
+    // Same, the FBO has light shafts (GEVulkanGodRays)
+    bool m_god_rays;
+
     GECullingTool* m_culling_tool;
 
     GEVulkanLightHandler* m_light_handler;
@@ -423,6 +426,10 @@ public:
     // this frame (known after generate), see GEVulkanLightScatter
     bool hasLightScatter() const;
     // ------------------------------------------------------------------------
+    // True if the FBO has light shafts and the track has a sun for them
+    // (GEVulkanDriver::setGodRays), the same for all the cameras
+    bool hasGodRays() const;
+    // ------------------------------------------------------------------------
     // Creates a layout of the data descriptor set (camera, lights), all of
     // them are defined the same so the sets of any draw call are compatible
     // with a pipeline layout created from any of them. The caller owns it, so
@@ -443,10 +450,11 @@ public:
     // ------------------------------------------------------------------------
     // Adds the blurred glow (without the area of meshes) to hdr, in the
     // lighting pass
-    // Adds the glow outline and the light scattering (the ones which were
-    // rendered this frame and this draw call has) to hdr
+    // Adds the glow outline, the light scattering and the light shafts (the
+    // ones which were rendered this frame and this draw call has) to hdr
     void renderLightingComposite(GEVulkanDriver* vk, VkCommandBuffer cmd,
-                                 bool glow_outline, bool light_scatter);
+                                 bool glow_outline, bool light_scatter,
+                                 bool god_rays);
     // ------------------------------------------------------------------------
     // Blends the reflection of the glossy solid materials (traced over the
     // depth, or the HiZ depth, the color is the output of the previous frame)
