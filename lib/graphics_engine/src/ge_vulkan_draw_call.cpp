@@ -284,6 +284,7 @@ GEVulkanDrawCall::GEVulkanDrawCall()
     m_shadow_fbo = NULL;
     m_glow_outline = false;
     m_light_scatter = false;
+    m_god_rays = false;
     for (unsigned i = 0; i < (unsigned)video::EMT_MATERIAL_COUNT; i++)
         m_fallback_materials[i] = (video::E_MATERIAL_TYPE)i;
     m_lightning_mesh = NULL;
@@ -841,6 +842,8 @@ void GEVulkanDrawCall::prepare(GEVulkanCamera* cam)
         static_cast<GEVulkanDeferredFBOSplit*>(rtt)->hasGlowOutline();
     m_light_scatter = !isShadow() && rtt && rtt->isSplit() &&
         static_cast<GEVulkanDeferredFBOSplit*>(rtt)->hasLightScatter();
+    m_god_rays = !isShadow() && rtt && rtt->isSplit() &&
+        static_cast<GEVulkanDeferredFBOSplit*>(rtt)->hasGodRays();
     GEVulkanDriver* vk = getVKDriver();
     GEVulkanSceneManager* sm = static_cast<GEVulkanSceneManager*>(
         vk->getIrrlichtDevice()->getSceneManager());
@@ -1436,6 +1439,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         VkBool32 m_ssao;
         uint32_t m_rt_shadow_type;
         float m_rt_shadow_scale;
+        VkBool32 m_god_rays;
     };
     Constants constants = {};
     constants.m_rt_shadow_scale = 1.0f;
@@ -1458,6 +1462,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
             constants.m_bloom_blend = split->hasBloomBlend();
             constants.m_ssao = split->hasSSAO();
             constants.m_rt_shadow_scale = split->getRTShadowScale();
+            constants.m_god_rays = split->hasGodRays();
         }
     }
     constants.m_solid_reflection = getSolidReflection();
@@ -1485,7 +1490,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         constants.m_point_shadow_limit = getGEConfig()->m_point_shadow_limit;
     // The shadows which have no shadow map
     constants.m_rt_shadow_type = getRTShadowType();
-    std::array<VkSpecializationMapEntry, 15> specialization_entries = {};
+    std::array<VkSpecializationMapEntry, 16> specialization_entries = {};
     specialization_entries[0].constantID = 0;
     specialization_entries[0].offset = offsetof(Constants, m_ibl);
     specialization_entries[0].size = sizeof(VkBool32);
@@ -1533,6 +1538,9 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     specialization_entries[14].constantID = 14;
     specialization_entries[14].offset = offsetof(Constants, m_rt_shadow_scale);
     specialization_entries[14].size = sizeof(float);
+    specialization_entries[15].constantID = 15;
+    specialization_entries[15].offset = offsetof(Constants, m_god_rays);
+    specialization_entries[15].size = sizeof(VkBool32);
     VkSpecializationInfo specialization_info = {};
     specialization_info.mapEntryCount = specialization_entries.size();
     specialization_info.pMapEntries = specialization_entries.data();
@@ -2688,7 +2696,8 @@ void GEVulkanDrawCall::renderGlowOutline(GEVulkanDriver* vk,
 void GEVulkanDrawCall::renderLightingComposite(GEVulkanDriver* vk,
                                                VkCommandBuffer cmd,
                                                bool glow_outline,
-                                               bool light_scatter)
+                                               bool light_scatter,
+                                               bool god_rays)
 {
     // The images of the ones which this draw call (viewport) doesn't have
     // this frame have stale data
@@ -2697,6 +2706,8 @@ void GEVulkanDrawCall::renderLightingComposite(GEVulkanDriver* vk,
         active |= 1;
     if (light_scatter && hasLightScatter())
         active |= 2;
+    if (god_rays && hasGodRays())
+        active |= 4;
     if (m_deferred_layouts.empty() || active == 0 ||
         m_deferred_layouts[GVDFP_LIGHTING_COMPOSITE] == VK_NULL_HANDLE)
         return;
@@ -2787,6 +2798,12 @@ bool GEVulkanDrawCall::hasLightScatter() const
         m_light_handler->getLightCount() > 0 &&
         m_light_handler->getFogDensity() > 0.0f;
 }   // hasLightScatter
+
+// ----------------------------------------------------------------------------
+bool GEVulkanDrawCall::hasGodRays() const
+{
+    return m_god_rays && getVKDriver()->isGodRaysEnabled();
+}   // hasGodRays
 
 // ----------------------------------------------------------------------------
 void GEVulkanDrawCall::bindDataDescriptorSet(GEVulkanDriver* vk,

@@ -1,0 +1,146 @@
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_depth;
+// The rays have no alpha and are never negative
+#ifdef SHADER_STORAGE_IMAGE_EXTENDED_FORMATS
+layout(set = 0, binding = 1, r11f_g11f_b10f) uniform writeonly image2D u_rays;
+#else
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D u_rays;
+#endif
+
+layout(push_constant) uniform PushConstants
+{
+    // x0, y0, x1, y1 (exclusive) in pixels of the depth: the viewport of one
+    // camera, u_rays is a quarter of the size of it and covers the same area
+    ivec4 m_rect;
+    // Position (world space) and radius of the sun
+    vec4 m_sun_radius;
+    // Color of the sun multiplied by the opacity of the rays (linear)
+    vec4 m_color;
+} pc;
+
+#include "utils/camera.glsl"
+
+// Light shafts (god rays) of the sun. The same look as the OpenGL renderer
+// (godray.frag), but the sun is not drawn into an image first: the mask of the
+// sun is the disc of the sphere (the position and radius of it) in the screen
+// space, which is hidden by what the depth of the g-buffer has in front of it.
+// Every pixel marches from itself to the sun and adds the mask at the samples,
+// which fades along the way, so the sun and its rays are in the same image.
+// The result is blurred (the gaussian mode of blur_hdr.comp) and added to hdr
+// (lighting_composite.frag)
+const int SAMPLES = 16;
+// The OpenGL renderer has 12 samples, which fade by 0.88 every sample and
+// march to 1 / 1.12 of the way to the sun, the weights are scaled so that the
+// total is the same with any number of samples
+const float OPENGL_SAMPLES = 12.0;
+const float OPENGL_DECAY = 0.88;
+const float RAY_LENGTH = 1.0 / 1.12;
+const float INTENSITY = 0.8;
+
+vec2 g_sun_pixel;
+float g_sun_radius_pixel;
+// Softness of the edge, at least about 2 pixels at 1080p
+float g_sun_edge_min;
+// Reverse depth of the front of the sun
+float g_sun_depth;
+
+float interleavedGradientNoise(vec2 p)
+{
+    return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
+
+// Soft disc of the sun, 0 where something is in front of it
+float sunMask(vec2 s)
+{
+    float d = length(s - g_sun_pixel);
+    float edge = max(0.15 * g_sun_radius_pixel, g_sun_edge_min);
+    float disc = 1.0 - smoothstep(g_sun_radius_pixel - edge,
+        g_sun_radius_pixel + edge, d);
+    if (disc <= 0.0)
+        return 0.0;
+    ivec2 sp = ivec2(s);
+    // The sun is not occluded by what is not in the depth, so the rays fade
+    // out when it gets out of the screen
+    if (any(lessThan(sp, pc.m_rect.xy)) ||
+        any(greaterThanEqual(sp, pc.m_rect.zw)))
+        return disc;
+    // Reverse depth, 0 is the far plane (the sky) which is also in front of
+    // a sun behind the far plane
+    return texelFetch(u_depth, sp, 0).x <= g_sun_depth ? disc : 0.0;
+}
+
+void main()
+{
+    const ivec2 dst_min = pc.m_rect.xy >> 2;
+    const ivec2 dst_max = (pc.m_rect.zw + 3) >> 2;
+    const ivec2 dst = dst_min + ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(dst, dst_max)))
+        return;
+
+    const vec3 sun = pc.m_sun_radius.xyz;
+    const float radius = pc.m_sun_radius.w;
+    const vec4 viewport = u_camera.m_viewport;
+    vec4 clip = u_camera.m_projection_view_matrix * vec4(sun, 1.0);
+    // Behind the camera
+    if (clip.w <= 0.0)
+    {
+        imageStore(u_rays, dst, vec4(0.0));
+        return;
+    }
+    g_sun_pixel = viewport.xy +
+        (clip.xy / clip.w * 0.5 + 0.5) * viewport.zw;
+
+    // Fade out when the sun is away from the viewport
+    vec2 outside = max(max(viewport.xy - g_sun_pixel,
+        g_sun_pixel - (viewport.xy + viewport.zw)), vec2(0.0));
+    float fade = 1.0 - smoothstep(0.0, 0.5 * min(viewport.z, viewport.w),
+        length(outside));
+    if (fade <= 0.0)
+    {
+        imageStore(u_rays, dst, vec4(0.0));
+        return;
+    }
+
+    // Relative to the size of the viewport so it looks the same with any
+    // resolution and render scale
+    g_sun_edge_min = 0.002 * min(viewport.z, viewport.w);
+
+    // Radius in pixels, a point at the right of the sun for the camera
+    vec3 eye = u_camera.m_inverse_view_matrix[3].xyz;
+    vec3 right = u_camera.m_inverse_view_matrix[0].xyz;
+    vec4 clip_r = u_camera.m_projection_view_matrix *
+        vec4(sun + right * radius, 1.0);
+    g_sun_radius_pixel = 1.0;
+    if (clip_r.w > 0.0)
+    {
+        vec2 edge = viewport.xy + (clip_r.xy / clip_r.w * 0.5 + 0.5) *
+            viewport.zw;
+        g_sun_radius_pixel = max(length(edge - g_sun_pixel), 1.0);
+    }
+
+    // The sphere is hidden by what is closer than the front of it
+    vec3 front = sun + normalize(eye - sun) * radius;
+    vec4 clip_f = u_camera.m_projection_view_matrix * vec4(front, 1.0);
+    g_sun_depth = clip_f.w > 0.0 ? max(clip_f.z / clip_f.w, 0.0) : 1.0;
+
+    // The center of the pixel in the depth, inside of the viewport
+    vec2 p = clamp((vec2(dst) + 0.5) * 4.0, vec2(pc.m_rect.xy) + 0.5,
+        vec2(pc.m_rect.zw) - 0.5);
+    vec2 step_pixel = (g_sun_pixel - p) * (RAY_LENGTH / float(SAMPLES));
+    float jitter = interleavedGradientNoise(vec2(dst));
+    float decay = pow(OPENGL_DECAY, OPENGL_SAMPLES / float(SAMPLES));
+
+    // The pixel itself
+    float sum = sunMask(p);
+    float weight = OPENGL_SAMPLES / float(SAMPLES);
+    for (int k = 1; k <= SAMPLES; k++)
+    {
+        // Between the previous sample and this one, the blur removes the noise
+        vec2 s = p + step_pixel * (float(k - 1) + jitter);
+        sum += weight * sunMask(s);
+        weight *= decay;
+    }
+    imageStore(u_rays, dst,
+        vec4(pc.m_color.rgb * (sum * INTENSITY * fade), 0.0));
+}

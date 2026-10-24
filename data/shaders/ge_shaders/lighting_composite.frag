@@ -6,11 +6,14 @@ layout(binding = 0) uniform sampler2D u_glow;
 layout(binding = 1) uniform sampler2D u_glow_blur;
 // Half size, blurred
 layout(binding = 2) uniform sampler2D u_scatter_blur;
+// Quarter size, blurred
+layout(binding = 3) uniform sampler2D u_god_rays_blur;
 
 layout(push_constant) uniform PushConstants
 {
     // The ones which are rendered this frame for the draw call (viewport),
-    // images of the others have stale data: 1 = glow outline, 2 = scatter
+    // images of the others have stale data: 1 = glow outline, 2 = scatter,
+    // 4 = god rays
     uint m_active;
 } pc;
 
@@ -22,8 +25,8 @@ layout(location = 0) out vec4 o_color;
 const float GLOW_INTENSITY = 1.0;
 
 // Additive fullscreen draw at the end of the lighting pass (after the sky),
-// the glow outline and the light scattering use the same pipeline because
-// they are both a blurred image which is added to hdr
+// the glow outline, the light scattering and the god rays use the same
+// pipeline because they are all a blurred image which is added to hdr
 void main()
 {
     vec3 add = vec3(0.0);
@@ -50,6 +53,17 @@ void main()
         // The OpenGL renderer adds it to the color after the fog too
         add += textureLod(u_scatter_blur,
             clamp(pos, lo, max(lo, hi)) / vec2(textureSize(u_scatter_blur, 0)),
+            0.0).rgb;
+    }
+    if (u_god_rays && (pc.m_active & 4u) != 0u)
+    {
+        // Same as the scatter, in the quarter size image
+        vec2 pos = gl_FragCoord.xy * 0.25;
+        vec2 lo = u_camera.m_viewport.xy * 0.25 + 0.5;
+        vec2 hi = (u_camera.m_viewport.xy + u_camera.m_viewport.zw) * 0.25 -
+            0.5;
+        add += textureLod(u_god_rays_blur,
+            clamp(pos, lo, max(lo, hi)) / vec2(textureSize(u_god_rays_blur, 0)),
             0.0).rgb;
     }
     // Alpha of hdr is the coverage if it's rendered to an offscreen rtt
