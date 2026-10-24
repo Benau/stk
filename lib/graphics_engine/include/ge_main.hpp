@@ -145,6 +145,10 @@ bool m_glow_outline;
 // Light scattering of point lights in fog (needs the split deferred FBO and
 // compute in the main queue, see GEVulkanLightScatter)
 bool m_light_scatter;
+// Light shafts (god rays) of the sun of a track which has them (see
+// GEVulkanDriver::setGodRays), compute shaders in the split deferred FBO (see
+// GEVulkanGodRays)
+bool m_god_rays;
 // Bloom of the finished hdr color (needs the split deferred FBO and compute in
 // the main queue, see GEVulkanBloom)
 bool m_bloom;
