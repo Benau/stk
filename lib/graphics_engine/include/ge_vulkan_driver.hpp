@@ -241,6 +241,33 @@ namespace GE
 
         bool isFogEnabled() const                     { return m_fog_enabled; }
 
+        //! Sun of the light shafts (god rays, GEConfig::m_god_rays) of the
+        //! current track: the position in world space and the radius of the
+        //! sun, the color is multiplied by the opacity (linear). They are
+        //! read every frame by the draw calls and it's disabled by default
+        //! and until the next call of setGodRays (enabled = false removes it)
+        void setGodRays(bool enabled, const core::vector3df& position = {},
+                        float radius = 20.0f,
+                        const core::vector3df& color = {1.0f, 1.0f, 1.0f},
+                        float opacity = 1.0f)
+        {
+            m_god_rays_enabled = enabled;
+            m_god_rays_position = position;
+            m_god_rays_radius = radius;
+            m_god_rays_color = color * opacity;
+        }
+
+        bool isGodRaysEnabled() const            { return m_god_rays_enabled; }
+
+        const core::vector3df& getGodRaysPosition() const
+                                                { return m_god_rays_position; }
+
+        float getGodRaysRadius() const            { return m_god_rays_radius; }
+
+        //! Already multiplied by the opacity
+        const core::vector3df& getGodRaysColor() const
+                                                   { return m_god_rays_color; }
+
         //! Only used by the internal engine. Used to notify the driver that
         //! the window was resized.
         virtual void OnResize(const core::dimension2d<u32>& size);
@@ -552,6 +579,11 @@ namespace GE
         bool m_disable_wait_idle;
 
         bool m_fog_enabled;
+
+        bool m_god_rays_enabled;
+        core::vector3df m_god_rays_position;
+        float m_god_rays_radius;
+        core::vector3df m_god_rays_color;
 
         IrrlichtDevice* m_irrlicht_device;
         GEVulkanAttachmentTexture* m_depth_texture;

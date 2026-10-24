@@ -32,6 +32,7 @@ GEConfig g_config =
     false,
     false,
     false,
+    false,
     {},
     "",
     false,
@@ -301,6 +302,10 @@ void refreshDeferredSplit()
     // is rendered doesn't change the FBO
     if (isRayTracing())
         g_config.m_deferred_split |= 1 << 5;
+    // The march of the rays samples the depth of the g-buffer in the compute
+    // shaders before the lighting pass
+    if (g_config.m_god_rays)
+        g_config.m_deferred_split |= 1 << 6;
 }
 
 void setLogCallback(GELogCallback callback)

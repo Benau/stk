@@ -550,6 +550,8 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
 
     m_disable_wait_idle = false;
     m_fog_enabled = false;
+    m_god_rays_enabled = false;
+    m_god_rays_radius = 20.0f;
     g_schedule_pausing_rendering.store(false);
     g_paused_rendering.store(false);
     g_device_created.store(true);
