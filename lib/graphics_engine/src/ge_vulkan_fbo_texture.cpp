@@ -3,6 +3,7 @@
 #include "ge_main.hpp"
 #include "ge_vulkan_attachment_texture.hpp"
 #include "ge_vulkan_driver.hpp"
+#include "ge_vulkan_final_chain.hpp"
 
 #include <array>
 #include <exception>
@@ -21,6 +22,7 @@ GEVulkanFBOTexture::GEVulkanFBOTexture(GEVulkanDriver* vk,
     m_vma_allocation = VK_NULL_HANDLE;
     m_has_mipmaps = false;
     m_locked_data = NULL;
+    m_final_target = NULL;
     m_size = m_orig_size = size;
     m_internal_format = VK_FORMAT_B8G8R8A8_UNORM;
     m_depth_texture = GEVulkanAttachmentTexture::createDepthTexture(
@@ -30,6 +32,7 @@ GEVulkanFBOTexture::GEVulkanFBOTexture(GEVulkanDriver* vk,
 // ----------------------------------------------------------------------------
 GEVulkanFBOTexture::~GEVulkanFBOTexture()
 {
+    delete m_final_target;
     delete m_depth_texture;
     clearVulkanData();
     for (VkFramebuffer fb : m_rtt_frame_buffer)
@@ -43,6 +46,13 @@ GEVulkanFBOTexture::~GEVulkanFBOTexture()
             vkDestroyRenderPass(m_vk->getDevice(), rp, NULL);
     }
 }   // ~GEVulkanFBOTexture
+
+// ----------------------------------------------------------------------------
+void GEVulkanFBOTexture::setFinalTarget(GEVulkanFinalTarget* target)
+{
+    delete m_final_target;
+    m_final_target = target;
+}   // setFinalTarget
 
 // ----------------------------------------------------------------------------
 void GEVulkanFBOTexture::createRTT()

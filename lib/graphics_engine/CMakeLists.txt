@@ -77,6 +77,7 @@ set(GE_SOURCES
     src/ge_vulkan_2d_renderer.cpp
     src/ge_vulkan_array_texture.cpp
     src/ge_vulkan_animated_mesh_scene_node.cpp
+    src/ge_vulkan_anti_aliasing.cpp
     src/ge_vulkan_attachment_texture.cpp
     src/ge_vulkan_billboard_buffer.cpp
     src/ge_vulkan_bloom.cpp
@@ -92,6 +93,7 @@ set(GE_SOURCES
     src/ge_vulkan_environment_map.cpp
     src/ge_vulkan_fbo_texture.cpp
     src/ge_vulkan_features.cpp
+    src/ge_vulkan_final_chain.cpp
     src/ge_vulkan_glow_outline.cpp
     src/ge_vulkan_god_rays.cpp
     src/ge_vulkan_hiz_depth.cpp

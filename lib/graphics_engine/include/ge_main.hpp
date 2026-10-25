@@ -32,6 +32,20 @@ enum GELogLevel : unsigned
     GLL_WARNING,
     GLL_ERROR
 };
+// The anti-aliasing of the final image of the FBOs (GEVulkanFinalChain). The
+// values are saved in the config of the game, so only add new ones before
+// GAA_COUNT. Needs compute in the main queue (see isAntiAliasingEnabled), and
+// renders the scene to a FBO even without render scaling and deferred
+// rendering
+enum GEAntiAliasing : unsigned
+{
+    GAA_NONE = 0,
+    // Conservative Morphological Anti-Aliasing 2 (compute, see
+    // GEVulkanAntiAliasing)
+    GAA_CMAA2,
+    // Reserved for the next ones: GAA_FXAA, GAA_SMAA, GAA_TAA
+    GAA_COUNT
+};
 enum GEAutoDeferredType : unsigned
 {
     GADT_DISABLED = 0,
@@ -176,8 +190,12 @@ unsigned m_max_pointlights;
 float m_ssao_radius;
 float m_ssao_k;
 float m_ssao_sigma;
+// See GEAntiAliasing, use isAntiAliasingEnabled() to know if it's used
+GEAntiAliasing m_anti_aliasing;
 };
 
+// True if GEConfig::m_anti_aliasing is not GAA_NONE and the device can run it
+bool isAntiAliasingEnabled();
 // True if ray tracing is on and the device supports it
 bool isRayTracing();
 // True if the reflection of the solid materials is traced (which overrides

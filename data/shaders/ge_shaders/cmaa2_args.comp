@@ -1,0 +1,34 @@
+// CMAA2 (ComputeDispatchArgsCS): dispatched with (2, 1, 1) after the edges
+// for the indirect dispatch of the candidates, and with (1, 2, 1) after the
+// candidates for the indirect dispatch of the deferred apply (and it resets
+// the counters)
+#define CMAA2_ARGS
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+#include "utils/cmaa2.glsl"
+
+void main()
+{
+    if (gl_WorkGroupID.x == 1u)
+    {
+        uint shape_candidate_count = min(g_control[4], pc.m_buf.z);
+        g_indirect[0] = (shape_candidate_count +
+            PROCESS_CANDIDATES_THREADS - 1u) / PROCESS_CANDIDATES_THREADS;
+        g_indirect[1] = 1u;
+        g_indirect[2] = 1u;
+        g_control[3] = shape_candidate_count;
+    }
+    else if (gl_WorkGroupID.y == 1u)
+    {
+        uint blend_location_count = min(g_control[8], pc.m_buf.w);
+        // Thread group layout is (4, DEFERRED_APPLY_THREADS)
+        g_indirect[0] = 1u;
+        g_indirect[1] = (blend_location_count + DEFERRED_APPLY_THREADS - 1u) /
+            DEFERRED_APPLY_THREADS;
+        g_indirect[2] = 1u;
+        g_control[3] = blend_location_count;
+        g_control[4] = 0u;
+        g_control[8] = 0u;
+        g_control[12] = 0u;
+    }
+}

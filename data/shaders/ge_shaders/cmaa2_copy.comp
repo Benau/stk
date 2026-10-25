@@ -1,0 +1,15 @@
+// Fills the output of GEVulkanAntiAliasing with the whole input (including
+// what is outside of the viewports), CMAA2 only writes the pixels of edges
+// after it
+#define CMAA2_COPY
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+#include "utils/cmaa2.glsl"
+
+void main()
+{
+    const ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, pc.m_rect.zw)))
+        return;
+    imageStore(u_dst, pixel, texelFetch(u_src, pixel, 0));
+}

@@ -1,0 +1,58 @@
+// CMAA2 step 3 (DeferredColorApply2x2CS): averages the colors stored in the
+// list of every pixel of the quads and writes the result, the only pixels
+// of the output which are different from the input. Thread group layout is
+// (4, 32): the pixel of the quad and the quad
+#define CMAA2_APPLY
+layout(local_size_x = 4, local_size_y = 32, local_size_z = 1) in;
+
+#include "utils/cmaa2.glsl"
+
+void main()
+{
+    const uint num_candidates = g_control[3];
+    const uint current_candidate = gl_GlobalInvocationID.y;
+    const uint current_quad_offset_xy = gl_LocalInvocationID.x;
+
+    if (current_candidate >= num_candidates)
+        return;
+
+    uint pixel_id = g_locations[current_candidate];
+    ivec2 quad_pos = ivec2(int(pixel_id >> 16), int(pixel_id & 0xFFFFu));
+
+    const ivec2 qe_offsets[4] =
+        ivec2[4](ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1));
+    ivec2 pixel_pos = quad_pos * 2 + qe_offsets[current_quad_offset_xy];
+
+    uint counter_index_with_header =
+        g_heads[uint(quad_pos.y) * pc.m_buf.y + uint(quad_pos.x)];
+
+    vec4 out_colors = vec4(0.0);
+
+    // The loop prevents bad data from hanging the GPU
+    const uint max_loops = 32u;
+    for (uint i = 0u; (counter_index_with_header != 0xFFFFFFFFu) &&
+        (i < max_loops); i++)
+    {
+        uint offset_xy = (counter_index_with_header >> 30) & 0x03u;
+        bool is_complex_shape = ((counter_index_with_header >> 26) & 1u) != 0u;
+        uint item = counter_index_with_header & ((1u << 26) - 1u);
+        counter_index_with_header = g_items[item * 2u];
+
+        if (offset_xy == current_quad_offset_xy)
+        {
+            vec3 color = unpackColor(g_items[item * 2u + 1u]);
+            float weight = 0.8 + (is_complex_shape ? 1.0 : 0.0);
+            out_colors += vec4(color * weight, weight);
+        }
+    }
+
+    if (out_colors.a == 0.0)
+        return;
+    // Never write a pixel of another viewport
+    if (!inRect(pixel_pos))
+        return;
+
+    // Keeps the alpha of the pixel
+    float alpha = texelFetch(u_src, pixel_pos, 0).a;
+    imageStore(u_dst, pixel_pos, vec4(out_colors.rgb / out_colors.a, alpha));
+}
