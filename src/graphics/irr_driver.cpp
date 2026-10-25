@@ -581,9 +581,7 @@ begin:
             GE::getGEConfig()->m_god_rays = UserConfigParams::m_light_shaft;
             GE::getGEConfig()->m_ssao = UserConfigParams::m_ssao;
             GE::getGEConfig()->m_bloom = UserConfigParams::m_bloom;
-            // The same option as the MLAA of the OpenGL renderer, CMAA2 in GE
-            GE::getGEConfig()->m_anti_aliasing = UserConfigParams::m_mlaa ?
-                GE::GAA_CMAA2 : GE::GAA_NONE;
+            OptionsScreenVideo::setAntiAliasing();
             OptionsScreenVideo::setRayTracing();
             // Same lens dust as the OpenGL bloom (bloomblend.frag)
             GE::getGEConfig()->m_bloom_blend_texture =

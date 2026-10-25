@@ -23,7 +23,7 @@
 
         <spacer height="4" width="10" />
 
-        <div layout="horizontal-row" width="50%" proportion="1">
+        <div layout="horizontal-row" width="100%" proportion="1">
             <spacer width="70" height="10" />
             
             <div layout="horizontal-row" proportion="1" height="fit">
@@ -31,25 +31,13 @@
                 <spacer width="10" height="10"/>
                 <gauge id="shadows" min_value="0" max_value="4" proportion="1"/>
             </div>
-        </div>
-
-        <spacer height="4" width="10" />
-
-        <div layout="horizontal-row" width="100%" proportion="1">
-            <spacer width="70" height="10"/>
-
-            <div layout="horizontal-row" proportion="1" height="fit">
-                <checkbox id="mlaa"/>
-                <spacer width="10" height="10"/>
-                <label text="Anti-aliasing" I18N="Video settings"/>
-            </div>
 
             <spacer height="4" width="10" />
 
             <div layout="horizontal-row" proportion="1" height="fit">
-                <checkbox id="lightscattering"/>
+                <label text="Anti-aliasing" I18N="Video settings"/>
                 <spacer width="10" height="10"/>
-                <label text="Light Scattering" I18N="Video settings"/>
+                <spinner id="anti_aliasing" proportion="1"/>
             </div>
         </div>
 
@@ -145,6 +133,12 @@
             </div>
 
             <spacer height="4" width="10" />
+
+            <div layout="horizontal-row" proportion="1" height="fit">
+                <checkbox id="lightscattering"/>
+                <spacer width="10" height="10"/>
+                <label text="Light Scattering" I18N="Video settings"/>
+            </div>
         </div>
 
         <spacer height="4" width="10" />

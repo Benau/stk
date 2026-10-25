@@ -1012,9 +1012,9 @@ int handleCmdLinePreliminary()
         UserConfigParams::m_motionblur = false;
     // anti-aliasing
     if (CommandLine::has("--enable-mlaa"))
-        UserConfigParams::m_mlaa = true;
+        UserConfigParams::m_anti_aliasing = "mlaa";
     else if (CommandLine::has("--disable-mlaa"))
-        UserConfigParams::m_mlaa = false;
+        UserConfigParams::m_anti_aliasing = "off";
     if (CommandLine::has("--enable-texture-compression"))
         UserConfigParams::m_texture_compression = true;
     else if (CommandLine::has("--disable-texture-compression"))

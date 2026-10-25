@@ -1,0 +1,113 @@
+// FXAA of GEVulkanFXAA: the fast fallback of the anti-aliasing, for the final
+// (tonemapped, display referred) image of a FBO. It's the simple form of
+// FXAA: the contrast of the 3x3 pixels (without the edges and the corners
+// which are not needed to find the direction) decides if the pixel is on an
+// edge, the direction of the edge is taken from the luma of the corners, and
+// the color is blended with 4 bilinear samples along it.
+//
+// Same rules as the CMAA2 kernels: it reads the colors only inside of the rect
+// of the viewport (splitscreen), so nothing is blended over the border
+// between viewports, and writes the pixels of the rect only
+//
+// Two modes (push constant): copy, which fills the whole image with the input
+// (the pixels outside of the viewports have to be written too), and FXAA
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_src;
+// Only written, never loaded with imageLoad (see blur.glsl)
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D u_dst;
+
+layout(push_constant) uniform PushConstants
+{
+    // x0, y0, x1, y1 (exclusive) in pixels of the image
+    ivec4 m_rect;
+    // 1 = copy
+    int m_copy;
+} pc;
+
+// Contrast below this (or this fraction of the max luma, if it's bigger) is
+// not an edge
+const float EDGE_THRESHOLD_MIN = 0.0312;
+const float EDGE_THRESHOLD = 0.125;
+// Limits of the direction (in pixels): a small direction is scaled up to
+// make the samples of the nearly horizontal and vertical edges different
+const float DIR_REDUCE_MIN = 1.0 / 128.0;
+const float DIR_REDUCE_MUL = 1.0 / 8.0;
+const float SPAN_MAX = 8.0;
+
+float luma(vec3 c)
+{
+    return dot(c, vec3(0.299, 0.587, 0.114));
+}
+
+// Never reads outside of the viewport
+vec3 fetchColor(ivec2 pos)
+{
+    pos = clamp(pos, pc.m_rect.xy, pc.m_rect.zw - ivec2(1));
+    return texelFetch(u_src, pos, 0).rgb;
+}
+
+// Bilinear, pos is in pixels. The center of the border pixels are the limits,
+// so the 4 pixels of the filter are all inside of the viewport
+vec3 sampleColor(vec2 pos)
+{
+    pos = clamp(pos, vec2(pc.m_rect.xy) + 0.5, vec2(pc.m_rect.zw) - 0.5);
+    // Explicit lod, implicit ones are not allowed in compute shaders
+    return textureLod(u_src, pos / vec2(textureSize(u_src, 0)), 0.0).rgb;
+}
+
+void main()
+{
+    const ivec2 pos = ivec2(gl_GlobalInvocationID.xy) + pc.m_rect.xy;
+    if (any(greaterThanEqual(pos, pc.m_rect.zw)))
+        return;
+
+    const vec4 center = texelFetch(u_src, pos, 0);
+    if (pc.m_copy != 0)
+    {
+        imageStore(u_dst, pos, center);
+        return;
+    }
+
+    const float luma_m = luma(center.rgb);
+    const float luma_nw = luma(fetchColor(pos + ivec2(-1, -1)));
+    const float luma_ne = luma(fetchColor(pos + ivec2(1, -1)));
+    const float luma_sw = luma(fetchColor(pos + ivec2(-1, 1)));
+    const float luma_se = luma(fetchColor(pos + ivec2(1, 1)));
+
+    const float luma_min = min(luma_m,
+        min(min(luma_nw, luma_ne), min(luma_sw, luma_se)));
+    const float luma_max = max(luma_m,
+        max(max(luma_nw, luma_ne), max(luma_sw, luma_se)));
+    if (luma_max - luma_min < max(EDGE_THRESHOLD_MIN,
+        luma_max * EDGE_THRESHOLD))
+    {
+        imageStore(u_dst, pos, center);
+        return;
+    }
+
+    // The direction of the edge (the gradient turned by 90 degrees)
+    vec2 dir;
+    dir.x = -((luma_nw + luma_ne) - (luma_sw + luma_se));
+    dir.y = ((luma_nw + luma_sw) - (luma_ne + luma_se));
+    const float dir_reduce = max((luma_nw + luma_ne + luma_sw + luma_se) *
+        (0.25 * DIR_REDUCE_MUL), DIR_REDUCE_MIN);
+    const float rcp_dir_min = 1.0 /
+        (min(abs(dir.x), abs(dir.y)) + dir_reduce);
+    dir = clamp(dir * rcp_dir_min, vec2(-SPAN_MAX), vec2(SPAN_MAX));
+
+    const vec2 center_pos = vec2(pos) + 0.5;
+    const vec3 rgb_a = 0.5 * (
+        sampleColor(center_pos + dir * (1.0 / 3.0 - 0.5)) +
+        sampleColor(center_pos + dir * (2.0 / 3.0 - 0.5)));
+    const vec3 rgb_b = rgb_a * 0.5 + 0.25 * (
+        sampleColor(center_pos + dir * -0.5) +
+        sampleColor(center_pos + dir * 0.5));
+    // The wider blend is only used if it doesn't leave the luma of the
+    // neighbourhood (it would blur the details which are not an edge)
+    const float luma_b = luma(rgb_b);
+    const vec3 result = (luma_b < luma_min || luma_b > luma_max) ?
+        rgb_a : rgb_b;
+    // Keeps the alpha of the pixel
+    imageStore(u_dst, pos, vec4(result, center.a));
+}

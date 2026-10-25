@@ -33,17 +33,20 @@ enum GELogLevel : unsigned
     GLL_ERROR
 };
 // The anti-aliasing of the final image of the FBOs (GEVulkanFinalChain). The
-// values are saved in the config of the game, so only add new ones before
-// GAA_COUNT. Needs compute in the main queue (see isAntiAliasingEnabled), and
-// renders the scene to a FBO even without render scaling and deferred
-// rendering
+// game saves the name of it (see getAntiAliasingFromName), not the value, so
+// the order doesn't matter. Needs compute in the main queue (see
+// isAntiAliasingEnabled), and renders the scene to a FBO even without render
+// scaling and deferred rendering
 enum GEAntiAliasing : unsigned
 {
     GAA_NONE = 0,
+    // Fast approximate anti-aliasing, one compute kernel with a few samples
+    // per pixel, the fallback for the low-end devices (see GEVulkanFXAA)
+    GAA_FXAA,
     // Conservative Morphological Anti-Aliasing 2 (compute, see
     // GEVulkanAntiAliasing)
     GAA_CMAA2,
-    // Reserved for the next ones: GAA_FXAA, GAA_SMAA, GAA_TAA
+    // Reserved for the next ones: GAA_SMAA, GAA_TAA
     GAA_COUNT
 };
 enum GEAutoDeferredType : unsigned
@@ -196,6 +199,10 @@ GEAntiAliasing m_anti_aliasing;
 
 // True if GEConfig::m_anti_aliasing is not GAA_NONE and the device can run it
 bool isAntiAliasingEnabled();
+// The anti-aliasing of the lower case name the game saves in its config: "fxaa"
+// or "cmaa2", GAA_NONE for any other name (the game resolves the names of the
+// other renderers itself)
+GEAntiAliasing getAntiAliasingFromName(const std::string& name);
 // True if ray tracing is on and the device supports it
 bool isRayTracing();
 // True if the reflection of the solid materials is traced (which overrides

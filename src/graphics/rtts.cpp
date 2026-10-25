@@ -129,7 +129,7 @@ RTT::RTT(unsigned int width, unsigned int height, float rtt_scale,
         m_render_target_textures[RTT_HALF2] = generateRTT(half, rgba_internal_format, rgba_format, type);
         m_render_target_textures[RTT_R] = generateRTT(res, GL_R8, GL_RED, GL_UNSIGNED_BYTE);
 
-        if (UserConfigParams::m_mlaa)
+        if (UserConfigParams::m_anti_aliasing == "mlaa")
         {
             m_render_target_textures[RTT_RGBA_3] = generateRTT(res, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE);
         }

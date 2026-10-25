@@ -5,6 +5,7 @@
 #include "ge_vulkan_attachment_texture.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_fbo_texture.hpp"
+#include "ge_vulkan_fxaa.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -91,6 +92,10 @@ GEVulkanFinalChain::GEVulkanFinalChain(GEVulkanDriver* vk,
         // The order of the stages is the order they run
         switch (getGEConfig()->m_anti_aliasing)
         {
+        case GAA_FXAA:
+            m_stages.push_back(new GEVulkanFXAA(m_vk, m_io_layout,
+                m_capacity));
+            break;
         case GAA_CMAA2:
             m_stages.push_back(new GEVulkanAntiAliasing(m_vk, m_io_layout,
                 m_capacity));
@@ -209,7 +214,9 @@ void GEVulkanFinalChain::initTarget(GEVulkanFBOTexture* fbo)
             throw std::runtime_error("no descriptor set for the final target");
         }
         writeIOSet(device, target->m_sets[0], fbo->getImageView(),
-            m_vk->getSampler(GVS_NEAREST),
+            // Linear, clamped (GEVulkanFXAA samples between the pixels, the
+            // other stages use texelFetch, so it doesn't change them)
+            m_vk->getSampler(GVS_SKYBOX),
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             (VkImageView)target->m_image->getTextureHandler());
     }

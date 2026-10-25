@@ -21,6 +21,9 @@
 
 #include "guiengine/modaldialog.hpp"
 
+#include <string>
+#include <vector>
+
 /**
  * \brief Dialog that allows the player to select custom video settings
  * \ingroup states_screens
@@ -29,6 +32,16 @@ class CustomVideoSettingsDialog : public GUIEngine::ModalDialog
 {
 private:
     std::string m_new_render_driver;
+
+    /** The names saved in the config (UserConfigParams::m_anti_aliasing) of
+     *  the labels of the anti-aliasing spinner, which depend on the render
+     *  driver. */
+    std::vector<std::string> m_anti_aliasing_names;
+
+    /** Fills the anti-aliasing spinner with the choices of the render driver,
+     *  and selects selected (or the default one of the render driver if it
+     *  has no such choice). */
+    void fillAntiAliasing(bool vk, const std::string& selected);
 public:
     /**
      * Creates a modal dialog with given percentage of screen width and height

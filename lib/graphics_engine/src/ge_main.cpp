@@ -350,6 +350,15 @@ bool isAntiAliasingEnabled()
         GEVulkanFeatures::supportsComputeInMainQueue();
 }
 
+GEAntiAliasing getAntiAliasingFromName(const std::string& name)
+{
+    if (name == "fxaa")
+        return GAA_FXAA;
+    if (name == "cmaa2")
+        return GAA_CMAA2;
+    return GAA_NONE;
+}
+
 bool isRayTracing()
 {
     return g_config.m_ray_tracing.m_enabled &&
