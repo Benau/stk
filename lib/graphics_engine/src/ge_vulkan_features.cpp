@@ -231,7 +231,7 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
         &mvk_features_size);
     g_supports_base_vertex_rendering = mvk_features.baseVertexInstanceDrawing;
     if (!g_supports_base_vertex_rendering)
-        g_supports_multi_draw_indirect = false;
+        g_supports_bind_textures_at_once = false;
 
     // https://github.com/KhronosGroup/MoltenVK/issues/1743
     g_supports_shader_draw_parameters = false;
@@ -240,7 +240,7 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
 #if defined(__ANDROID__) && defined(__aarch64__)
     // Freedreno is slow with bindless code
     if (Android_Custom_Vulkan_Driver_In_Use() != NULL)
-        g_supports_multi_draw_indirect = false;
+        g_supports_bind_textures_at_once = false;
 #endif
 
     // Ray query needs Vulkan 1.2 (buffer device address and SPIR-V 1.4 are
@@ -393,7 +393,7 @@ bool GEVulkanFeatures::supportsPartiallyBound()
 // ----------------------------------------------------------------------------
 bool GEVulkanFeatures::supportsBindMeshTexturesAtOnce()
 {
-    if (!supportsBindTexturesAtOnce() || !g_supports_multi_draw_indirect)
+    if (!supportsBindTexturesAtOnce())
         return false;
     const unsigned sampler_count = GEVulkanShaderManager::getSamplerSize() *
         GEVulkanShaderManager::getMeshTextureLayer();

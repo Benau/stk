@@ -566,7 +566,9 @@ void GEVulkanDrawCall::generate(GEVulkanDriver* vk)
 
     size_t min_size = 1024;
 start:
-    bool shader_draw_params = GEVulkanFeatures::supportsShaderDrawParameters();
+    bool draw_id_mat_lookup =
+        GEVulkanFeatures::supportsShaderDrawParameters() &&
+        GEVulkanFeatures::supportsMultiDrawIndirect();
     m_cmds.clear();
     m_materials_data.clear();
 
@@ -613,7 +615,7 @@ start:
         bool skip_instance_key = false;
         for (auto& q : p.first.second)
         {
-            if (!shader_draw_params)
+            if (!draw_id_mat_lookup)
             {
                 skip_instance_key = true;
                 break;
@@ -668,7 +670,7 @@ start:
                     goto start;
                 }
                 ObjectData* obj = (ObjectData*)mapped_addr;
-                obj->init(node, bind_mesh_textures && shader_draw_params ?
+                obj->init(node, bind_mesh_textures && draw_id_mat_lookup ?
                     -1 : material_id, skinning_offset, q.second);
                 written_size += sizeof(ObjectData);
                 mapped_addr += sizeof(ObjectData);
@@ -741,7 +743,7 @@ start:
     }
 
     size_t materials_padded_size = 0;
-    if (shader_draw_params && bind_mesh_textures && !m_cmds.empty())
+    if (draw_id_mat_lookup && bind_mesh_textures && !m_cmds.empty())
     {
         std::string cur_shader = m_cmds[0].m_shader;
         for (unsigned i = 0; i < m_cmds.size(); i++)
@@ -1979,6 +1981,7 @@ void GEVulkanDrawCall::createVulkanData()
     createAllPipelines(vk);
 
     const bool use_multidraw =
+        GEVulkanFeatures::supportsMultiDrawIndirect() &&
         GEVulkanFeatures::supportsBindMeshTexturesAtOnce();
     VkBufferUsageFlags flags = 0;
     if (use_multidraw)
@@ -2012,6 +2015,7 @@ void GEVulkanDrawCall::uploadDynamicData(GEVulkanDriver* vk,
         custom_cmd ? custom_cmd : vk->getCurrentCommandBuffer();
     int current_buffer_idx = vk->getCurrentBufferIdx();
     const bool use_multidraw =
+        GEVulkanFeatures::supportsMultiDrawIndirect() &&
         GEVulkanFeatures::supportsBindMeshTexturesAtOnce();
 
     if (m_indirect_buffer && use_multidraw)
@@ -2273,7 +2277,7 @@ void GEVulkanDrawCall::renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
                 for (auto& p : it->second)
                 {
                     DynamicSPMData& dspm_data = p.second;
-                    if (!indirect_buffer &&
+                    if (!m_texture_descriptor->isSingleDescriptor() &&
                         cur_mid != dspm_data.m_material_id)
                     {
                         cur_mid = dspm_data.m_material_id;
@@ -2328,46 +2332,50 @@ void GEVulkanDrawCall::drawCommands(VkCommandBuffer cmd,
 {
     std::vector<uint32_t> dynamic_offsets = getDefaultDynamicOffsets();
     const size_t indirect_size = sizeof(VkDrawIndexedIndirectCommand);
-    if (indirect_buffer)
-    {
+    const bool single_descriptor = m_texture_descriptor->isSingleDescriptor();
+    if (single_descriptor)
         dynamic_offsets[4] = m_materials_data[pipeline].first;
-        bindDataDescriptor(cmd, current_buffer_idx,
-            dynamic_offsets);
+
+    bindDataDescriptor(cmd, current_buffer_idx, dynamic_offsets);
+    if (single_descriptor && indirect_buffer)
+    {
         vkCmdDrawIndexedIndirect(cmd, indirect_buffer,
             indirect_offset, draw_count, indirect_size);
+        return;
     }
-    else
+
+    int cur_mid = -1;
+    auto start = m_cmds.begin() + indirect_offset / indirect_size;
+    auto end = start + draw_count;
+
+    while (start != end)
     {
-        int cur_mid = -1;
-        bindDataDescriptor(cmd, current_buffer_idx,
-            dynamic_offsets);
-        auto start = m_cmds.begin() + indirect_offset / indirect_size;
-        auto end = start + draw_count;
-        while (start != end)
+        DrawCallData& cur_cmd = *start;
+        start++;
+
+        if (cur_cmd.m_mb == NULL)
+            continue;
+
+        int mid = cur_cmd.m_material_id;
+        if (!single_descriptor && cur_mid != mid)
         {
-            DrawCallData& cur_cmd = *start;
-            start++;
-            if (cur_cmd.m_mb == NULL)
-                continue;
-            int mid = cur_cmd.m_material_id;
-            if (cur_mid != mid)
-            {
-                cur_mid = mid;
-                bindSingleMaterial(cmd, pipeline, cur_mid, pt);
-            }
-            bool use_base_vertex = cur_cmd.m_dynamic_offset == -1;
-            if (!use_base_vertex)
-            {
-                dynamic_offsets[1] = cur_cmd.m_dynamic_offset;
-                bindDataDescriptor(cmd, current_buffer_idx,
-                    dynamic_offsets);
-                cur_cmd.m_mb->bindVertexIndexBuffer(cmd);
-            }
-            vkCmdDrawIndexed(cmd, cur_cmd.m_cmd.indexCount,
-                cur_cmd.m_cmd.instanceCount, cur_cmd.m_cmd.firstIndex,
-                cur_cmd.m_cmd.vertexOffset,
-                use_base_vertex ? cur_cmd.m_cmd.firstInstance : 0);
+            cur_mid = mid;
+            bindSingleMaterial(cmd, pipeline, cur_mid, pt);
         }
+
+        bool use_base_vertex = cur_cmd.m_dynamic_offset == -1;
+        if (!use_base_vertex)
+        {
+            dynamic_offsets[1] = cur_cmd.m_dynamic_offset;
+            bindDataDescriptor(cmd, current_buffer_idx,
+                dynamic_offsets);
+            cur_cmd.m_mb->bindVertexIndexBuffer(cmd);
+        }
+
+        vkCmdDrawIndexed(cmd, cur_cmd.m_cmd.indexCount,
+            cur_cmd.m_cmd.instanceCount, cur_cmd.m_cmd.firstIndex,
+            cur_cmd.m_cmd.vertexOffset,
+            use_base_vertex ? cur_cmd.m_cmd.firstInstance : 0);
     }
 }   // drawCommands
 
@@ -2478,7 +2486,8 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
         if (bind_mesh_textures && sbo_buffer != VK_NULL_HANDLE)
         {
             sbo_info_material.buffer = sbo_buffer;
-            if (GEVulkanFeatures::supportsShaderDrawParameters())
+            if (GEVulkanFeatures::supportsShaderDrawParameters() &&
+                GEVulkanFeatures::supportsMultiDrawIndirect())
             {
                 sbo_info_material.offset = m_object_data_padded_size;
                 sbo_info_material.range = m_materials_padded_size;
