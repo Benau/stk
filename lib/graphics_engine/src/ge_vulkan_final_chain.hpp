@@ -25,11 +25,17 @@ struct GEVulkanFinalPool
     VkDevice m_device;
 
     VkDescriptorPool m_pool;
+
+    // False after the chain is destroyed (the targets of the separate render
+    // targets can live longer): nothing writes m_image of them anymore, so
+    // the FBO is sampled directly again
+    bool m_chain_alive;
     // ------------------------------------------------------------------------
     GEVulkanFinalPool()
     {
         m_device = VK_NULL_HANDLE;
         m_pool = VK_NULL_HANDLE;
+        m_chain_alive = true;
     }
     // ------------------------------------------------------------------------
     ~GEVulkanFinalPool()
@@ -49,6 +55,13 @@ public:
     // while the chain uses it)
     GEVulkanAttachmentTexture* m_image;
 
+    // True if the last stage writes m_image: it is the final image, in shader
+    // read only layout after the chain, and what samples the FBO uses it
+    // (GEVulkanFBOTexture::getImageView), so nothing is copied back to the
+    // image of the FBO. Otherwise the last stage writes the image of the FBO.
+    // Set once, when the target is created
+    bool m_result_in_image;
+
     // The sets of the layout of GEVulkanFinalChain::getIOLayout():
     // [0] = image of the FBO (sampled) -> m_image (storage)
     // [1] = m_image (sampled) -> image of the FBO (storage). RESERVED for the
@@ -62,10 +75,15 @@ public:
     GEVulkanFinalTarget()
     {
         m_image = NULL;
+        m_result_in_image = true;
         m_sets = {{ VK_NULL_HANDLE, VK_NULL_HANDLE }};
     }
     // ------------------------------------------------------------------------
     ~GEVulkanFinalTarget();
+    // ------------------------------------------------------------------------
+    // True if what samples the FBO has to use m_image
+    bool isResultInImage() const
+        { return m_result_in_image && m_pool && m_pool->m_chain_alive; }
 };   // GEVulkanFinalTarget
 
 // One step of the chain, rendered with compute shaders after the FBO is
@@ -100,11 +118,11 @@ public:
 //    the FBO and GEVulkanFinalTarget::m_image: the first reads the FBO and
 //    writes m_image, the second would read m_image and write the FBO
 //    (GEVulkanFinalTarget::m_sets[1])...
-// 2. If the last stage wrote m_image, it is blitted back to the image of the
-//    FBO (vkCmdBlitImage converts rgba8 to the bgra8 of it), so everything
-//    which samples the FBO (the 2D renderer when it presents the main one,
-//    and the users of a separate target) gets the final image, in
-//    shader read only layout like before
+// 2. The final image is the one the last stage wrote, in shader read only
+//    layout. If it is m_image, GEVulkanFBOTexture::getImageView returns the
+//    view of it, so everything which samples the FBO (the 2D renderer when it
+//    presents the main one, and the users of a separate target) reads it
+//    directly: no copy back to the image of the FBO
 //
 // To add a stage (DEPTH OF FIELD for example) that is not the last one:
 // implement GEVulkanFinalStage, add it in the constructor in the order it has

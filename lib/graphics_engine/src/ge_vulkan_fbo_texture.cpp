@@ -48,6 +48,15 @@ GEVulkanFBOTexture::~GEVulkanFBOTexture()
 }   // ~GEVulkanFBOTexture
 
 // ----------------------------------------------------------------------------
+VkImageView GEVulkanFBOTexture::getImageView(bool srgb,
+                                             bool load_ondemand) const
+{
+    if (m_final_target && m_final_target->isResultInImage())
+        return (VkImageView)m_final_target->m_image->getTextureHandler();
+    return m_image_view;
+}   // getImageView
+
+// ----------------------------------------------------------------------------
 void GEVulkanFBOTexture::setFinalTarget(GEVulkanFinalTarget* target)
 {
     delete m_final_target;

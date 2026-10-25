@@ -41,22 +41,26 @@ public:
     // ------------------------------------------------------------------------
     virtual void regenerateMipMapLevels(void* mipmap_data = NULL)            {}
     // ------------------------------------------------------------------------
-    virtual u64 getTextureHandler() const         { return (u64)m_image_view; }
+    // What samples the FBO (the 2D renderer, the texture descriptors of the
+    // users of a separate target) gets the final image, which is the
+    // image of GEVulkanFinalTarget when the last stage of the final chain
+    // wrote it. getRenderImageView() is always the one of the FBO itself
+    virtual u64 getTextureHandler() const       { return (u64)getImageView(); }
     // ------------------------------------------------------------------------
     virtual void reload()                                                    {}
     // ------------------------------------------------------------------------
     virtual void updateTexture(void* data, irr::video::ECOLOR_FORMAT format,
                                u32 w, u32 h, u32 x, u32 y)                   {}
     // ------------------------------------------------------------------------
-    virtual VkImageView getImageView(bool srgb = false) const
-                                                       { return m_image_view; }
+    virtual VkImageView getImageView(bool srgb = false,
+                                     bool load_ondemand = false) const;
+    // ------------------------------------------------------------------------
+    VkImageView getRenderImageView() const             { return m_image_view; }
     // ------------------------------------------------------------------------
     virtual void createRTT();
     // ------------------------------------------------------------------------
-    // TRANSFER_DST is for the blit of the final chain
     virtual void createOutputImage(VkImageUsageFlags usage =
-        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-        VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     // ------------------------------------------------------------------------
     VkRenderPass getRTTRenderPass(unsigned id = 0) const
                                            { return m_rtt_render_pass.at(id); }
