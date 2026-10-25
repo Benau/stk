@@ -131,6 +131,8 @@ void GEVulkanFinalChain::destroy()
         m_io_layout = VK_NULL_HANDLE;
     }
     // The targets which are alive keep it
+    if (m_pool)
+        m_pool->m_chain_alive = false;
     m_pool.reset();
 }   // destroy
 
@@ -199,7 +201,7 @@ void GEVulkanFinalChain::initTarget(GEVulkanFBOTexture* fbo)
         // (the one of the FBO is bgra8, which not all of them do)
         target->m_image = new GEVulkanAttachmentTexture(m_vk, size,
             VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_STORAGE_BIT |
-            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+            VK_IMAGE_USAGE_SAMPLED_BIT,
             VK_IMAGE_ASPECT_COLOR_BIT);
 
         VkDescriptorSetAllocateInfo alloc_info = {};
@@ -213,7 +215,9 @@ void GEVulkanFinalChain::initTarget(GEVulkanFBOTexture* fbo)
             target->m_sets[0] = VK_NULL_HANDLE;
             throw std::runtime_error("no descriptor set for the final target");
         }
-        writeIOSet(device, target->m_sets[0], fbo->getImageView(),
+        // Only the first stage can run until m_sets[1] exists, see render()
+        target->m_result_in_image = true;
+        writeIOSet(device, target->m_sets[0], fbo->getRenderImageView(),
             // Linear, clamped (GEVulkanFXAA samples between the pixels, the
             // other stages use texelFetch, so it doesn't change them)
             m_vk->getSampler(GVS_SKYBOX),
@@ -247,6 +251,7 @@ void GEVulkanFinalChain::render(VkCommandBuffer cmd, GEVulkanFBOTexture* fbo,
     VkImage fbo_image = fbo->getImage();
     VkImage extra_image = target->m_image->getImage();
     const VkPipelineStageFlags all_graphics_and_compute =
+        VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
         VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
@@ -307,32 +312,14 @@ void GEVulkanFinalChain::render(VkCommandBuffer cmd, GEVulkanFBOTexture* fbo,
     const VkPipelineStageFlags users = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-    if (stage_count % 2 == 1)
+    if (target->m_result_in_image)
     {
-        // The last stage wrote m_image: blit it to the image of the FBO
+        // The last stage wrote m_image, which is what samples the FBO reads
+        // (GEVulkanFBOTexture::getImageView), the image of the FBO is not
+        // touched. m_result_in_image has to be the parity of stage_count
         imageBarrier(cmd, extra_image, VK_IMAGE_LAYOUT_GENERAL,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
-        imageBarrier(cmd, fbo_image, VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
-
-        VkImageBlit region = {};
-        region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        region.srcSubresource.layerCount = 1;
-        region.srcOffsets[1] = { (int32_t)fbo->getSize().Width,
-            (int32_t)fbo->getSize().Height, 1 };
-        region.dstSubresource = region.srcSubresource;
-        region.dstOffsets[1] = region.srcOffsets[1];
-        vkCmdBlitImage(cmd, extra_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            fbo_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region,
-            VK_FILTER_NEAREST);
-
-        imageBarrier(cmd, fbo_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
             users, VK_ACCESS_SHADER_READ_BIT);
     }
     else
