@@ -29,6 +29,8 @@
 #include "utils/string_utils.hpp"
 #include "utils/translation.hpp"
 
+#include <algorithm>
+
 #include <IGUIEnvironment.h>
 #ifndef SERVER_ONLY
 #include <ge_main.hpp>
@@ -97,11 +99,13 @@ void CustomVideoSettingsDialog::beforeAddingWidgets()
                       UserConfigParams::m_shadows_resolution == 1024 ? 2 :
                       UserConfigParams::m_shadows_resolution ==  512 ? 1 : 0);
 
+    fillAntiAliasing(std::string(UserConfigParams::m_render_driver) == "vulkan",
+                     UserConfigParams::m_anti_aliasing);
+
     getWidget<CheckBoxWidget>("dynamiclight")->setState(UserConfigParams::m_dynamic_lights);
     getWidget<CheckBoxWidget>("lightshaft")->setState(UserConfigParams::m_light_shaft);
     getWidget<CheckBoxWidget>("ibl")->setState(!UserConfigParams::m_degraded_IBL);
     getWidget<CheckBoxWidget>("motionblur")->setState(UserConfigParams::m_motionblur);
-    getWidget<CheckBoxWidget>("mlaa")->setState(UserConfigParams::m_mlaa);
     getWidget<CheckBoxWidget>("glow")->setState(UserConfigParams::m_glow);
     getWidget<CheckBoxWidget>("ssao")->setState(UserConfigParams::m_ssao);
     getWidget<CheckBoxWidget>("ssr")->setState(UserConfigParams::m_ssr);
@@ -155,6 +159,52 @@ void CustomVideoSettingsDialog::beforeAddingWidgets()
 
 // -----------------------------------------------------------------------------
 
+void CustomVideoSettingsDialog::fillAntiAliasing(bool vk,
+                                                 const std::string& selected)
+{
+#ifndef SERVER_ONLY
+    SpinnerWidget* aa = getWidget<SpinnerWidget>("anti_aliasing");
+    assert(aa != NULL);
+    aa->m_properties[PROP_WRAP_AROUND] = "true";
+    aa->clearLabels();
+    m_anti_aliasing_names.clear();
+
+    m_anti_aliasing_names.push_back("off");
+    aa->addLabel(_C("Anti-aliasing", "Disabled"));
+    if (vk)
+    {
+        // GE: the cheap one for the low-end devices, then the better one
+        m_anti_aliasing_names.push_back("fxaa");
+        aa->addLabel(L"FXAA");
+        m_anti_aliasing_names.push_back("cmaa2");
+        aa->addLabel(L"CMAA2");
+    }
+    else
+    {
+        m_anti_aliasing_names.push_back("mlaa");
+        aa->addLabel(L"MLAA");
+    }
+
+    // The choice of the other renderer (or the generic "mlaa") is the
+    // default one of this renderer, an anti-aliasing which was on stays on
+    std::string name = selected;
+    if (std::find(m_anti_aliasing_names.begin(), m_anti_aliasing_names.end(),
+        name) == m_anti_aliasing_names.end())
+    {
+        name = name == "off" ? "off" : m_anti_aliasing_names.back();
+    }
+    int value = 0;
+    for (unsigned i = 0; i < m_anti_aliasing_names.size(); i++)
+    {
+        if (m_anti_aliasing_names[i] == name)
+            value = i;
+    }
+    aa->setValue(value);
+#endif
+}   // fillAntiAliasing
+
+// -----------------------------------------------------------------------------
+
 GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::string& eventSource)
 {
 #ifndef SERVER_ONLY
@@ -170,6 +220,11 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
             m_new_render_driver = rd;
         else
             m_new_render_driver.clear();
+        // The choices of anti-aliasing are the ones of the chosen driver
+        SpinnerWidget* aa = getWidget<SpinnerWidget>("anti_aliasing");
+        const unsigned aa_value = aa->getValue();
+        fillAntiAliasing(rd == "vulkan", aa_value < m_anti_aliasing_names.size() ?
+            m_anti_aliasing_names[aa_value] : std::string("off"));
         updateActivation();
     }
     if (eventSource == "buttons")
@@ -218,15 +273,19 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
                 GE::getGEConfig()->m_shadow_size = 0;
             }
 
-            UserConfigParams::m_mlaa =
-                getWidget<CheckBoxWidget>("mlaa")->getState();
+            // The config has the name of the choice, the renderer resolves it
+            // (OptionsScreenVideo::setAntiAliasing for GE)
+            const unsigned aa_value =
+                getWidget<SpinnerWidget>("anti_aliasing")->getValue();
+            UserConfigParams::m_anti_aliasing =
+                aa_value < m_anti_aliasing_names.size() ?
+                m_anti_aliasing_names[aa_value] : std::string("off");
             if (CVS->isGLSL() && !advanced_pipeline)
-                UserConfigParams::m_mlaa = false;
+                UserConfigParams::m_anti_aliasing = "off";
             // The FBO the scene is rendered to is different with it
             const GE::GEAntiAliasing prev_anti_aliasing =
                 GE::getGEConfig()->m_anti_aliasing;
-            GE::getGEConfig()->m_anti_aliasing = UserConfigParams::m_mlaa ?
-                GE::GAA_CMAA2 : GE::GAA_NONE;
+            OptionsScreenVideo::setAntiAliasing();
             const bool anti_aliasing_changed =
                 prev_anti_aliasing != GE::getGEConfig()->m_anti_aliasing;
 
@@ -406,7 +465,7 @@ void CustomVideoSettingsDialog::updateActivation()
     getWidget<CheckBoxWidget>("motionblur")->setActive(light);
     getWidget<CheckBoxWidget>("dof")->setActive(light);
     getWidget<SpinnerWidget>("shadows")->setActive(light || (vk && real_light));
-    getWidget<CheckBoxWidget>("mlaa")->setActive(light || vk);
+    getWidget<SpinnerWidget>("anti_aliasing")->setActive(light || vk);
     getWidget<CheckBoxWidget>("ssao")->setActive(light || (vk && real_light));
     getWidget<CheckBoxWidget>("ssr")->setActive(light || (vk && real_light));
     getWidget<CheckBoxWidget>("lightshaft")->setActive(light || (vk && real_light));

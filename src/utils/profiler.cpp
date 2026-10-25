@@ -737,7 +737,7 @@ void Profiler::writeToFile()
       << UserConfigParams::m_bloom  << ", "
       << UserConfigParams::m_glow << ", "
       << UserConfigParams::m_light_shaft << ", "
-      << UserConfigParams::m_mlaa << ", "
+      << UserConfigParams::m_anti_aliasing.c_str() << ", "
       << UserConfigParams::m_ssao << ", "
       << UserConfigParams::m_anisotropic << ", "
       << UserConfigParams::m_shadows_resolution << ", "

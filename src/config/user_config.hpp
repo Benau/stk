@@ -287,6 +287,8 @@ public:
                                   { m_value = v; return m_value; }
     std::string& operator=(const StringUserConfigParam& v)
                                   { m_value = (std::string)v; return m_value; }
+    bool operator==(const char* v) const  { return m_value == v; }
+    bool operator!=(const char* v) const  { return m_value != v; }
 
     const char* c_str() const { return m_value.c_str(); }
 };   // StringUserConfigParam
@@ -984,10 +986,11 @@ namespace UserConfigParams
             PARAM_DEFAULT( BoolUserConfigParam(false,
                            "motionblur_enabled", &m_graphics_quality,
                            "Whether motion blur should be enabled") );
-    PARAM_PREFIX BoolUserConfigParam         m_mlaa
-            PARAM_DEFAULT( BoolUserConfigParam(false,
-                           "mlaa", &m_graphics_quality,
-                           "Whether MLAA anti-aliasing should be enabled") );
+    PARAM_PREFIX StringUserConfigParam       m_anti_aliasing
+            PARAM_DEFAULT( StringUserConfigParam("off",
+                           "anti_aliasing", &m_graphics_quality,
+                           "Anti-aliasing: off, mlaa (OpenGL, and the default one of the "
+                           "renderer), fxaa or cmaa2 (Vulkan)") );
     PARAM_PREFIX BoolUserConfigParam          m_ssao
             PARAM_DEFAULT(BoolUserConfigParam(false,
                            "ssao", &m_graphics_quality,

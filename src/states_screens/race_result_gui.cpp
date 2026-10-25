@@ -2467,7 +2467,7 @@ void RaceResultGUI::displayBenchmarkSummary()
                                                                                _("Dynamic lights: Disabled");
     info_text[2] = (!UserConfigParams::m_degraded_IBL && (modern_gl || vk)) ? _("Image-based lighting: Enabled") :
                                                                               _("Image-based lighting: Disabled");
-    info_text[3] = (UserConfigParams::m_mlaa && modern_gl) ? _("Anti-aliasing: Enabled") :
+    info_text[3] = (UserConfigParams::m_anti_aliasing != "off" && (modern_gl || vk)) ? _("Anti-aliasing: Enabled") :
                                                              _("Anti-aliasing: Disabled");
     int geometry_detail = UserConfigParams::m_geometry_level;
     info_text[4] = _("Geometry detail: %s",

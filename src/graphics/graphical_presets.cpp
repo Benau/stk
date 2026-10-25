@@ -139,7 +139,7 @@ namespace GraphicalPresets
                 gfx_presets[l].glow               == UserConfigParams::m_glow                &&
                 gfx_presets[l].lights             == UserConfigParams::m_dynamic_lights      &&
                 gfx_presets[l].lightshaft         == UserConfigParams::m_light_shaft         &&
-                gfx_presets[l].mlaa               == UserConfigParams::m_mlaa                &&
+                gfx_presets[l].mlaa               == (UserConfigParams::m_anti_aliasing != "off") &&
                 gfx_presets[l].shadows            == UserConfigParams::m_shadows_resolution  &&
                 gfx_presets[l].ssao               == UserConfigParams::m_ssao                &&
                 gfx_presets[l].light_scatter      == UserConfigParams::m_light_scatter       &&
@@ -166,7 +166,7 @@ namespace GraphicalPresets
         UserConfigParams::m_glow               = gfx_presets[level].glow;
         UserConfigParams::m_dynamic_lights     = gfx_presets[level].lights;
         UserConfigParams::m_light_shaft        = gfx_presets[level].lightshaft;
-        UserConfigParams::m_mlaa               = gfx_presets[level].mlaa;
+        UserConfigParams::m_anti_aliasing      = gfx_presets[level].mlaa ? "mlaa" : "off";
         UserConfigParams::m_shadows_resolution = gfx_presets[level].shadows;
         UserConfigParams::m_ssao               = gfx_presets[level].ssao;
         UserConfigParams::m_light_scatter      = gfx_presets[level].light_scatter;

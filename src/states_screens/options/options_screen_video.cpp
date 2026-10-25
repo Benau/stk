@@ -379,7 +379,7 @@ void OptionsScreenVideo::updateTooltip()
 
     //I18N: in the graphical options
     tooltip = tooltip + L"\n" +
-        (UserConfigParams::m_mlaa ? _("Anti-aliasing: Enabled") :
+        (UserConfigParams::m_anti_aliasing != "off" ? _("Anti-aliasing: Enabled") :
                                     _("Anti-aliasing: Disabled"));
     //I18N: in the graphical options
     tooltip = tooltip + L"\n" +
@@ -662,5 +662,17 @@ void OptionsScreenVideo::setRayTracing()
     rt.m_shadow = UserConfigParams::m_ray_tracing_shadow;
     rt.m_shadow_scale = UserConfigParams::m_ray_tracing_shadow_scale;
 }   // setRayTracing
+
+// --------------------------------------------------------------------------------------------
+void OptionsScreenVideo::setAntiAliasing()
+{
+    // "mlaa" is the default one of the renderer (and what the presets, the
+    // command line and the old configs save), cmaa2 in GE. The other names
+    // are the ones of GE (fxaa, cmaa2), an unknown one (or one of OpenGL
+    // saved before the renderer was changed) is off
+    const std::string name = UserConfigParams::m_anti_aliasing;
+    GE::getGEConfig()->m_anti_aliasing = name == "mlaa" ?
+        GE::GAA_CMAA2 : GE::getAntiAliasingFromName(name);
+}   // setAntiAliasing
 
 #endif // ifndef SERVER_ONLY

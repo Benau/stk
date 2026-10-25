@@ -68,6 +68,8 @@ public:
     static void setSSR();
     /** Mirrors the ray tracing user config to GE::GERayTracingConfig. */
     static void setRayTracing();
+    /** Resolves UserConfigParams::m_anti_aliasing to the GE anti-aliasing. */
+    static void setAntiAliasing();
 };
 
 #endif
