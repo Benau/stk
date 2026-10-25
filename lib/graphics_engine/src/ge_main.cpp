@@ -47,7 +47,8 @@ GEConfig g_config =
     32,
     0.5f,
     3.0f,
-    1.0f
+    1.0f,
+    GAA_NONE
 };
 std::string g_shader_folder = "";
 std::chrono::steady_clock::time_point g_mono_start =
@@ -341,6 +342,12 @@ void logMessage(GELogLevel level, const char* format, ...)
         g_log_callback(level, message.c_str());
     else
         std::cerr << "[GE] " << message << std::endl;
+}
+
+bool isAntiAliasingEnabled()
+{
+    return g_config.m_anti_aliasing != GAA_NONE &&
+        GEVulkanFeatures::supportsComputeInMainQueue();
 }
 
 bool isRayTracing()

@@ -1,0 +1,154 @@
+// CMAA2 step 2 (ProcessCandidatesCS): for every candidate pixel, the simple
+// shapes (one pixel blended with its neighbours) and the long Z shapes
+// (blended along the whole line), stored in the lists of the quads
+#define CMAA2_CANDIDATES
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+#include "utils/cmaa2.glsl"
+
+void main()
+{
+    if (gl_LocalInvocationID.x == 0u)
+        g_blend_item_count = 0u;
+    memoryBarrierShared();
+    barrier();
+
+    const uint num_candidates = g_control[3];
+    if (gl_GlobalInvocationID.x < num_candidates)
+    {
+        uint pixel_id = g_candidates[gl_GlobalInvocationID.x];
+        ivec2 pixel_pos = ivec2(int(pixel_id >> 18), int(pixel_id & 0x3FFFu));
+
+        uint edges_center_packed = loadEdge(pixel_pos);
+        vec4 edges = unpackEdges(edges_center_packed);
+        vec4 edges_left = unpackEdges(loadEdge(pixel_pos + ivec2(-1, 0)));
+        vec4 edges_right = unpackEdges(loadEdge(pixel_pos + ivec2(1, 0)));
+        vec4 edges_bottom = unpackEdges(loadEdge(pixel_pos + ivec2(0, 1)));
+        vec4 edges_top = unpackEdges(loadEdge(pixel_pos + ivec2(0, -1)));
+
+        // Simple shapes
+        {
+            vec4 blend_val = computeSimpleShapeBlendValues(edges, edges_left,
+                edges_right, edges_top, edges_bottom, true);
+
+            const float four_weight_sum = dot(blend_val, vec4(1.0));
+            const float center_weight = 1.0 - four_weight_sum;
+
+            vec3 out_color = loadColor(pixel_pos) * center_weight;
+
+            if (blend_val.x > 0.0)   // from left
+                out_color += blend_val.x * loadColor(pixel_pos + ivec2(-1, 0));
+            if (blend_val.y > 0.0)   // from above
+                out_color += blend_val.y * loadColor(pixel_pos + ivec2(0, -1));
+            if (blend_val.z > 0.0)   // from right
+                out_color += blend_val.z * loadColor(pixel_pos + ivec2(1, 0));
+            if (blend_val.w > 0.0)   // from below
+                out_color += blend_val.w * loadColor(pixel_pos + ivec2(0, 1));
+
+            storeColorSample(pixel_pos, out_color, false);
+        }
+
+        // Z shapes
+        {
+            float inverted_z_score;
+            float normal_z_score;
+            float max_score;
+            bool horizontal = true;
+            bool inverted_z = false;
+
+            {
+                vec4 edges_m1_p0 = edges_left;
+                vec4 edges_p1_p0 = edges_right;
+                vec4 edges_p2_p0 = unpackEdges(
+                    loadEdge(pixel_pos + ivec2(2, 0)));
+                detectZsHorizontal(edges, edges_m1_p0, edges_p1_p0,
+                    edges_p2_p0, inverted_z_score, normal_z_score);
+                max_score = max(inverted_z_score, normal_z_score);
+                if (max_score > 0.0)
+                    inverted_z = inverted_z_score > normal_z_score;
+            }
+
+            {
+                vec4 edges_m1_p0 = edges_bottom;
+                vec4 edges_p1_p0 = edges_top;
+                vec4 edges_p2_p0 = unpackEdges(
+                    loadEdge(pixel_pos + ivec2(0, -2)));
+                detectZsHorizontal(edges.argb, edges_m1_p0.argb,
+                    edges_p1_p0.argb, edges_p2_p0.argb, inverted_z_score,
+                    normal_z_score);
+                float vert_score = max(inverted_z_score, normal_z_score);
+                if (vert_score > max_score)
+                {
+                    max_score = vert_score;
+                    horizontal = false;
+                    inverted_z = inverted_z_score > normal_z_score;
+                }
+            }
+
+            if (max_score > 0.0)
+            {
+                // 0 - best quality, 1 - some edges missing but ok, 2 & 3 -
+                // dubious but better than nothing
+                float shape_quality_score =
+                    floor(clamp(4.0 - max_score, 0.0, 3.0));
+
+                const ivec2 step_right = horizontal ? ivec2(1, 0) :
+                    ivec2(0, -1);
+                float line_length_left, line_length_right;
+                findZLineLengths(line_length_left, line_length_right,
+                    pixel_pos, horizontal, inverted_z, step_right);
+
+                line_length_left -= shape_quality_score;
+                line_length_right -= shape_quality_score;
+
+                if ((line_length_left + line_length_right) >= 5.0)
+                {
+                    if (!collectBlendZs(pixel_pos, horizontal, inverted_z,
+                        shape_quality_score, line_length_left,
+                        line_length_right))
+                    {
+                        blendZs(pixel_pos, horizontal, inverted_z,
+                            shape_quality_score, line_length_left,
+                            line_length_right, step_right);
+                    }
+                }
+            }
+        }
+    }
+
+    // Expands the collected items of the group to all invocations, to have
+    // a better occupancy
+    memoryBarrierShared();
+    barrier();
+
+    uint total_item_count = min(BLEND_ITEM_SLM_SIZE, g_blend_item_count);
+    uint loops = (total_item_count + (PROCESS_CANDIDATES_THREADS - 1u) -
+        gl_LocalInvocationID.x) / PROCESS_CANDIDATES_THREADS;
+    for (uint loop = 0u; loop < loops; loop++)
+    {
+        uint index = loop * PROCESS_CANDIDATES_THREADS +
+            gl_LocalInvocationID.x;
+        uvec2 item_val = g_blend_items[index];
+
+        ivec2 starting_pos = ivec2(int(item_val.x >> 18),
+            int(item_val.x & 0x3FFFu));
+        bool item_horizontal = ((item_val.y >> 31) & 1u) != 0u;
+        bool item_inverted_z = ((item_val.y >> 30) & 1u) != 0u;
+        int item_step_index = int((item_val.y >> 20) & 0x3FFu) - 256;
+        int item_src_offset = int((item_val.y >> 10) & 0x3FFu) - 256;
+        float item_lerp_k = float(item_val.y & 0x3FFu) / 1023.0;
+
+        ivec2 item_step_right = item_horizontal ? ivec2(1, 0) : ivec2(0, -1);
+        ivec2 item_blend_dir = item_horizontal ? ivec2(0, -1) : ivec2(-1, 0);
+        if (item_inverted_z)
+            item_blend_dir = -item_blend_dir;
+
+        ivec2 item_pixel_pos = starting_pos + item_step_right * item_step_index;
+
+        vec3 color_center = loadColor(item_pixel_pos);
+        vec3 color_from = loadColor(item_pixel_pos +
+            item_blend_dir * item_src_offset);
+        storeColorSample(item_pixel_pos,
+            mix(color_center, color_from, item_lerp_k), true);
+    }
+}

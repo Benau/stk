@@ -32,6 +32,7 @@ namespace GE
     class GEVulkanDynamicSPMBuffer;
     struct GEVulkanTargetGroup;
     class GEVulkanFBOTexture;
+    class GEVulkanFinalChain;
     class GEVulkanMeshCache;
     class GEVulkanRTScene;
     class GEVulkanSkyBoxRenderer;
@@ -591,6 +592,9 @@ namespace GE
         GEVulkanTextureDescriptor* m_mesh_texture_descriptor;
 
         GEVulkanRTScene* m_rt_scene;
+        // Anti-aliasing (and the other stages after the rendering of the
+        // FBOs), NULL if there is none, see GEVulkanFinalChain
+        GEVulkanFinalChain* m_final_chain;
         GEVulkanFBOTexture* m_rtt_texture;
         GEVulkanFBOTexture* m_prev_rtt_texture;
         GEVulkanFBOTexture* m_separate_rtt_texture;

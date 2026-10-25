@@ -6,6 +6,7 @@
 namespace GE
 {
 class GEVulkanAttachmentTexture;
+class GEVulkanFinalTarget;
 class GEVulkanFBOTexture : public GEVulkanTexture
 {
 protected:
@@ -14,6 +15,10 @@ protected:
     std::vector<VkRenderPass> m_rtt_render_pass;
 
     std::vector<VkFramebuffer> m_rtt_frame_buffer;
+
+    // The one more image of the final chain (anti-aliasing), NULL if the FBO
+    // doesn't use it, see GEVulkanFinalChain
+    GEVulkanFinalTarget* m_final_target;
 public:
     // ------------------------------------------------------------------------
     GEVulkanFBOTexture(GEVulkanDriver* vk, const core::dimension2d<u32>& size,
@@ -48,8 +53,10 @@ public:
     // ------------------------------------------------------------------------
     virtual void createRTT();
     // ------------------------------------------------------------------------
+    // TRANSFER_DST is for the blit of the final chain
     virtual void createOutputImage(VkImageUsageFlags usage =
-        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT);
     // ------------------------------------------------------------------------
     VkRenderPass getRTTRenderPass(unsigned id = 0) const
                                            { return m_rtt_render_pass.at(id); }
@@ -62,6 +69,11 @@ public:
     // ------------------------------------------------------------------------
     GEVulkanAttachmentTexture* getDepthTexture() const
                                                     { return m_depth_texture; }
+    // ------------------------------------------------------------------------
+    GEVulkanFinalTarget* getFinalTarget() const      { return m_final_target; }
+    // ------------------------------------------------------------------------
+    // Takes the ownership (deletes the previous one)
+    void setFinalTarget(GEVulkanFinalTarget* target);
     // ------------------------------------------------------------------------
     virtual bool isDeferredFBO() const                        { return false; }
     // ------------------------------------------------------------------------

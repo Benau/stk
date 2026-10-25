@@ -219,7 +219,16 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
             }
 
             UserConfigParams::m_mlaa =
-                advanced_pipeline && getWidget<CheckBoxWidget>("mlaa")->getState();
+                getWidget<CheckBoxWidget>("mlaa")->getState();
+            if (CVS->isGLSL() && !advanced_pipeline)
+                UserConfigParams::m_mlaa = false;
+            // The FBO the scene is rendered to is different with it
+            const GE::GEAntiAliasing prev_anti_aliasing =
+                GE::getGEConfig()->m_anti_aliasing;
+            GE::getGEConfig()->m_anti_aliasing = UserConfigParams::m_mlaa ?
+                GE::GAA_CMAA2 : GE::GAA_NONE;
+            const bool anti_aliasing_changed =
+                prev_anti_aliasing != GE::getGEConfig()->m_anti_aliasing;
 
             bool ssao_changed = false;
             bool ssao = advanced_pipeline &&
@@ -320,6 +329,8 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
                     GE::getGEConfig()->m_displace_reflection != prev_displace;
                 if (GE::isRayTracing() && prev_shadow_type != GE::getGEConfig()->m_shadow_type)
                     need_recreate_swapchain = true;
+                if (anti_aliasing_changed)
+                    need_recreate_swapchain = true;
                 if (need_recreate_swapchain || pbr_changed || ibl_changed ||
                     glow_changed || light_scatter_changed || bloom_changed ||
                     ssao_changed || god_rays_changed ||
@@ -395,7 +406,7 @@ void CustomVideoSettingsDialog::updateActivation()
     getWidget<CheckBoxWidget>("motionblur")->setActive(light);
     getWidget<CheckBoxWidget>("dof")->setActive(light);
     getWidget<SpinnerWidget>("shadows")->setActive(light || (vk && real_light));
-    getWidget<CheckBoxWidget>("mlaa")->setActive(light);
+    getWidget<CheckBoxWidget>("mlaa")->setActive(light || vk);
     getWidget<CheckBoxWidget>("ssao")->setActive(light || (vk && real_light));
     getWidget<CheckBoxWidget>("ssr")->setActive(light || (vk && real_light));
     getWidget<CheckBoxWidget>("lightshaft")->setActive(light || (vk && real_light));

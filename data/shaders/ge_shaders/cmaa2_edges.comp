@@ -1,0 +1,191 @@
+// CMAA2 step 1 (EdgesColor2x2CS): detects the edges (with local contrast
+// adaptation) of the viewport, 2x2 pixels per invocation, and lists the pixels
+// which can be the start of a shape. A work group of 16x16 invocations
+// outputs 14x14 quads, the outer ring only supplies the edges of the border
+#define CMAA2_EDGES
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+#include "utils/cmaa2.glsl"
+
+const uint ROW_STRIDE = 16u;
+
+shared vec4 g_shared_h[16 * 16];
+shared vec4 g_shared_v[16 * 16];
+
+void loadQuadHV(uint addr, out vec2 e00, out vec2 e10, out vec2 e01,
+                out vec2 e11)
+{
+    vec4 val_h = g_shared_h[addr];
+    e00.y = val_h.x; e10.y = val_h.y; e01.y = val_h.z; e11.y = val_h.w;
+    vec4 val_v = g_shared_v[addr];
+    e00.x = val_v.x; e10.x = val_v.y; e01.x = val_v.z; e11.x = val_v.w;
+}
+
+vec2 computeEdgeLuma(int x, int y, float lumas[8])
+{
+    vec2 temp;
+    temp.x = abs(lumas[x + y * 3] - lumas[x + 1 + y * 3]);
+    temp.y = abs(lumas[x + y * 3] - lumas[x + (y + 1) * 3]);
+    return temp;
+}
+
+float computeLocalContrastV(int x, int y, vec2 nb[4][4])
+{
+    return max(max(nb[x + 1][y + 0].y, nb[x + 1][y + 1].y),
+        max(nb[x + 2][y + 0].y, nb[x + 2][y + 1].y)) *
+        LOCAL_CONTRAST_ADAPTATION;
+}
+
+float computeLocalContrastH(int x, int y, vec2 nb[4][4])
+{
+    return max(max(nb[x + 0][y + 1].x, nb[x + 1][y + 1].x),
+        max(nb[x + 0][y + 2].x, nb[x + 1][y + 2].x)) *
+        LOCAL_CONTRAST_ADAPTATION;
+}
+
+void main()
+{
+    const ivec2 gid = ivec2(gl_WorkGroupID.xy);
+    const ivec2 tid = ivec2(gl_LocalInvocationID.xy);
+    // The quads are aligned to even pixels of the image (the edges of two
+    // pixels are in one uint), the first one can start before the viewport
+    const ivec2 origin = pc.m_rect.xy & ivec2(~1);
+    const ivec2 pixel_pos = origin + (gid * 14 + tid - 1) * 2;
+    const uint center_addr = uint(tid.x) + uint(tid.y) * ROW_STRIDE;
+    const bool in_output_kernel = !(tid.x == 15 || tid.x == 0 ||
+        tid.y == 15 || tid.y == 0);
+    const ivec2 qe_offsets[4] =
+        ivec2[4](ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1));
+
+    float lumas[8];
+    for (int i = 0; i < 8; i++)
+        lumas[i] = lumaForEdges(loadColor(pixel_pos + ivec2(i % 3, i / 3)));
+    const vec2 qe0 = computeEdgeLuma(0, 0, lumas);
+    const vec2 qe1 = computeEdgeLuma(1, 0, lumas);
+    const vec2 qe2 = computeEdgeLuma(0, 1, lumas);
+    const vec2 qe3 = computeEdgeLuma(1, 1, lumas);
+
+    g_shared_v[center_addr] = vec4(qe0.x, qe1.x, qe2.x, qe3.x);
+    g_shared_h[center_addr] = vec4(qe0.y, qe1.y, qe2.y, qe3.y);
+    memoryBarrierShared();
+    barrier();
+
+    uvec4 out_edges = uvec4(0u);
+    if (in_output_kernel)
+    {
+        vec2 top_row = g_shared_h[center_addr - ROW_STRIDE].zw;
+        vec2 left_column = g_shared_v[center_addr - 1u].yw;
+
+        bool some_non_zero_edges = any(notEqual(vec4(qe0, qe1) +
+            vec4(qe2, qe3) + vec4(top_row, left_column), vec4(0.0)));
+
+        if (some_non_zero_edges)
+        {
+            // Reset the list of deferred colors of the quad
+            if (pixel_pos.x < pc.m_rect.z && pixel_pos.y < pc.m_rect.w)
+            {
+                ivec2 quad = pixel_pos >> 1;
+                g_heads[uint(quad.y) * pc.m_buf.y + uint(quad.x)] =
+                    0xFFFFFFFFu;
+            }
+
+            vec4 ce[4];
+
+            // Local contrast adaptation
+            vec2 d0, d1, d2;
+            vec2 nb[4][4];
+            for (int x = 0; x < 4; x++)
+                for (int y = 0; y < 4; y++)
+                    nb[x][y] = vec2(0.0);
+            loadQuadHV(center_addr - ROW_STRIDE - 1u, d0, d1, d2, nb[0][0]);
+            loadQuadHV(center_addr - ROW_STRIDE, d0, d1, nb[1][0], nb[2][0]);
+            loadQuadHV(center_addr - ROW_STRIDE + 1u, d0, d1, nb[3][0], d2);
+            loadQuadHV(center_addr - 1u, d0, nb[0][1], d1, nb[0][2]);
+            loadQuadHV(center_addr + 1u, nb[3][1], d0, nb[3][2], d1);
+            loadQuadHV(center_addr - 1u + ROW_STRIDE, d0, nb[0][3], d1, d2);
+            loadQuadHV(center_addr + ROW_STRIDE, nb[1][3], nb[2][3], d0, d1);
+
+            nb[1][0].y = top_row[0];
+            nb[2][0].y = top_row[1];
+            nb[0][1].x = left_column[0];
+            nb[0][2].x = left_column[1];
+            nb[1][1] = qe0;
+            nb[2][1] = qe1;
+            nb[1][2] = qe2;
+            nb[2][2] = qe3;
+
+            top_row[0] = float((top_row[0] -
+                computeLocalContrastH(0, -1, nb)) > EDGE_THRESHOLD);
+            top_row[1] = float((top_row[1] -
+                computeLocalContrastH(1, -1, nb)) > EDGE_THRESHOLD);
+            left_column[0] = float((left_column[0] -
+                computeLocalContrastV(-1, 0, nb)) > EDGE_THRESHOLD);
+            left_column[1] = float((left_column[1] -
+                computeLocalContrastV(-1, 1, nb)) > EDGE_THRESHOLD);
+
+            ce[0].x = float((qe0.x - computeLocalContrastV(0, 0, nb)) >
+                EDGE_THRESHOLD);
+            ce[0].y = float((qe0.y - computeLocalContrastH(0, 0, nb)) >
+                EDGE_THRESHOLD);
+            ce[1].x = float((qe1.x - computeLocalContrastV(1, 0, nb)) >
+                EDGE_THRESHOLD);
+            ce[1].y = float((qe1.y - computeLocalContrastH(1, 0, nb)) >
+                EDGE_THRESHOLD);
+            ce[2].x = float((qe2.x - computeLocalContrastV(0, 1, nb)) >
+                EDGE_THRESHOLD);
+            ce[2].y = float((qe2.y - computeLocalContrastH(0, 1, nb)) >
+                EDGE_THRESHOLD);
+            ce[3].x = float((qe3.x - computeLocalContrastV(1, 1, nb)) >
+                EDGE_THRESHOLD);
+            ce[3].y = float((qe3.y - computeLocalContrastH(1, 1, nb)) >
+                EDGE_THRESHOLD);
+
+            // Edges to the left and above of each pixel are the right and
+            // below edges of the neighbours
+            ce[0].z = left_column[0];
+            ce[1].z = ce[0].x;
+            ce[2].z = left_column[1];
+            ce[3].z = ce[2].x;
+
+            ce[0].w = top_row[0];
+            ce[1].w = top_row[1];
+            ce[2].w = ce[0].y;
+            ce[3].w = ce[1].y;
+
+            for (int i = 0; i < 4; i++)
+            {
+                const ivec2 local_pixel_pos = pixel_pos + qe_offsets[i];
+                // A pixel of another viewport has no edges
+                vec4 edges = inRect(local_pixel_pos) ? ce[i] : vec4(0.0);
+
+                bool is_candidate = (edges.x * edges.y + edges.y * edges.z +
+                    edges.z * edges.w + edges.w * edges.x) != 0.0;
+                if (is_candidate)
+                {
+                    uint counter_index = atomicAdd(g_control[4], 1u);
+                    if (counter_index < pc.m_buf.z)
+                    {
+                        g_candidates[counter_index] =
+                            (uint(local_pixel_pos.x) << 18) |
+                            uint(local_pixel_pos.y);
+                    }
+                }
+                out_edges[i] = packEdges(edges);
+            }
+        }
+
+        // Always written, the edges of the last frame are stale
+        if (pixel_pos.x < pc.m_rect.z)
+        {
+            for (int r = 0; r < 2; r++)
+            {
+                if (pixel_pos.y + r < pc.m_rect.w)
+                {
+                    g_edges[uint(pixel_pos.y + r) * pc.m_buf.x +
+                        uint(pixel_pos.x >> 1)] =
+                        (out_edges[r * 2 + 1] << 4) | out_edges[r * 2];
+                }
+            }
+        }
+    }
+}
