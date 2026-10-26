@@ -65,15 +65,17 @@ std::array<std::vector<ReloadData>, GVSRT_COUNT> g_shader_reload_groups;
 
 // ============================================================================
 #ifndef DISABLE_SHADERC
-shaderc_include_result* showError(const char* message)
+shaderc_include_result* showError(const std::string& message)
 {
-    shaderc_include_result* err = new shaderc_include_result;
-    err->source_name = "";
-    err->source_name_length = 0;
-    err->content = message;
-    err->content_length = strlen(message);
-    err->user_data = NULL;
-    return err;
+    shaderc_include_result* result = new shaderc_include_result;
+    std::string* content = new std::string(message);
+
+    result->source_name = "";
+    result->source_name_length = 0;
+    result->content = content->c_str();
+    result->content_length = content->size();
+    result->user_data = content;
+    return result;
 }   // showError
 #endif
 
@@ -221,14 +223,14 @@ std::vector<uint32_t> compileShader(shaderc_shader_kind kind,
            ->shaderc_include_result*
         {
             if (type != shaderc_include_type_relative)
-                return showError("Only relateive included supported");
+                return showError("Only relative included supported");
 
             std::string path = requesting_source;
             size_t pos = path.find_last_of('/');
             if (pos == std::string::npos)
                 pos = path.find_last_of('\\');
             if (pos == std::string::npos)
-                throw std::runtime_error(std::string("Invalid path: ") + path);
+                return showError(std::string("Invalid path: ") + path);
 
             FileIncluder* includer = (FileIncluder*)user_data;
             includer->m_shader_fullpath.push_back(std::string());
@@ -238,8 +240,8 @@ std::vector<uint32_t> compileShader(shaderc_shader_kind kind,
                 irr::io::createReadFile(shader_fullpath.c_str());
             if (!r)
             {
-                throw std::runtime_error(std::string("File ") + shader_fullpath
-                    + " is missing");
+                return showError(std::string("Include file ") +
+                    shader_fullpath + " is missing");
             }
 
             includer->m_shader_data.push_back(std::string());
@@ -250,7 +252,7 @@ std::vector<uint32_t> compileShader(shaderc_shader_kind kind,
                 r->getSize())
             {
                 r->drop();
-                throw std::runtime_error(std::string("File ") +
+                return showError(std::string("Include file ") +
                     requested_source + " failed to be read");
             }
             r->drop();
@@ -266,6 +268,7 @@ std::vector<uint32_t> compileShader(shaderc_shader_kind kind,
         },
         [](void* user_data, shaderc_include_result* include_result)
         {
+            delete static_cast<std::string*>(include_result->user_data);
             delete include_result;
         }, &includer);
 
