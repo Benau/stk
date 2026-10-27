@@ -25,6 +25,17 @@ bool supportsPartiallyBound();
 // ----------------------------------------------------------------------------
 bool supportsBindMeshTexturesAtOnce();
 // ----------------------------------------------------------------------------
+// Workaround for the drivers (Turnip) which are slow when the mesh textures
+// (bound at once) are indexed by a value which is not known to be uniform
+// (a varying from the vertex shader), then the index is a push constant which
+// is set for each material in the draw call. It can be forced by the
+// environment variable GE_UNIFORM_MATERIAL_ID_WORKAROUND (1 or 0), and it's
+// only used if mesh textures can be bound at once
+bool usesUniformMaterialIndex();
+// ----------------------------------------------------------------------------
+// VkDriverId of VkPhysicalDeviceDriverProperties, 0 if unknown
+int getDriverID();
+// ----------------------------------------------------------------------------
 bool supportsMultiDrawIndirect();
 // ----------------------------------------------------------------------------
 bool supportsBaseVertexRendering();

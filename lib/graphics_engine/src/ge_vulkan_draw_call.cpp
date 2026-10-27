@@ -80,6 +80,12 @@ bool getGlowOutlineSkinning(uint64_t key)
 {
     return (key & (uint64_t(1) << 24)) != 0;
 }   // getGlowOutlineSkinning
+
+// ----------------------------------------------------------------------------
+// The push constants of the materials start at 0 (16 bytes for grass and
+// displace), glow outline has its color at 16 (12 bytes). It's the offset of
+// m_material_id in utils/sample_mesh_texture.glsl and the displace shaders
+const uint32_t MATERIAL_ID_PUSH_CONSTANT_OFFSET = 32;
 }   // anonymous namespace
 
 // ============================================================================
@@ -416,8 +422,11 @@ void GEVulkanDrawCall::addBillboardNode(irr::scene::ISceneNode* node,
     if (m_culling_tool->isCulled(bb))
         return;
     irr::video::SMaterial& m = node->getMaterial(0);
+    // With the uniform material index the draw of a buffer must have only 1
+    // material, because the id is the same for all instances of the draw
     TexturesList textures = {};
-    if (!GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
+    if (!GEVulkanFeatures::supportsBindMeshTexturesAtOnce() ||
+        GEVulkanFeatures::usesUniformMaterialIndex())
         textures = getTexturesList(m);
     if (m_billboard_buffers.find(textures) == m_billboard_buffers.end())
         m_billboard_buffers[textures] = new GEVulkanBillboardBuffer(m);
@@ -529,7 +538,9 @@ void GEVulkanDrawCall::generate(GEVulkanDriver* vk)
 
     const bool bind_mesh_textures =
         GEVulkanFeatures::supportsBindMeshTexturesAtOnce();
-    if (!bind_mesh_textures)
+    // The material id is pushed, so keep the draws of the same material
+    // together to avoid pushing it repeatedly (and splitting the indirect draw)
+    if (!bind_mesh_textures || GEVulkanFeatures::usesUniformMaterialIndex())
     {
         std::stable_sort(visible_nodes.begin(), visible_nodes.end(),
             [](const ShaderNodesMeshBufferMaterial& a,
@@ -568,7 +579,8 @@ void GEVulkanDrawCall::generate(GEVulkanDriver* vk)
 start:
     bool draw_id_mat_lookup =
         GEVulkanFeatures::supportsShaderDrawParameters() &&
-        GEVulkanFeatures::supportsMultiDrawIndirect();
+        GEVulkanFeatures::supportsMultiDrawIndirect() &&
+        !GEVulkanFeatures::usesUniformMaterialIndex();
     m_cmds.clear();
     m_materials_data.clear();
 
@@ -1989,7 +2001,8 @@ void GEVulkanDrawCall::createVulkanData()
 
     const bool use_multidraw =
         GEVulkanFeatures::supportsMultiDrawIndirect() &&
-        GEVulkanFeatures::supportsBindMeshTexturesAtOnce();
+        GEVulkanFeatures::supportsBindMeshTexturesAtOnce() &&
+        !GEVulkanFeatures::usesUniformMaterialIndex();
     VkBufferUsageFlags flags = 0;
     if (use_multidraw)
     {
@@ -2023,7 +2036,8 @@ void GEVulkanDrawCall::uploadDynamicData(GEVulkanDriver* vk,
     int current_buffer_idx = vk->getCurrentBufferIdx();
     const bool use_multidraw =
         GEVulkanFeatures::supportsMultiDrawIndirect() &&
-        GEVulkanFeatures::supportsBindMeshTexturesAtOnce();
+        GEVulkanFeatures::supportsBindMeshTexturesAtOnce() &&
+        !GEVulkanFeatures::usesUniformMaterialIndex();
 
     if (m_indirect_buffer && use_multidraw)
     {
@@ -2290,6 +2304,8 @@ void GEVulkanDrawCall::renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
             if (bound && it != m_rendered_dspm.end())
             {
                 int cur_mid = -1;
+                const bool uniform_material_index =
+                    GEVulkanFeatures::usesUniformMaterialIndex();
                 for (auto& p : it->second)
                 {
                     DynamicSPMData& dspm_data = p.second;
@@ -2298,6 +2314,12 @@ void GEVulkanDrawCall::renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
                     {
                         cur_mid = dspm_data.m_material_id;
                         bindSingleMaterial(cmd, cur_pipeline, cur_mid, pt);
+                    }
+                    else if (uniform_material_index &&
+                        cur_mid != dspm_data.m_material_id)
+                    {
+                        cur_mid = dspm_data.m_material_id;
+                        pushSingleMaterial(cmd, cur_pipeline, cur_mid, pt);
                     }
                     dynamic_offsets[1] = dspm_data.m_dynamic_offset;
                     vkCmdBindDescriptorSets(cmd,
@@ -2353,6 +2375,8 @@ void GEVulkanDrawCall::drawCommands(VkCommandBuffer cmd,
         dynamic_offsets[4] = m_materials_data[pipeline].first;
 
     bindDataDescriptor(cmd, current_buffer_idx, dynamic_offsets);
+    const bool uniform_material_index =
+        GEVulkanFeatures::usesUniformMaterialIndex();
     if (single_descriptor && indirect_buffer)
     {
         vkCmdDrawIndexedIndirect(cmd, indirect_buffer,
@@ -2377,6 +2401,11 @@ void GEVulkanDrawCall::drawCommands(VkCommandBuffer cmd,
         {
             cur_mid = mid;
             bindSingleMaterial(cmd, pipeline, cur_mid, pt);
+        }
+        else if (uniform_material_index && cur_mid != mid)
+        {
+            cur_mid = mid;
+            pushSingleMaterial(cmd, pipeline, cur_mid, pt);
         }
 
         bool use_base_vertex = cur_cmd.m_dynamic_offset == -1;
@@ -2502,8 +2531,10 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
         if (bind_mesh_textures && sbo_buffer != VK_NULL_HANDLE)
         {
             sbo_info_material.buffer = sbo_buffer;
+            // Without the materials (see generate) the range would be empty
             if (GEVulkanFeatures::supportsShaderDrawParameters() &&
-                GEVulkanFeatures::supportsMultiDrawIndirect())
+                GEVulkanFeatures::supportsMultiDrawIndirect() &&
+                !GEVulkanFeatures::usesUniformMaterialIndex())
             {
                 sbo_info_material.offset = m_object_data_padded_size;
                 sbo_info_material.range = m_materials_padded_size;
@@ -2886,6 +2917,26 @@ void GEVulkanDrawCall::bindSingleMaterial(VkCommandBuffer cmd,
 }   // bindSingleMaterial
 
 // ----------------------------------------------------------------------------
+void GEVulkanDrawCall::pushSingleMaterial(VkCommandBuffer cmd,
+                                          const std::string& cur_pipeline,
+                                          int material_id,
+                                          GEVulkanPipelineType pt)
+{
+    const PipelineData& data = m_graphics_pipelines.at(cur_pipeline);
+    if (data.m_pipelines.find(pt) == data.m_pipelines.end())
+        return;
+    const PipelineSettings& s = data.m_settings;
+    if (pt == GVPT_GHOST_DEPTH ||(pt == GVPT_DEPTH &&
+        s.m_material->texturelessDepth()))
+        return;
+    // The offset must be the same as the push constant of the mesh textures
+    // in sample_mesh_texture.glsl, after the push constants of the materials
+    // (see GEMaterialManager) and the glow outline color
+    vkCmdPushConstants(cmd, m_render_layout, VK_SHADER_STAGE_ALL_GRAPHICS,
+        MATERIAL_ID_PUSH_CONSTANT_OFFSET, sizeof(int), &material_id);
+}   // pushSingleMaterial
+
+// ----------------------------------------------------------------------------
 bool GEVulkanDrawCall::doDepthOnlyRenderingFirst()
 {
     enum Status
@@ -3186,7 +3237,10 @@ void GEVulkanDrawCall::generateDynamicSPM(GEVulkanDriver* vk)
                 if (node->getType() == irr::scene::ESNT_BILLBOARD ||
                     node->getType() == irr::scene::ESNT_PARTICLE_SYSTEM)
                 {
-                    if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
+                    // With the uniform material index the buffer is only for
+                    // 1 list of textures (see addBillboardNode)
+                    if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce() &&
+                        !GEVulkanFeatures::usesUniformMaterialIndex())
                     {
                         material_id = *m_texture_descriptor->getTextureID(
                             node->getMaterial(0), material);

@@ -24,7 +24,14 @@ layout(location = 1) out vec4 o_displace_ssr;
 layout(push_constant) uniform Constants
 {
     vec4 m_displace_direction;
+#ifdef MATERIAL_ID_UNIFORM
+    // Same offset as in utils/sample_mesh_texture.glsl
+    layout(offset = 32) int m_material_id;
+#endif
 } u_push_constants;
+#ifdef MATERIAL_ID_UNIFORM
+#define GE_MATERIAL_ID u_push_constants.m_material_id
+#endif
 
 // The set of the environment (skybox, and the cubemaps of the hits) in the
 // pipeline layout, the mesh textures are MESH_TEXTURES_SET of

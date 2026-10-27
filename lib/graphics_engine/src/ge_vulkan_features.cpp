@@ -5,6 +5,7 @@
 #include "ge_vulkan_shader_manager.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -12,8 +13,6 @@
 
 #include "../source/Irrlicht/os.h"
 #include <SDL_cpuinfo.h>
-
-extern "C" const char* Android_Custom_Vulkan_Driver_In_Use();
 
 namespace GE
 {
@@ -40,6 +39,14 @@ bool g_supports_dynamic_rendering_local_read = false;
 bool g_supports_ray_query = false;
 uint32_t g_as_max_geometry_count = 0;
 uint32_t g_as_scratch_alignment = 256;
+// 0 is not a valid VkDriverId, it means unknown
+int g_driver_id = 0;
+std::string g_driver_name;
+std::string g_driver_info;
+bool g_uniform_material_index_workaround = false;
+// Can force the workaround of g_uniform_material_index_workaround
+const char* UNIFORM_MATERIAL_ID_WORKAROUND_ENV =
+    "GE_UNIFORM_MATERIAL_ID_WORKAROUND";
 }   // GEVulkanFeatures
 
 extern "C" int enableRayQuery();
@@ -237,11 +244,44 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
     g_supports_shader_draw_parameters = false;
 #endif
 
-#if defined(__ANDROID__) && defined(__aarch64__)
-    // Freedreno is slow with bindless code
-    if (Android_Custom_Vulkan_Driver_In_Use() != NULL)
-        g_supports_bind_textures_at_once = false;
-#endif
+    // Used to decide the workaround for drivers which are slow when the mesh
+    // textures (bound at once) are indexed with a value that is not known to
+    // be uniform for the draw (see usesUniformMaterialIndex)
+    g_driver_id = 0;
+    g_driver_name.clear();
+    g_driver_info.clear();
+    bool has_driver_properties = vk->getPhysicalDeviceProperties().apiVersion >=
+        VK_API_VERSION_1_2;
+    for (VkExtensionProperties& prop : extensions)
+    {
+        if (strcmp(prop.extensionName,
+            VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME) == 0)
+            has_driver_properties = true;
+    }
+    if (has_driver_properties && vkGetPhysicalDeviceProperties2 &&
+        vk->getPhysicalDeviceProperties().apiVersion >= VK_API_VERSION_1_1)
+    {
+        VkPhysicalDeviceProperties2 properties = {};
+        properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        VkPhysicalDeviceDriverProperties driver_properties = {};
+        driver_properties.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+        properties.pNext = &driver_properties;
+        vkGetPhysicalDeviceProperties2(vk->getPhysicalDevice(), &properties);
+        g_driver_id = (int)driver_properties.driverID;
+        g_driver_name = driver_properties.driverName;
+        g_driver_info = driver_properties.driverInfo;
+    }
+
+    // Only Turnip is known to need it, add the other drivers (Honeykrisp,
+    // PanVK) here when they are tested, they can be forced by the environment
+    // variable in the meantime
+    g_uniform_material_index_workaround =
+        g_driver_id == VK_DRIVER_ID_MESA_TURNIP;
+    const char* force_workaround =
+        std::getenv(UNIFORM_MATERIAL_ID_WORKAROUND_ENV);
+    if (force_workaround != NULL && force_workaround[0] != '\0')
+        g_uniform_material_index_workaround = atoi(force_workaround) != 0;
 
     // Ray query needs Vulkan 1.2 (buffer device address and SPIR-V 1.4 are
     // core), the mesh textures (bound at once) for hit shading, and a few
@@ -308,6 +348,19 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
 // ----------------------------------------------------------------------------
 void GEVulkanFeatures::printStats()
 {
+    std::string driver_id;
+    if (!g_driver_name.empty())
+        driver_id += std::string(" (name: ") + g_driver_name + ")";
+    if (!g_driver_info.empty())
+        driver_id += std::string(" (info: ") + g_driver_info + ")";
+    if (!driver_id.empty())
+    {
+        driver_id.erase(driver_id.begin());
+        os::Printer::log("Vulkan driver id", driver_id.c_str());
+    }
+    os::Printer::log(
+        "Vulkan uses uniform material index for mesh textures (workaround)",
+        usesUniformMaterialIndex() ? "true" : "false");
     os::Printer::log(
         "Vulkan can bind textures at once in shader",
         supportsBindTexturesAtOnce() ? "true" : "false");
@@ -399,6 +452,19 @@ bool GEVulkanFeatures::supportsBindMeshTexturesAtOnce()
         GEVulkanShaderManager::getMeshTextureLayer();
     return g_max_sampler_supported >= sampler_count;
 }   // supportsBindMeshTexturesAtOnce
+
+// ----------------------------------------------------------------------------
+bool GEVulkanFeatures::usesUniformMaterialIndex()
+{
+    return g_uniform_material_index_workaround &&
+        supportsBindMeshTexturesAtOnce();
+}   // usesUniformMaterialIndex
+
+// ----------------------------------------------------------------------------
+int GEVulkanFeatures::getDriverID()
+{
+    return g_driver_id;
+}   // getDriverID
 
 // ----------------------------------------------------------------------------
 bool GEVulkanFeatures::supportsMultiDrawIndirect()

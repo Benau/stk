@@ -340,6 +340,11 @@ protected:
                             const std::string& cur_pipeline,
                             int material_id, GEVulkanPipelineType pt);
     // ------------------------------------------------------------------------
+    void pushSingleMaterial(VkCommandBuffer cmd,
+                            const std::string& cur_pipeline,
+                            int material_id,
+                            GEVulkanPipelineType pt);
+    // ------------------------------------------------------------------------
     void bindDataDescriptor(VkCommandBuffer cmd, int current_buffer_idx,
                             std::vector<uint32_t>& dynamic_offsets)
     {

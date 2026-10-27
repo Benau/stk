@@ -17,7 +17,8 @@ void main()
     f_uv = v_uv + u_object_buffer.m_objects[gl_InstanceIndex].m_texture_trans;
     f_uv_two = v_uv_two;
     f_material_id = u_object_buffer.m_objects[gl_InstanceIndex].m_material_id;
-#if defined(BIND_MESH_TEXTURES_AT_ONCE) && defined(SHADER_DRAW_PARAMETERS)
+// With MATERIAL_ID_UNIFORM the fragment shader uses a push constant instead
+#if defined(BIND_MESH_TEXTURES_AT_ONCE) && defined(SHADER_DRAW_PARAMETERS) && !defined(MATERIAL_ID_UNIFORM)
     if (f_material_id < 0)
         f_material_id = u_material_ids.m_material_id[gl_DrawIDARB];
 #endif

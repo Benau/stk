@@ -102,6 +102,11 @@ void updatePredefines()
         oss << "#define BIND_TEXTURES_AT_ONCE\n";
     if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
         oss << "#define BIND_MESH_TEXTURES_AT_ONCE\n";
+    // The material id of the draw is a push constant (workaround for the
+    // drivers slow with the index of mesh textures from a varying), see
+    // utils/sample_mesh_texture.glsl
+    if (GEVulkanFeatures::usesUniformMaterialIndex())
+        oss << "#define MATERIAL_ID_UNIFORM\n";
     if (GEVulkanFeatures::supportsRayQuery())
         oss << "#define RAY_QUERY_ENABLED\n";
 
@@ -205,6 +210,12 @@ std::vector<uint32_t> compileShader(shaderc_shader_kind kind,
     };
 
     ShadercResources res;
+    if (kind == shaderc_fragment_shader)
+    {
+        // The material id push constant is only in the fragment shaders
+        shaderc_compile_options_add_macro_definition(res.options,
+            "GE_FRAGMENT_SHADER", 18, "1", 1);
+    }
     // Ray query needs SPIR-V 1.4 (Vulkan 1.2), only for the shaders using it
     if (shader_data.find("GL_EXT_ray_query") != std::string::npos)
     {
