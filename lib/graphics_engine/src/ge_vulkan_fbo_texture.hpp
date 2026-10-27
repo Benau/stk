@@ -16,8 +16,8 @@ protected:
 
     std::vector<VkFramebuffer> m_rtt_frame_buffer;
 
-    // The one more image of the final chain (anti-aliasing), NULL if the FBO
-    // doesn't use it, see GEVulkanFinalChain
+    // The more images of the final chain (depth of field, anti-aliasing), NULL
+    // if the FBO doesn't use it, see GEVulkanFinalChain
     GEVulkanFinalTarget* m_final_target;
 public:
     // ------------------------------------------------------------------------
@@ -75,6 +75,11 @@ public:
                                                     { return m_depth_texture; }
     // ------------------------------------------------------------------------
     GEVulkanFinalTarget* getFinalTarget() const      { return m_final_target; }
+    // ------------------------------------------------------------------------
+    // True if the depth is stored by the last render pass and left in shader
+    // read only layout, so the stages of the final chain which need it (depth
+    // of field) can sample it
+    virtual bool hasStoredDepth() const                       { return false; }
     // ------------------------------------------------------------------------
     // Takes the ownership (deletes the previous one)
     void setFinalTarget(GEVulkanFinalTarget* target);

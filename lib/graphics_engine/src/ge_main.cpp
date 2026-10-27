@@ -48,7 +48,13 @@ GEConfig g_config =
     0.5f,
     3.0f,
     1.0f,
-    GAA_NONE
+    GAA_NONE,
+    false,
+    72.0f,
+    0.0f,
+    360.0f,
+    0.0f,
+    3.5f
 };
 std::string g_shader_folder = "";
 std::chrono::steady_clock::time_point g_mono_start =
@@ -307,6 +313,10 @@ void refreshDeferredSplit()
     // shaders before the lighting pass
     if (g_config.m_god_rays)
         g_config.m_deferred_split |= 1 << 6;
+    // The depth of field reads the depth which the FBO keeps after its last
+    // render pass (a regular sampled texture, not a transient attachment)
+    if (isDepthOfFieldEnabled())
+        g_config.m_deferred_split |= 1 << 7;
 }
 
 void setLogCallback(GELogCallback callback)
@@ -348,6 +358,17 @@ bool isAntiAliasingEnabled()
 {
     return g_config.m_anti_aliasing != GAA_NONE &&
         GEVulkanFeatures::supportsComputeInMainQueue();
+}
+
+bool isDepthOfFieldEnabled()
+{
+    return g_config.m_dof && g_config.m_pbr &&
+        GEVulkanFeatures::supportsComputeInMainQueue();
+}
+
+bool isFinalChainEnabled()
+{
+    return isAntiAliasingEnabled() || isDepthOfFieldEnabled();
 }
 
 GEAntiAliasing getAntiAliasingFromName(const std::string& name)

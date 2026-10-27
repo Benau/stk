@@ -6,6 +6,7 @@
 #include "dimension2d.h"
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -46,64 +47,93 @@ struct GEVulkanFinalPool
 };   // GEVulkanFinalPool
 
 // What an FBO (GEVulkanFBOTexture) stores when the final chain is used: the
-// one more image which the stages write to (the other image is the one of the
-// FBO), and the descriptor sets of them
+// two images which the stages write to (the image of the FBO itself is only
+// read, by the first stage, so it never has to be a storage image: its format
+// is bgra8 which not all the devices support as storage image), and the
+// descriptor sets of them
 class GEVulkanFinalTarget
 {
 public:
-    // Same size as the FBO, rgba8, storage image (always in general layout
-    // while the chain uses it)
-    GEVulkanAttachmentTexture* m_image;
+    // Same size as the FBO, rgba8, storage images (always in general layout
+    // while the chain uses it). The stage k (of the ones which run for this
+    // target, in order) writes m_images[k % 2] and reads the FBO if k is 0,
+    // m_images[(k - 1) % 2] otherwise. m_images[1] is NULL (not created) if
+    // only one stage runs
+    std::array<GEVulkanAttachmentTexture*, 2> m_images;
 
-    // True if the last stage writes m_image: it is the final image, in shader
-    // read only layout after the chain, and what samples the FBO uses it
-    // (GEVulkanFBOTexture::getImageView), so nothing is copied back to the
-    // image of the FBO. Otherwise the last stage writes the image of the FBO.
+    // Which of the stages of the chain run for this target (bit i = stage i),
+    // the stages which need the depth don't run if the FBO doesn't keep it.
     // Set once, when the target is created
-    bool m_result_in_image;
+    uint32_t m_stage_mask;
+
+    // How many bits of m_stage_mask are set, the last stage writes
+    // m_images[(m_stage_count - 1) % 2]: it's the final image, in shader read
+    // only layout after the chain, and what samples the FBO uses it
+    // (GEVulkanFBOTexture::getImageView), so nothing is copied back to the
+    // image of the FBO
+    unsigned m_stage_count;
 
     // The sets of the layout of GEVulkanFinalChain::getIOLayout():
-    // [0] = image of the FBO (sampled) -> m_image (storage)
-    // [1] = m_image (sampled) -> image of the FBO (storage). RESERVED for the
-    // second stage of the chain (see GEVulkanFinalChain::render), it's
-    // VK_NULL_HANDLE (not created) until the image of the FBO can be a
-    // storage image, so only one stage can run now
-    std::array<VkDescriptorSet, 2> m_sets;
+    // [0] = image of the FBO (sampled) -> m_images[0] (storage), for the first
+    //       stage
+    // [1] = m_images[0] (sampled) -> m_images[1] (storage), for the stages 1,
+    //       3...
+    // [2] = m_images[1] (sampled) -> m_images[0] (storage), for the stages 2,
+    //       4... [1] and [2] are VK_NULL_HANDLE if there is one stage only
+    // Binding 2 of all of them is the depth of the FBO (if it keeps it)
+    std::array<VkDescriptorSet, 3> m_sets;
 
     std::shared_ptr<GEVulkanFinalPool> m_pool;
     // ------------------------------------------------------------------------
     GEVulkanFinalTarget()
     {
-        m_image = NULL;
-        m_result_in_image = true;
-        m_sets = {{ VK_NULL_HANDLE, VK_NULL_HANDLE }};
+        m_images = {{ NULL, NULL }};
+        m_stage_mask = 0;
+        m_stage_count = 0;
+        m_sets = {{ VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE }};
     }
     // ------------------------------------------------------------------------
     ~GEVulkanFinalTarget();
     // ------------------------------------------------------------------------
-    // True if what samples the FBO has to use m_image
+    // The image the last stage writes
+    GEVulkanAttachmentTexture* getResultImage() const
+    {
+        return m_stage_count == 0 ? NULL :
+            m_images[(m_stage_count - 1) % 2];
+    }
+    // ------------------------------------------------------------------------
+    // True if what samples the FBO has to use getResultImage()
     bool isResultInImage() const
-        { return m_result_in_image && m_pool && m_pool->m_chain_alive; }
+    {
+        return getResultImage() && m_pool && m_pool->m_chain_alive;
+    }
 };   // GEVulkanFinalTarget
 
 // One step of the chain, rendered with compute shaders after the FBO is
 // rendered and before it is sampled by anything (the 2D renderer, or the
-// users of a separate render target): anti-aliasing now, and for example
-// depth of field, or an upscaler, later
+// users of a separate render target): the depth of field and the
+// anti-aliasing now, and for example an upscaler later
 class GEVulkanFinalStage
 {
 public:
     // ------------------------------------------------------------------------
     virtual ~GEVulkanFinalStage()                                            {}
     // ------------------------------------------------------------------------
-    // Outside of render pass. Reads binding 0 and writes binding 1 of
-    // io_set (set 0 of the pipeline layout of the stage, which must be
-    // created with GEVulkanFinalChain::getIOLayout()) and has to write all
-    // pixels of the image, also the ones which are not in any viewport. The
-    // first one of the chain is called with the layouts (shader read only
-    // for the sampled image, general for the storage image) and the memory
-    // barriers for the compute shaders of the chain already done, the
-    // chain does the barriers between the stages and after the last one
+    // True if the stage reads the depth of the FBO (binding 2 of io_set, in
+    // shader read only layout), so it only runs for the FBO which keeps it
+    // (GEVulkanFBOTexture::hasStoredDepth()), and only for the main one (not
+    // the separate render targets, see GEVulkanFinalChain::initTarget)
+    virtual bool needsDepth() const                           { return false; }
+    // ------------------------------------------------------------------------
+    // Outside of render pass. Reads binding 0 (and binding 2, the depth, if
+    // needsDepth()) and writes binding 1 of io_set (set 0 of the pipeline
+    // layout of the stage, which must be created with
+    // GEVulkanFinalChain::getIOLayout()) and has to write all pixels of the
+    // image, also the ones which are not in any viewport. The first one of
+    // the chain is called with the layouts (shader read only for the sampled
+    // image, general for the storage image) and the memory barriers for the
+    // compute shaders of the chain already done, the chain does the barriers
+    // between the stages and after the last one
     virtual void apply(VkCommandBuffer cmd, VkDescriptorSet io_set,
         const irr::core::dimension2d<irr::u32>& size,
         const std::vector<std::pair<GEVulkanDrawCall*,
@@ -113,23 +143,22 @@ public:
 // The last step of the rendering of a FBO (the main one, and the separate
 // render targets which have a GEVulkanFinalTarget), after its last render pass:
 //
-// 1. The stages of GEConfig (GEVulkanAntiAliasing for now) run in order, one
-//    reads what the previous one wrote. They ping-pong between the image of
-//    the FBO and GEVulkanFinalTarget::m_image: the first reads the FBO and
-//    writes m_image, the second would read m_image and write the FBO
-//    (GEVulkanFinalTarget::m_sets[1])...
+// 1. The stages of GEConfig run in order: the depth of field
+//    (GEVulkanDepthOfField, main FBO only), then the anti-aliasing
+//    (GEVulkanFXAA or GEVulkanAntiAliasing), so the edges between the sharp
+//    and the blurred areas are anti-aliased too. Both can be used at the same
+//    time, or only one of them. One reads what the previous one wrote: the
+//    first reads the FBO and writes GEVulkanFinalTarget::m_images[0], the
+//    second reads it and writes m_images[1], the third reads that and writes
+//    m_images[0]...
 // 2. The final image is the one the last stage wrote, in shader read only
-//    layout. If it is m_image, GEVulkanFBOTexture::getImageView returns the
-//    view of it, so everything which samples the FBO (the 2D renderer when it
-//    presents the main one, and the users of a separate target) reads it
-//    directly: no copy back to the image of the FBO
+//    layout. GEVulkanFBOTexture::getImageView returns the view of it, so
+//    everything which samples the FBO (the 2D renderer when it presents the
+//    main one, and the users of a separate target) reads it directly: no copy
+//    back to the image of the FBO
 //
-// To add a stage (DEPTH OF FIELD for example) that is not the last one:
-// implement GEVulkanFinalStage, add it in the constructor in the order it has
-// to run, and make m_sets[1] of the targets (initTarget) with the image of the
-// FBO created with VK_IMAGE_USAGE_STORAGE_BIT (a rgba8 FBO image, or the stages
-// can't write it) - the loop of render() already does the layout changes of
-// the ping-pong. It's not tested because there is no second stage yet
+// To add a stage: implement GEVulkanFinalStage and add it in the constructor in
+// the order it has to run
 class GEVulkanFinalChain
 {
 private:
@@ -167,10 +196,14 @@ public:
     const irr::core::dimension2d<irr::u32>& getCapacity() const
                                                          { return m_capacity; }
     // ------------------------------------------------------------------------
-    // Gives the FBO the one more image and the sets, after its createRTT(). It
+    // Gives the FBO the more images and the sets, after its createRTT(). It
     // does nothing (so render() does nothing for it, and the FBO is as it was)
-    // if there is no stage, or it's bigger than the capacity
-    void initTarget(GEVulkanFBOTexture* fbo);
+    // if there is no stage which can run for it, or it's bigger than the
+    // capacity. The stages which need the depth only run for the main FBO
+    // (main_target), which keeps it (GEVulkanFBOTexture::hasStoredDepth()):
+    // the separate render targets are what the GUI shows (the preview of a
+    // kart for example), their distances are not the ones of a race
+    void initTarget(GEVulkanFBOTexture* fbo, bool main_target);
     // ------------------------------------------------------------------------
     // After the last render pass of the FBO has ended (outside of render
     // pass), p are the draw calls (viewports) which were rendered to it

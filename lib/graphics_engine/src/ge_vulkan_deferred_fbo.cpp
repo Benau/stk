@@ -24,7 +24,9 @@ GEVulkanDeferredFBO::GEVulkanDeferredFBO(GEVulkanDriver* vk,
                    : GEVulkanFBOTexture(vk, size,
                      /*lazy_depth*/!(getGEConfig()->m_deferred_split != 0 ||
                      getGEConfig()->m_auto_deferred_type == GADT_DISPLACE)),
-                     m_swapchain_output(swapchain_output)
+                     m_swapchain_output(swapchain_output),
+                     m_keep_depth(getGEConfig()->m_deferred_split != 0 &&
+                     !s_creating_offscreen_rtt && isDepthOfFieldEnabled())
 {
     m_attachments = {};
     m_descriptor_layout.fill(VK_NULL_HANDLE);
@@ -878,11 +880,16 @@ void GEVulkanDeferredFBO::createDisplacePasses(unsigned mask_pass,
         attachment_desc[1].format = m_depth_texture->getInternalFormat();
         attachment_desc[1].samples = VK_SAMPLE_COUNT_1_BIT;
         attachment_desc[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-        attachment_desc[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        // The depth of field of the final chain samples the depth after this
+        // pass, so it's stored and left read only
+        attachment_desc[1].storeOp = m_keep_depth ?
+            VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
         attachment_desc[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         attachment_desc[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         attachment_desc[1].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        attachment_desc[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        attachment_desc[1].finalLayout = m_keep_depth ?
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
         VkAttachmentReference color_reference = { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
         VkAttachmentReference depth_reference = { 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
