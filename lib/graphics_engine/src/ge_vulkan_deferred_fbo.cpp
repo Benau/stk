@@ -285,6 +285,8 @@ void GEVulkanDeferredFBO::render(VkCommandBuffer cmd,
             rebind_base_vertex);
         q.first->renderPipeline(m_vk, cmd, GVPT_TRANSPARENT,
             rebind_base_vertex);
+        q.first->renderPipeline(m_vk, cmd, GVPT_BUBBLE,
+            rebind_base_vertex);
     }
     if (!getAttachment<GVDFT_DISPLACE_COLOR>())
         return;

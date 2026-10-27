@@ -26,15 +26,11 @@ layout(set = 3, binding = 3) uniform sampler2DArrayShadow u_shadow_map;
 #include "utils/get_vertex_color.glsl"
 #include "../utils/rgb_conversion.frag"
 #include "utils/global_light_data.glsl"
+#include "utils/bubble_utils.glsl"
 #include "utils/pbr_light.glsl"
 #include "utils/rt_utils.glsl"
 #include "utils/rt_scene.glsl"
 #include "utils/rt_reflection.glsl"
-
-// Only trace nearby shields. The fade is applied to the reflected contribution,
-// and the branch skips the ray query completely beyond the end distance
-const float BUBBLE_RT_FADE_START = 25.0;
-const float BUBBLE_RT_FADE_END = 45.0;
 
 void main()
 {
@@ -42,48 +38,17 @@ void main()
     if (base.a <= 0.0)
         discard;
 
-    vec3 color = convertColor(base.rgb);
-    vec3 normal = normalize(f_normal);
-    vec3 camera_pos = u_camera.m_inverse_view_matrix[3].xyz;
-    vec3 to_camera = normalize(camera_pos - f_world_position.xyz);
-    float facing = dot(normal, to_camera);
-    float NdotV = clamp(abs(facing), 0.0, 1.0);
-    float grazing = 1.0 - NdotV;
-
-    // Two-sided shield. Orient the normal toward the camera before reflecting
-    if (facing < 0.0)
-        normal = -normal;
-
-    float camera_distance = distance(camera_pos, f_world_position.xyz);
-    float reflection_fade = 1.0 - smoothstep(BUBBLE_RT_FADE_START,
-        BUBBLE_RT_FADE_END, camera_distance);
-    float reflection_weight = reflection_fade * grazing;
-
-    if (reflection_weight > 0.001)
+    BubbleData bubble = getBubbleData(base, f_normal, f_world_position);
+    vec3 reflection_color = vec3(0.0);
+    if (bubble.reflection_weight > 0.0)
     {
-        vec3 reflection_dir = normalize(reflect(-to_camera, normal));
+        vec3 reflection_dir = getBubbleReflectionDirection(bubble);
         // A miss uses the skybox
         // Approximate gamma 1/2.2 with sqrt to avoid pow()
-        vec3 reflection_color = sqrt(texture(u_skybox_texture, reflection_dir).rgb);
+        reflection_color = sqrt(texture(u_skybox_texture, reflection_dir).rgb);
         vec3 hit_color;
         if (traceReflection(f_world_position.xyz, reflection_dir, hit_color))
             reflection_color = convertColor(hit_color);
-        color = mix(color, reflection_color, reflection_weight);
     }
-
-    // Keep the bubble's texture alpha, with the view-angle opacity
-    float alpha = base.a * (grazing * 0.4 + 0.6);
-
-    // Match transparent.frag's fog behavior
-    if (u_global_light.m_fog_density > 0.0)
-    {
-        vec3 xpos = (u_camera.m_view_matrix * f_world_position).xyz;
-        float fog = smoothstep(u_global_light.m_fog_range.x,
-            u_global_light.m_fog_range.y, length(xpos));
-        fog = min(fog, u_global_light.m_fog_color.a);
-        color = mix(color, u_global_light.m_fog_color.rgb, fog);
-    }
-
-    // The alpha-blend pipeline expects premultiplied color
-    o_color = vec4(color * alpha, alpha);
+    o_color = finishBubble(bubble, f_world_position, reflection_color);
 }

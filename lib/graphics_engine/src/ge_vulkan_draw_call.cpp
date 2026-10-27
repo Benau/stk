@@ -1081,12 +1081,18 @@ void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
             settings.m_pipeline_type = GVPT_DISPLACE_COLOR;
         else if (p.first == "bubble")
         {
+            settings.m_pipeline_type = GVPT_BUBBLE;
             if (m_solid_rt_layout != VK_NULL_HANDLE)
             {
                 settings.m_custom_pl = m_solid_rt_layout;
-                settings.m_pipeline_type = GVPT_BUBBLE;
                 createPipeline(vk, settings, dp_cache);
-                settings.m_custom_pl = VK_NULL_HANDLE;
+            }
+            else if (getGEConfig()->m_pbr)
+            {
+                GEMaterial bubble_material = *p.second;
+                bubble_material.m_fragment_shader = "bubble_nort.frag";
+                settings.loadMaterial(bubble_material);
+                createPipeline(vk, settings, dp_cache);
             }
             else
             {
@@ -1094,6 +1100,7 @@ void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
                     GEMaterialManager::getIrrMaterialType("bubble")] =
                     GEMaterialManager::getIrrMaterialType("alphablend");
             }
+            settings.m_custom_pl = VK_NULL_HANDLE;
             continue;
         }
         createPipeline(vk, settings, dp_cache);
@@ -2224,9 +2231,18 @@ void GEVulkanDrawCall::renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
         }
         case GVPT_BUBBLE:
         {
-            if (!bindRTLayout(vk, cmd, current_buffer_idx, dynamic_offsets))
-                return;
-            m_render_layout = m_solid_rt_layout;
+            if (m_solid_rt_layout != VK_NULL_HANDLE)
+            {
+                if (!bindRTLayout(vk, cmd, current_buffer_idx,
+                    dynamic_offsets))
+                    return;
+                m_render_layout = m_solid_rt_layout;
+            }
+            else
+            {
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    m_pipeline_layout, 2, 1, getEnvDescriptorSet(vk), 0, NULL);
+            }
             break;
         }
         default:
