@@ -884,11 +884,8 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
                 rebind_base_vertex);
             q.first->renderPipeline(m_vk, cmd, GVPT_TRANSPARENT,
                 rebind_base_vertex);
-            if (m_solid_rt)
-            {
-                q.first->renderPipeline(m_vk, cmd, GVPT_BUBBLE,
-                    rebind_base_vertex);
-            }
+            q.first->renderPipeline(m_vk, cmd, GVPT_BUBBLE,
+                rebind_base_vertex);
         }
     }
     // The pass leaves the output in shader read only layout, the lighting pass

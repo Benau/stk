@@ -3014,6 +3014,8 @@ void GEVulkanDriver::renderDrawCalls(
                 rebind_base_vertex);
             q.first->renderPipeline(this, cmd, GVPT_TRANSPARENT,
                 rebind_base_vertex);
+            q.first->renderPipeline(this, cmd, GVPT_BUBBLE,
+                rebind_base_vertex);
             PrimitivesDrawn += q.first->getPolyCount();
         }
     }
