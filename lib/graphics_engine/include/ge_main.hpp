@@ -195,10 +195,40 @@ float m_ssao_k;
 float m_ssao_sigma;
 // See GEAntiAliasing, use isAntiAliasingEnabled() to know if it's used
 GEAntiAliasing m_anti_aliasing;
+// Depth of field of the final image (a stage of GEVulkanFinalChain which runs
+// before the anti-aliasing, see GEVulkanDepthOfField), use
+// isDepthOfFieldEnabled() to know if it's used. Needs the split deferred FBO
+// (it's selected by refreshDeferredSplit()) because it reads the depth of it.
+// Only the main FBO has it, not the separate render targets. Changing it needs
+// the swapchain to be created again, like the anti-aliasing
+bool m_dof;
+// The next ones can be changed any time. Distances are in world units, from
+// the position of the camera (the distance of the point, not the depth along
+// the view direction, so it doesn't change when the camera rotates):
+// distance of the center of the zone which is in focus
+float m_dof_focus_distance;
+// Half of the length of the zone which is in focus: nothing is blurred in
+// [focus_distance - focus_range, focus_distance + focus_range]
+float m_dof_focus_range;
+// Length behind the zone in focus where the blur grows to the maximum
+float m_dof_far_transition;
+// Same in front of the zone in focus, 0 (default) disables the blur of the
+// objects close to the camera
+float m_dof_near_transition;
+// Radius of the maximum blur in pixels of an image 1080 pixels high (it's
+// scaled with the height of the viewport, so the blur is the same part of the
+// screen at any resolution, render scale and splitscreen). Up to ~16
+float m_dof_max_radius;
 };
 
 // True if GEConfig::m_anti_aliasing is not GAA_NONE and the device can run it
 bool isAntiAliasingEnabled();
+// True if GEConfig::m_dof is on, the device can run it and the pbr shaders are
+// used (the split deferred FBO is needed)
+bool isDepthOfFieldEnabled();
+// True if the scene is rendered to a FBO which has the stages of
+// GEVulkanFinalChain: the anti-aliasing or the depth of field
+bool isFinalChainEnabled();
 // The anti-aliasing of the lower case name the game saves in its config: "fxaa"
 // or "cmaa2", GAA_NONE for any other name (the game resolves the names of the
 // other renderers itself)

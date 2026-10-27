@@ -1,0 +1,56 @@
+// Last pass of GEVulkanDepthOfField: the sharp image and the blurred half size
+// one are mixed for every pixel of the viewport by the circle of confusion
+// (coc) of the pixel, which is computed again from the depth at full
+// resolution. The upsample is bilinear but the samples with another coc than
+// the pixel have much less weight, so a sharp edge stays sharp and the
+// colors of the other side of it don't bleed in
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+#include "utils/dof_common.glsl"
+
+layout(set = 0, binding = 0) uniform sampler2D u_color;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D u_dst;
+layout(set = 2, binding = 0) uniform sampler2D u_half;
+
+#include "utils/dof_depth.glsl"
+
+// The blurred image replaces the sharp one completely from this coc (the half
+// size image is softer even where the radius is small)
+const float BLEND_RANGE = 0.3;
+
+void main()
+{
+    const ivec2 pos = ivec2(gl_GlobalInvocationID.xy) + pc.m_rect.xy;
+    if (any(greaterThanEqual(pos, pc.m_rect.zw)))
+        return;
+
+    const vec4 sharp = texelFetch(u_color, pos, 0);
+    const float coc = dofCoc(dofDistance(pos));
+    const float amount = smoothstep(0.0, BLEND_RANGE, abs(coc));
+    if (amount <= 0.0)
+    {
+        imageStore(u_dst, pos, sharp);
+        return;
+    }
+
+    // The 4 pixels of the half size image around the center of the pixel
+    const vec2 half_pos = (vec2(pos) + 0.5) * 0.5 - 0.5;
+    const vec2 base = floor(half_pos);
+    const vec2 f = half_pos - base;
+    vec3 sum = vec3(0.0);
+    float weight = 0.0;
+    for (int i = 0; i < 4; i++)
+    {
+        const ivec2 o = ivec2(i & 1, i >> 1);
+        const ivec2 texel = clamp(ivec2(base) + o, pc.m_half_rect.xy,
+            pc.m_half_rect.zw - 1);
+        const vec4 s = texelFetch(u_half, texel, 0);
+        const float bilinear = (o.x == 0 ? 1.0 - f.x : f.x) *
+            (o.y == 0 ? 1.0 - f.y : f.y);
+        const float w = (bilinear + 1.0e-4) *
+            (0.02 + exp(-12.0 * abs(s.a - coc)));
+        sum += s.rgb * w;
+        weight += w;
+    }
+    imageStore(u_dst, pos, vec4(mix(sharp.rgb, sum / weight, amount), sharp.a));
+}

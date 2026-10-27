@@ -246,8 +246,15 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
             }
             UserConfigParams::m_dynamic_lights = advanced_pipeline;
 
-            UserConfigParams::m_dof =
-                advanced_pipeline && getWidget<CheckBoxWidget>("dof")->getState();
+            bool dof_changed = false;
+            bool dof = advanced_pipeline &&
+                getWidget<CheckBoxWidget>("dof")->getState();
+            if (UserConfigParams::m_dof != dof)
+            {
+                dof_changed = true;
+                GE::getGEConfig()->m_dof = dof;
+            }
+            UserConfigParams::m_dof = dof;
 
             UserConfigParams::m_motionblur      =
                 advanced_pipeline && getWidget<CheckBoxWidget>("motionblur")->getState();
@@ -392,7 +399,7 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
                     need_recreate_swapchain = true;
                 if (need_recreate_swapchain || pbr_changed || ibl_changed ||
                     glow_changed || light_scatter_changed || bloom_changed ||
-                    ssao_changed || god_rays_changed ||
+                    ssao_changed || god_rays_changed || dof_changed ||
                     prev_shadow_size != GE::getGEConfig()->m_shadow_size ||
                     prev_shadow_type != GE::getGEConfig()->m_shadow_type)
                     GE::getVKDriver()->updateDriver(need_recreate_swapchain, pbr_changed, ibl_changed);
@@ -463,7 +470,7 @@ void CustomVideoSettingsDialog::updateActivation()
         light = false;
     }
     getWidget<CheckBoxWidget>("motionblur")->setActive(light);
-    getWidget<CheckBoxWidget>("dof")->setActive(light);
+    getWidget<CheckBoxWidget>("dof")->setActive(light || (vk && real_light));
     getWidget<SpinnerWidget>("shadows")->setActive(light || (vk && real_light));
     getWidget<SpinnerWidget>("anti_aliasing")->setActive(light || vk);
     getWidget<CheckBoxWidget>("ssao")->setActive(light || (vk && real_light));

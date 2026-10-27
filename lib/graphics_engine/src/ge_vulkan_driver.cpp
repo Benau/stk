@@ -1533,17 +1533,18 @@ found_mode:
         getGEConfig()->m_auto_deferred_type != GADT_DISABLED;
     bool deferred_split = getGEConfig()->m_deferred_split != 0;
     bool needs_deferred = auto_deferred || deferred_split;
-    // The anti-aliasing is applied to the final image of a FBO (compute
-    // shaders can't write the swapchain image and the GUI is drawn over it),
-    // so the scene is rendered to one (not to the swapchain image) even
-    // without render scaling and deferred rendering
-    const bool anti_aliasing = isAntiAliasingEnabled();
-    if (scale != 1.0f || needs_deferred || anti_aliasing)
+    // The stages of the final chain (depth of field, anti-aliasing) are
+    // applied to the final image of a FBO (compute shaders can't write the
+    // swapchain image and the GUI is drawn over it), so the scene is rendered
+    // to one (not to the swapchain image) even without render scaling and
+    // deferred rendering
+    const bool final_chain = isFinalChainEnabled();
+    if (scale != 1.0f || needs_deferred || final_chain)
     {
         core::dimension2du screen_size = ScreenSize;
         screen_size.Width *= scale;
         screen_size.Height *= scale;
-        bool swapchain_output = scale == 1.0f && !anti_aliasing;
+        bool swapchain_output = scale == 1.0f && !final_chain;
         core::dimension2du orig_ss = core::dimension2du(
             m_swap_chain_extent.width, m_swap_chain_extent.height);
         m_rtt_texture = deferred_split ?
@@ -1554,11 +1555,11 @@ found_mode:
             swapchain_output ? orig_ss : screen_size, swapchain_output) :
             new GEVulkanFBOTexture(this, screen_size);
         m_rtt_texture->createRTT();
-        if (anti_aliasing)
+        if (final_chain)
         {
             delete m_final_chain;
             m_final_chain = new GEVulkanFinalChain(this, screen_size);
-            m_final_chain->initTarget(m_rtt_texture);
+            m_final_chain->initTarget(m_rtt_texture, true/*main_target*/);
         }
     }
     else
@@ -2947,7 +2948,8 @@ void GEVulkanDriver::buildCommandBuffers()
     if (m_rtt_texture && !m_rtt_texture->useSwapChainOutput())
     {
         vkCmdEndRenderPass(getCurrentCommandBuffer());
-        // Anti-aliasing of the final image, before the 2D renderer samples it
+        // Depth of field and anti-aliasing of the final image, before the 2D
+        // renderer samples it
         if (m_final_chain)
         {
             m_final_chain->render(getCurrentCommandBuffer(), m_rtt_texture,
@@ -3055,8 +3057,9 @@ ITexture* GEVulkanDriver::addRenderTargetTexture(const core::dimension2d<u32>& s
         new GEVulkanFBOTexture(this, size);
     rtt->createRTT();
     // Anti-aliasing after the rendering of it, if there is a chain which can
+    // (the depth of field is only for the main FBO)
     if (m_final_chain)
-        m_final_chain->initTarget(rtt);
+        m_final_chain->initTarget(rtt, false/*main_target*/);
     return rtt;
 }   // addRenderTargetTexture
 

@@ -589,12 +589,14 @@ void GEVulkanDeferredFBOSplit::createRTT()
                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
                 false /* from_external */),
         };
-        if (!has_displace)
+        if (!has_displace || m_keep_depth)
         {
             deps.push_back(makeExternalDependency(
+                (m_keep_depth ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : 0) |
                 VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                (m_keep_depth ? VK_ACCESS_SHADER_WRITE_BIT : 0) |
                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT));
@@ -660,12 +662,15 @@ void GEVulkanDeferredFBOSplit::createRTT()
                 VK_ATTACHMENT_STORE_OP_STORE, VK_IMAGE_LAYOUT_UNDEFINED,
                 swapchain_last ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR :
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
-            // Displace passes after this one load the depth again
+            // Displace passes after this one load the depth again, and the
+            // depth of field of the final chain samples it after the last
+            // pass (m_keep_depth), with the same layout
             makeAttachment(depth_format, VK_ATTACHMENT_LOAD_OP_LOAD,
-                has_displace ? VK_ATTACHMENT_STORE_OP_STORE :
+                has_displace || m_keep_depth ? VK_ATTACHMENT_STORE_OP_STORE :
                 VK_ATTACHMENT_STORE_OP_DONT_CARE,
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-                has_displace ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
+                has_displace || m_keep_depth ?
+                VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
         };
         VkAttachmentReference color_reference =

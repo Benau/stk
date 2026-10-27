@@ -1,0 +1,58 @@
+// Second and third pass of GEVulkanDepthOfField (horizontal and then vertical,
+// at half size): a gaussian blur with a radius from the circle of confusion
+// (coc) of the pixel, which is the alpha and stays as it is. A sample only
+// counts if its own blur reaches the pixel (its radius is not smaller than the
+// distance), so the colors of a sharp object don't smear over the blurred
+// pixels around it. Never reads outside of the viewport
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+#include "utils/dof_common.glsl"
+
+// Linear, clamped
+layout(set = 2, binding = 0) uniform sampler2D u_src;
+layout(set = 2, binding = 1, rgba16f) uniform writeonly image2D u_dst;
+
+// Samples on each side, they are bilinear so a sample covers ~2 pixels
+const int TAPS = 4;
+
+void main()
+{
+    const ivec2 texel = pc.m_half_rect.xy + ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(texel, pc.m_half_rect.zw)))
+        return;
+
+    const vec4 center = texelFetch(u_src, texel, 0);
+    const float radius = abs(center.a) * pc.m_params.x;
+    if (radius < 0.5)
+    {
+        imageStore(u_dst, texel, center);
+        return;
+    }
+
+    const vec2 direction = pc.m_params.yz;
+    const vec2 inv_size = 1.0 / vec2(textureSize(u_src, 0));
+    // The centers of the pixels at the border are the limits of the filter
+    const vec2 low = vec2(pc.m_half_rect.xy) + 0.5;
+    const vec2 high = vec2(pc.m_half_rect.zw) - 0.5;
+    const vec2 origin = vec2(texel) + 0.5;
+
+    vec3 sum = center.rgb;
+    float weight = 1.0;
+    for (int i = 1; i <= TAPS; i++)
+    {
+        const float t = float(i) / float(TAPS);
+        const float dist = radius * t;
+        const float gauss = exp(-2.0 * t * t);
+        for (int side = -1; side <= 1; side += 2)
+        {
+            const vec2 pos = clamp(origin + direction * (dist * float(side)),
+                low, high);
+            const vec4 s = textureLod(u_src, pos * inv_size, 0.0);
+            const float reach = abs(s.a) * pc.m_params.x;
+            const float w = gauss * clamp(reach - dist + 1.0, 0.0, 1.0);
+            sum += s.rgb * w;
+            weight += w;
+        }
+    }
+    imageStore(u_dst, texel, vec4(sum / weight, center.a));
+}

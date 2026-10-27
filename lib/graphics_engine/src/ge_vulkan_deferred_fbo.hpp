@@ -55,6 +55,12 @@ protected:
     std::array<VkDescriptorSet, GVDFP_COUNT> m_descriptor_set;
 
     const bool m_swapchain_output;
+
+    // Decided when the FBO is created: the last render pass stores the depth
+    // and leaves it in shader read only layout, for the depth of field of
+    // GEVulkanFinalChain. Only the main FBO of the split deferred rendering
+    // (the depth is a regular texture there), not the separate render targets
+    const bool m_keep_depth;
     // ------------------------------------------------------------------------
     // True while a separate offscreen RTT (not the swapchain FBO) is being
     // created, see setCreatingOffscreenRTT
@@ -106,6 +112,8 @@ public:
     virtual bool isDeferredFBO() const                         { return true; }
     // ------------------------------------------------------------------------
     virtual bool useSwapChainOutput() const      { return m_swapchain_output; }
+    // ------------------------------------------------------------------------
+    virtual bool hasStoredDepth() const                { return m_keep_depth; }
     // ------------------------------------------------------------------------
     virtual unsigned getZeroClearCountForPass(unsigned pass) const
     {
