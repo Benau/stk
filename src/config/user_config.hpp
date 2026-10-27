@@ -1030,6 +1030,9 @@ namespace UserConfigParams
     PARAM_PREFIX BoolUserConfigParam        m_dof
             PARAM_DEFAULT(BoolUserConfigParam(false, "enable_dof",
             &m_graphics_quality, "Enable Depth of Field"));
+    PARAM_PREFIX BoolUserConfigParam        m_speed_streaks
+            PARAM_DEFAULT(BoolUserConfigParam(false, "enable_speed_streaks",
+            &m_graphics_quality, "Enable Speed Streaks"));
     PARAM_PREFIX BoolUserConfigParam        m_ssr
             PARAM_DEFAULT(BoolUserConfigParam(false, "ssr",
             &m_graphics_quality, "Enable screen space reflection"));
