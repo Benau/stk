@@ -23,7 +23,17 @@ bool supportsDescriptorIndexing();
 // ----------------------------------------------------------------------------
 bool supportsPartiallyBound();
 // ----------------------------------------------------------------------------
+// For the raster passes, false if the mesh textures are bound per material,
+// which is also used when the driver is faster this way (see
+// g_slow_bind_mesh_textures)
 bool supportsBindMeshTexturesAtOnce();
+// ----------------------------------------------------------------------------
+// Ray query is supported but the mesh textures are per material for the raster
+// passes, so GEVulkanTextureDescriptor has to provide an array for ray query
+bool needsRTMeshTextureMirror();
+// ----------------------------------------------------------------------------
+// VkDriverId of VkPhysicalDeviceDriverProperties, 0 if unknown
+int getDriverID();
 // ----------------------------------------------------------------------------
 bool supportsMultiDrawIndirect();
 // ----------------------------------------------------------------------------

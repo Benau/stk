@@ -23,8 +23,12 @@ static void destroyLayout(VkDescriptorSetLayout* layout)
 GEVulkanTextureDescriptor::GEVulkanTextureDescriptor(unsigned max_texture_list,
                                                      unsigned max_layer,
                                                      bool single_descriptor,
-                                                     unsigned binding)
+                                                     unsigned binding,
+                                                     bool rt_array)
                          : m_descriptor_pool(VK_NULL_HANDLE),
+                           m_rt_descriptor_pool(VK_NULL_HANDLE),
+                           m_rt_descriptor_set(VK_NULL_HANDLE),
+                           m_rt_array(rt_array && !single_descriptor),
                            m_original_capacity(max_texture_list),
                            m_max_texture_list(max_texture_list),
                            m_max_layer(max_layer), m_binding(binding),
@@ -41,7 +45,8 @@ GEVulkanTextureDescriptor::GEVulkanTextureDescriptor(unsigned max_texture_list,
     m_vk = getVKDriver();
 
     // m_descriptor_set_layout
-    m_descriptor_set_layout = createLayout(m_max_texture_list);
+    m_descriptor_set_layout = createLayout(m_max_texture_list,
+        m_single_descriptor);
     buildPool(m_max_texture_list);
 
     m_sampler_use = GVS_NEAREST;
@@ -55,24 +60,30 @@ GEVulkanTextureDescriptor::GEVulkanTextureDescriptor(unsigned max_texture_list,
 GEVulkanTextureDescriptor::~GEVulkanTextureDescriptor()
 {
     m_descriptor_set_layout.reset();
+    m_rt_descriptor_set_layout.reset();
     vkDestroyDescriptorPool(m_vk->getDevice(), m_descriptor_pool, NULL);
+    if (m_rt_descriptor_pool != VK_NULL_HANDLE)
+    {
+        vkDestroyDescriptorPool(m_vk->getDevice(), m_rt_descriptor_pool,
+            NULL);
+    }
 }   // ~GEVulkanTextureDescriptor
 
 // ----------------------------------------------------------------------------
 std::shared_ptr<VkDescriptorSetLayout> GEVulkanTextureDescriptor::createLayout(
-                                                       unsigned capacity) const
+                                          unsigned capacity, bool single) const
 {
     std::vector<VkDescriptorSetLayoutBinding> texture_layout_binding;
     texture_layout_binding.resize(1);
     texture_layout_binding[0].binding = m_binding;
     texture_layout_binding[0].descriptorCount =
-        m_single_descriptor ? capacity * m_max_layer : 1;
+        single ? capacity * m_max_layer : 1;
     texture_layout_binding[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     texture_layout_binding[0].pImmutableSamplers = NULL;
     // The compute shader of GEVulkanRTShadow samples the textures of the hits
     texture_layout_binding[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT |
         VK_SHADER_STAGE_COMPUTE_BIT;
-    if (!m_single_descriptor)
+    if (!single)
     {
         texture_layout_binding.resize(m_max_layer, texture_layout_binding[0]);
         for (unsigned i = 1; i < m_max_layer; i++)
@@ -109,7 +120,7 @@ void GEVulkanTextureDescriptor::buildPool(unsigned new_capacity)
     // For single_descriptor the layout's descriptorCount encodes the array
     // size seen by the shader — it must change together with the pool.
     if (m_single_descriptor && new_capacity != m_max_texture_list)
-        m_descriptor_set_layout = createLayout(new_capacity);
+        m_descriptor_set_layout = createLayout(new_capacity, true);
     m_max_texture_list = new_capacity;
 
     // m_descriptor_pool
@@ -149,7 +160,53 @@ void GEVulkanTextureDescriptor::buildPool(unsigned new_capacity)
         throw std::runtime_error("vkAllocateDescriptorSets failed in "
             "GEVulkanTextureDescriptor::buildPool");
     }
+    buildRTPool();
 }   // buildPool
+
+// ----------------------------------------------------------------------------
+/** Builds the single array descriptor set of m_rt_array, with the capacity
+ *  (m_max_texture_list) the layout of the array depends on.
+ */
+void GEVulkanTextureDescriptor::buildRTPool()
+{
+    if (!m_rt_array)
+        return;
+    if (m_rt_descriptor_pool != VK_NULL_HANDLE)
+    {
+        vkDestroyDescriptorPool(m_vk->getDevice(), m_rt_descriptor_pool, NULL);
+        m_rt_descriptor_pool = VK_NULL_HANDLE;
+    }
+    m_rt_descriptor_set_layout = createLayout(m_max_texture_list, true);
+
+    VkDescriptorPoolSize pool_size;
+    pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pool_size.descriptorCount = m_max_texture_list * m_max_layer;
+
+    VkDescriptorPoolCreateInfo pool_info = {};
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.flags = 0;
+    pool_info.maxSets = 1;
+    pool_info.poolSizeCount = 1;
+    pool_info.pPoolSizes = &pool_size;
+    if (vkCreateDescriptorPool(m_vk->getDevice(), &pool_info, NULL,
+        &m_rt_descriptor_pool) != VK_SUCCESS)
+    {
+        throw std::runtime_error("vkCreateDescriptorPool failed in "
+            "GEVulkanTextureDescriptor::buildRTPool");
+    }
+
+    VkDescriptorSetAllocateInfo alloc_info = {};
+    alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc_info.descriptorPool = m_rt_descriptor_pool;
+    alloc_info.descriptorSetCount = 1;
+    alloc_info.pSetLayouts = &*m_rt_descriptor_set_layout;
+    if (vkAllocateDescriptorSets(m_vk->getDevice(), &alloc_info,
+        &m_rt_descriptor_set) != VK_SUCCESS)
+    {
+        throw std::runtime_error("vkAllocateDescriptorSets failed in "
+            "GEVulkanTextureDescriptor::buildRTPool");
+    }
+}   // buildRTPool
 
 // ----------------------------------------------------------------------------
 /** Destroys and recreates the descriptor pool (and, for single_descriptor
@@ -273,6 +330,21 @@ void GEVulkanTextureDescriptor::updateDescriptor()
         }
         vkUpdateDescriptorSets(m_vk->getDevice(), all_sets.size(),
             all_sets.data(), 0, NULL);
+    }
+    if (m_rt_array)
+    {
+        // Same images, as an array of the slots (slot * max_layer + layer)
+        VkWriteDescriptorSet write_descriptor_set = {};
+        write_descriptor_set.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write_descriptor_set.dstBinding = m_binding;
+        write_descriptor_set.dstArrayElement = 0;
+        write_descriptor_set.descriptorType =
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write_descriptor_set.descriptorCount = m_max_texture_list * m_max_layer;
+        write_descriptor_set.dstSet = m_rt_descriptor_set;
+        write_descriptor_set.pImageInfo = image_infos.data();
+        vkUpdateDescriptorSets(m_vk->getDevice(), 1, &write_descriptor_set, 0,
+            NULL);
     }
 }   // updateDescriptor
 

@@ -982,7 +982,7 @@ void GEVulkanDrawCall::createPipelineLayout(GEVulkanDriver* vk)
             m_data_layout,
             rtt->getDescriptorSetLayout(GVDFP_HDR),
             vk->getSkyBoxRenderer()->getEnvDescriptorSetLayout(),
-            *tdsl
+            *m_texture_descriptor->getRTDescriptorSetLayout()
         };
         pipeline_layout_info.setLayoutCount = rt_layouts.size();
         pipeline_layout_info.pSetLayouts = rt_layouts.data();
@@ -2172,7 +2172,7 @@ bool GEVulkanDrawCall::bindRTLayout(GEVulkanDriver* vk, VkCommandBuffer cmd,
         m_solid_rt_layout, 3, 1, getEnvDescriptorSet(vk), 0, NULL);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
         m_solid_rt_layout, 4, 1,
-        m_texture_descriptor->getDescriptorSet(), 0, NULL);
+        m_texture_descriptor->getRTDescriptorSet(), 0, NULL);
     return true;
 }   // bindRTLayout
 
@@ -2873,6 +2873,12 @@ void GEVulkanDrawCall::bindSingleMaterial(VkCommandBuffer cmd,
                                           int material_id,
                                           GEVulkanPipelineType pt)
 {
+    // The ray traced layout has the scene as set 0, its material comes from
+    // the object data (the slot) which indexes the array of the mesh textures
+    // (set 4, see GEVulkanTextureDescriptor::getRTDescriptorSet)
+    if (m_solid_rt_layout != VK_NULL_HANDLE &&
+        m_render_layout == m_solid_rt_layout)
+        return;
     const PipelineData& data = m_graphics_pipelines.at(cur_pipeline);
     if (data.m_pipelines.find(pt) == data.m_pipelines.end())
         return;

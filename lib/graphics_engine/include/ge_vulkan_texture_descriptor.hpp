@@ -49,6 +49,19 @@ class GEVulkanTextureDescriptor
 
     std::vector<VkDescriptorSet> m_descriptor_sets;
 
+    // Used when the descriptor sets above are per material (not bound at once
+    // in the shader, which is faster on some drivers, see
+    // GEVulkanFeatures::supportsBindMeshTexturesAtOnce) and the textures are
+    // also needed as one array (ray query): the same textures with the same
+    // slots, only in a single descriptor set, updated together with the others
+    std::shared_ptr<VkDescriptorSetLayout> m_rt_descriptor_set_layout;
+
+    VkDescriptorPool m_rt_descriptor_pool;
+
+    VkDescriptorSet m_rt_descriptor_set;
+
+    const bool m_rt_array;
+
     // Initial capacity; rebuildPool() can grow m_max_texture_list beyond this,
     // and clear() shrinks it back.
     const unsigned m_original_capacity;
@@ -77,16 +90,19 @@ class GEVulkanTextureDescriptor
     bool m_needs_update_descriptor;
 
     // ------------------------------------------------------------------------
-    std::shared_ptr<VkDescriptorSetLayout> createLayout(
-                                                      unsigned capacity) const;
+    std::shared_ptr<VkDescriptorSetLayout> createLayout(unsigned capacity,
+                                                        bool single) const;
+    // ------------------------------------------------------------------------
+    void buildRTPool();
     // ------------------------------------------------------------------------
     void buildPool(unsigned new_capacity);
     // ------------------------------------------------------------------------
     void rebuildPool(unsigned new_capacity);
 public:
     // ------------------------------------------------------------------------
+    // rt_array is ignored if single_descriptor is true (it's already an array)
     GEVulkanTextureDescriptor(unsigned max_texture_list, unsigned max_layer,
-        bool single_descriptor, unsigned binding = 0);
+        bool single_descriptor, unsigned binding = 0, bool rt_array = false);
     // ------------------------------------------------------------------------
     ~GEVulkanTextureDescriptor();
     // ------------------------------------------------------------------------
@@ -129,6 +145,20 @@ public:
     // ------------------------------------------------------------------------
     VkDescriptorSet* getDescriptorSet()
                                            { return m_descriptor_sets.data(); }
+    // ------------------------------------------------------------------------
+    // The set and its layout where all textures are an array, indexed by
+    // slot * max_layer + layer (ray query), the same ones as above if this is
+    // a single descriptor already
+    VkDescriptorSet* getRTDescriptorSet()
+    {
+        return m_rt_array ? &m_rt_descriptor_set : m_descriptor_sets.data();
+    }
+    // ------------------------------------------------------------------------
+    std::shared_ptr<VkDescriptorSetLayout> getRTDescriptorSetLayout() const
+    {
+        return m_rt_array ? m_rt_descriptor_set_layout :
+            m_descriptor_set_layout;
+    }
     // ------------------------------------------------------------------------
     GEVulkanSampler getSamplerUse() const             { return m_sampler_use; }
     // ------------------------------------------------------------------------

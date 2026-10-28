@@ -5,6 +5,7 @@
 #include "ge_vulkan_shader_manager.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -40,6 +41,20 @@ bool g_supports_dynamic_rendering_local_read = false;
 bool g_supports_ray_query = false;
 uint32_t g_as_max_geometry_count = 0;
 uint32_t g_as_scratch_alignment = 256;
+// Textures can be an array in shader (before the overrides which make the mesh
+// textures per material, those are for the raster passes)
+bool g_bind_textures_hw = false;
+// 0 is not a valid VkDriverId, it means unknown
+int g_driver_id = 0;
+std::string g_driver_name;
+std::string g_driver_info;
+// The drivers (Turnip) which are much slower when the textures are indexed in
+// the shader (no prefetch of the texture as the index isn't a constant), the
+// textures are bound per material then (the same as when the textures can't be
+// bound at once)
+bool g_slow_bind_all_textures = false;
+// Can force g_slow_bind_all_textures, 1 is per material, 0 is bound at once
+const char* SLOW_BIND_ALL_TEXTURES_ENV = "GE_NO_BIND_ALL_TEXTURES";
 }   // GEVulkanFeatures
 
 extern "C" int enableRayQuery();
@@ -237,18 +252,45 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
     g_supports_shader_draw_parameters = false;
 #endif
 
-#if defined(__ANDROID__) && defined(__aarch64__)
-    // Freedreno is slow with bindless code
-    if (Android_Custom_Vulkan_Driver_In_Use() != NULL)
-        g_supports_bind_textures_at_once = false;
-#endif
+    const bool original_bind_mesh_textures = supportsBindMeshTexturesAtOnce();
+    g_driver_id = 0;
+    g_driver_name.clear();
+    g_driver_info.clear();
+    bool has_driver_properties = vk->getPhysicalDeviceProperties().apiVersion >=
+        VK_API_VERSION_1_2;
+    for (VkExtensionProperties& prop : extensions)
+    {
+        if (strcmp(prop.extensionName,
+            VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME) == 0)
+            has_driver_properties = true;
+    }
+    if (has_driver_properties && vkGetPhysicalDeviceProperties2 &&
+        vk->getPhysicalDeviceProperties().apiVersion >= VK_API_VERSION_1_1)
+    {
+        VkPhysicalDeviceProperties2 properties = {};
+        properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        VkPhysicalDeviceDriverProperties driver_properties = {};
+        driver_properties.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+        properties.pNext = &driver_properties;
+        vkGetPhysicalDeviceProperties2(vk->getPhysicalDevice(), &properties);
+        g_driver_id = (int)driver_properties.driverID;
+        g_driver_name = driver_properties.driverName;
+        g_driver_info = driver_properties.driverInfo;
+    }
+    // Only Turnip is known to need it, add the other drivers here when they
+    // are tested, they can be forced by the environment variable meanwhile
+    g_slow_bind_all_textures = g_driver_id == VK_DRIVER_ID_MESA_TURNIP;
+    const char* force_per_material = std::getenv(SLOW_BIND_ALL_TEXTURES_ENV);
+    if (force_per_material != NULL && force_per_material[0] != '\0')
+        g_slow_bind_all_textures = atoi(force_per_material) != 0;
 
     // Ray query needs Vulkan 1.2 (buffer device address and SPIR-V 1.4 are
-    // core), the mesh textures (bound at once) for hit shading, and a few
+    // core), the mesh textures (as an array) for hit shading, and a few
     // descriptor sets for the ray traced pass
     g_supports_ray_query = false;
     if (vk->getPhysicalDeviceProperties().apiVersion >= VK_API_VERSION_1_2 &&
-        vkGetPhysicalDeviceFeatures2 && supportsBindMeshTexturesAtOnce() &&
+        vkGetPhysicalDeviceFeatures2 && original_bind_mesh_textures &&
         g_supports_dynamic_rendering && supportsComputeInMainQueue() &&
         vk->getPhysicalDeviceProperties().limits.maxBoundDescriptorSets >= 8)
     {
@@ -308,6 +350,19 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
 // ----------------------------------------------------------------------------
 void GEVulkanFeatures::printStats()
 {
+    std::string driver_id;
+    if (!g_driver_name.empty())
+        driver_id += std::string(" (name: ") + g_driver_name + ")";
+    if (!g_driver_info.empty())
+        driver_id += std::string(" (info: ") + g_driver_info + ")";
+    if (!driver_id.empty())
+    {
+        driver_id.erase(driver_id.begin());
+        os::Printer::log("Vulkan driver id", driver_id.c_str());
+    }
+    os::Printer::log(
+        "Vulkan has slow bind all textures at once (per material)",
+        g_slow_bind_all_textures ? "true" : "false");
     os::Printer::log(
         "Vulkan can bind textures at once in shader",
         supportsBindTexturesAtOnce() ? "true" : "false");
@@ -363,7 +418,8 @@ void GEVulkanFeatures::printStats()
 // ----------------------------------------------------------------------------
 bool GEVulkanFeatures::supportsBindTexturesAtOnce()
 {
-    return supportsDescriptorIndexing() && g_supports_bind_textures_at_once;
+    return supportsDescriptorIndexing() && g_supports_bind_textures_at_once &&
+        !g_slow_bind_all_textures;
 }   // supportsBindTexturesAtOnce
 
 // ----------------------------------------------------------------------------
@@ -399,6 +455,18 @@ bool GEVulkanFeatures::supportsBindMeshTexturesAtOnce()
         GEVulkanShaderManager::getMeshTextureLayer();
     return g_max_sampler_supported >= sampler_count;
 }   // supportsBindMeshTexturesAtOnce
+
+// ----------------------------------------------------------------------------
+bool GEVulkanFeatures::needsRTMeshTextureMirror()
+{
+    return supportsRayQuery() && !supportsBindMeshTexturesAtOnce();
+}   // needsRTMeshTextureMirror
+
+// ----------------------------------------------------------------------------
+int GEVulkanFeatures::getDriverID()
+{
+    return g_driver_id;
+}   // getDriverID
 
 // ----------------------------------------------------------------------------
 bool GEVulkanFeatures::supportsMultiDrawIndirect()

@@ -296,7 +296,7 @@ void GEVulkanRTShadow::createPipelines()
         rt_scene->getDescriptorSetLayout(),
         m_data_layout,
         m_layout,
-        *m_vk->getMeshTextureDescriptor()->getDescriptorSetLayout()
+        *m_vk->getMeshTextureDescriptor()->getRTDescriptorSetLayout()
     }};
     VkPipelineLayoutCreateInfo pipeline_layout_info = {};
     pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -364,7 +364,7 @@ bool GEVulkanRTShadow::render(VkCommandBuffer cmd,
             rt_scene->getDescriptorSet(m_vk->getCurrentBufferIdx()), 0, NULL);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
             m_pipeline_layout, 3, 1,
-            m_vk->getMeshTextureDescriptor()->getDescriptorSet(), 0, NULL);
+            m_vk->getMeshTextureDescriptor()->getRTDescriptorSet(), 0, NULL);
     }
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipeline_layout, 2, 1, &m_set, 0, NULL);
