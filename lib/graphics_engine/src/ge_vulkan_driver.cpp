@@ -652,7 +652,8 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
         m_mesh_texture_descriptor = new GEVulkanTextureDescriptor(
             GEVulkanShaderManager::getSamplerSize(),
             GEVulkanShaderManager::getMeshTextureLayer(),
-            GEVulkanFeatures::supportsBindMeshTexturesAtOnce());
+            GEVulkanFeatures::supportsBindMeshTexturesAtOnce(), 0,
+            GEVulkanFeatures::needsRTMeshTextureMirror());
         if (GEVulkanFeatures::supportsRayQuery())
             m_rt_scene = new GEVulkanRTScene(this);
     }
@@ -3134,7 +3135,8 @@ void GEVulkanDriver::updateDriver(bool scale_changed, bool pbr_changed,
         m_mesh_texture_descriptor = new GEVulkanTextureDescriptor(
             GEVulkanShaderManager::getSamplerSize(),
             GEVulkanShaderManager::getMeshTextureLayer(),
-            GEVulkanFeatures::supportsBindMeshTexturesAtOnce());
+            GEVulkanFeatures::supportsBindMeshTexturesAtOnce(), 0,
+            GEVulkanFeatures::needsRTMeshTextureMirror());
         m_mesh_texture_descriptor->setSamplerUse(sampler);
         GEVulkanMeshCache* mc = getVulkanMeshCache();
         if (!GEVulkanFeatures::supportsBaseVertexRendering())

@@ -1,4 +1,6 @@
-#ifdef BIND_MESH_TEXTURES_AT_ONCE
+// The ray traced passes (which define MESH_TEXTURES_SET) need the textures as
+// an array even if the raster passes have them per material
+#if defined(BIND_MESH_TEXTURES_AT_ONCE) || defined(MESH_TEXTURES_SET)
 // The includer can change the set (the ray traced pass has it as set 4)
 #ifndef MESH_TEXTURES_SET
 #define MESH_TEXTURES_SET 0

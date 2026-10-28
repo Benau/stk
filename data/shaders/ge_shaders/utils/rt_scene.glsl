@@ -118,7 +118,7 @@ vec4 getRTVertexTangent(RTGeometry geometry, uint vertex_index)
 
 vec4 sampleHitTexture(int base, int layer, vec2 uv, float lod)
 {
-#ifdef BIND_MESH_TEXTURES_AT_ONCE
+#if defined(BIND_MESH_TEXTURES_AT_ONCE) || defined(MESH_TEXTURES_SET)
     return textureLod(f_mesh_textures[GE_SAMPLE_TEX_INDEX(base + layer)], uv,
         lod);
 #else
