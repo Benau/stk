@@ -546,7 +546,8 @@ void GEVulkanDrawCall::generate(GEVulkanDriver* vk)
             return a.first.first < b.first.first;
         });
 
-    if (m_texture_descriptor_set_layout.expired())
+    if (m_texture_descriptor_set_layout.expired() ||
+        m_rt_texture_descriptor_set_layout.expired())
     {
         vk->waitIdle();
         createPipelineLayout(vk);
@@ -963,6 +964,8 @@ void GEVulkanDrawCall::createPipelineLayout(GEVulkanDriver* vk)
             "vkCreatePipelineLayout failed for m_pipeline_layout");
     }
     m_texture_descriptor_set_layout = tdsl;
+    m_rt_texture_descriptor_set_layout =
+        m_texture_descriptor->getRTDescriptorSetLayout();
 
     // The ray traced reflection of the solid materials (the scene needs the
     // mesh textures for the hits), the pass is created with the lighting pass

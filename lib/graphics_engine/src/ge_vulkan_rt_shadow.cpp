@@ -283,20 +283,27 @@ void GEVulkanRTShadow::createPipelines()
     GEVulkanRTScene* rt_scene = m_vk->getRTScene();
     if (!rt_scene)
         throw std::runtime_error("No ray traced scene for GEVulkanRTShadow");
-    m_data_layout = GEVulkanDrawCall::createDataLayout(m_vk);
+    // This is called again when the layout of the mesh textures is replaced
+    // (refreshPipelines), the layout is the same as before then
+    if (m_data_layout == VK_NULL_HANDLE)
+        m_data_layout = GEVulkanDrawCall::createDataLayout(m_vk);
     VkPushConstantRange push_constant = {};
     push_constant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     push_constant.offset = 0;
     push_constant.size = sizeof(RTShadowPushConstants);
-    // The layouts of the scene and of the mesh textures live as long as the
-    // driver objects which the swapchain related objects (this one) are
-    // created again with when they change (updateDriver, reloadShaders)
+    // The layout of the scene lives as long as the driver objects which the
+    // swapchain related objects (this one) are created again with when they
+    // change (updateDriver, reloadShaders), the one of the mesh textures is
+    // replaced when its pool grows (see refreshPipelines)
+    std::shared_ptr<VkDescriptorSetLayout> mesh_texture_layout =
+        m_vk->getMeshTextureDescriptor()->getRTDescriptorSetLayout();
+    m_mesh_texture_layout = mesh_texture_layout;
     std::array<VkDescriptorSetLayout, 4> layouts =
     {{
         rt_scene->getDescriptorSetLayout(),
         m_data_layout,
         m_layout,
-        *m_vk->getMeshTextureDescriptor()->getRTDescriptorSetLayout()
+        *mesh_texture_layout
     }};
     VkPipelineLayoutCreateInfo pipeline_layout_info = {};
     pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -315,6 +322,25 @@ void GEVulkanRTShadow::createPipelines()
 }   // createPipelines
 
 // ----------------------------------------------------------------------------
+void GEVulkanRTShadow::refreshPipelines()
+{
+    if (!m_mesh_texture_layout.expired())
+        return;
+    m_vk->waitIdle();
+    VkDevice device = m_vk->getDevice();
+    for (VkPipeline* pipeline : { &m_pipeline, &m_clear_pipeline })
+    {
+        if (*pipeline != VK_NULL_HANDLE)
+            vkDestroyPipeline(device, *pipeline, NULL);
+        *pipeline = VK_NULL_HANDLE;
+    }
+    if (m_pipeline_layout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, m_pipeline_layout, NULL);
+    m_pipeline_layout = VK_NULL_HANDLE;
+    createPipelines();
+}   // refreshPipelines
+
+// ----------------------------------------------------------------------------
 bool GEVulkanRTShadow::render(VkCommandBuffer cmd,
     const std::vector<std::pair<GEVulkanDrawCall*,
     GEVulkanCamera*> >& p)
@@ -331,6 +357,7 @@ bool GEVulkanRTShadow::render(VkCommandBuffer cmd,
     }
     if (viewports.empty())
         return false;
+    refreshPipelines();
 
     // The depth and the normal of the g-buffer are written, the scene is
     // built (the barrier of it has the compute stage too), and what the last
