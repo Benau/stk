@@ -3,6 +3,8 @@
 
 #include "ge_vulkan_post_processing.hpp"
 
+#include <memory>
+
 namespace GE
 {
 class GEVulkanArrayTexture;
@@ -68,6 +70,8 @@ private:
     // others except m_layout and m_data_layout
     VkPipelineLayout m_pipeline_layout;
 
+    std::weak_ptr<VkDescriptorSetLayout> m_mesh_texture_layout;
+
     VkPipeline m_pipeline;
 
     VkPipeline m_clear_pipeline;
@@ -76,6 +80,9 @@ private:
                            GEVulkanAttachmentTexture* normal);
     // ------------------------------------------------------------------------
     void createPipelines();
+    // ------------------------------------------------------------------------
+    // The layout of the mesh textures is created again when its pool grows
+    void refreshPipelines();
     // ------------------------------------------------------------------------
     void createPipeline(const char* shader, VkPipeline* pipeline) const;
     // ------------------------------------------------------------------------

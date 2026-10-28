@@ -271,6 +271,10 @@ protected:
 
     std::weak_ptr<VkDescriptorSetLayout> m_texture_descriptor_set_layout;
 
+    // The array of the textures for ray query, its layout is not the one
+    // above when the textures are per material and grows with the capacity
+    std::weak_ptr<VkDescriptorSetLayout> m_rt_texture_descriptor_set_layout;
+
     VkPipelineLayout m_pipeline_layout, m_skybox_layout;
 
     // Layout of GVPT_SOLID_RT, NULL if the FBO has no ray traced reflection,
