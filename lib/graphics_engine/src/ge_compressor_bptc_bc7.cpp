@@ -1,21 +1,8 @@
-#ifdef LLVM_MINGW_FLTUSED
-// From https://stackoverflow.com/questions/1583196/building-visual-c-app-that-doesnt-use-crt-functions-still-references-some
-#ifdef __cplusplus
-extern "C" {
-#endif
-// It should be a single underscore since the double one is the mangled name
-int _fltused = 0;
-#ifdef __cplusplus
-}
-#endif
-#endif
-
 #include "ge_compressor_bptc_bc7.hpp"
 #include "ge_main.hpp"
-#include "ge_vulkan_features.hpp"
 
-#ifdef BC7_ISPC
-#include <bc7e_ispc.h>
+#ifdef BASISU_TC
+#include <basisu_transcoder.h>
 #endif
 #include <algorithm>
 #include <cassert>
@@ -25,10 +12,8 @@ namespace GE
 // ============================================================================
 void GECompressorBPTCBC7::init()
 {
-#ifdef BC7_ISPC
-    if (!GEVulkanFeatures::supportsBPTCBC7())
-        return;
-    ispc::bc7e_compress_block_init();
+#ifdef BASISU_TC
+    basist::basisu_transcoder_init();
 #endif
 }   // init
 
@@ -39,7 +24,7 @@ GECompressorBPTCBC7::GECompressorBPTCBC7(uint8_t* texture, unsigned channels,
                    : GEMipmapGenerator(texture, channels, size, normal_map)
 {
     m_compressed_data = NULL;
-#ifdef BC7_ISPC
+#ifdef BASISU_TC
     assert(channels == 4);
     size_t total_size = 0;
     m_mipmap_sizes = 0;
@@ -53,8 +38,8 @@ GECompressorBPTCBC7::GECompressorBPTCBC7(uint8_t* texture, unsigned channels,
             m_mipmap_sizes += cur_size;
     }
 
-    ispc::bc7e_compress_block_params p = {};
-    ispc::bc7e_compress_block_params_init_ultrafast(&p, true/*perceptual*/);
+    // Fully analytical BC7F mode: fast, without iterative refinement.
+    const uint32_t bc7f_flags = basist::bc7f::cPackBC7FlagDefault;
     std::vector<GEImageLevel> compressed_levels;
     m_compressed_data = new uint8_t[total_size];
     uint8_t* cur_offset = m_compressed_data;
@@ -62,38 +47,38 @@ GECompressorBPTCBC7::GECompressorBPTCBC7(uint8_t* texture, unsigned channels,
     for (GEImageLevel& level : m_levels)
     {
         uint8_t* out = cur_offset;
-        for (unsigned y = 0; y < level.m_dim.Height; y += 4)
+        const unsigned width = level.m_dim.Width;
+        const unsigned height = level.m_dim.Height;
+        const size_t pitch = size_t(width) * 4;
+        const uint8_t* rgba = static_cast<const uint8_t*>(level.m_data);
+        for (unsigned y = 0; y < height; y += 4)
         {
-            for (unsigned x = 0; x < level.m_dim.Width; x += 4)
+            for (unsigned x = 0; x < width; x += 4)
             {
-                // build the 4x4 block of pixels
-                uint32_t source_rgba[16] = {};
-                uint8_t* target_pixel = (uint8_t*)source_rgba;
+                basist::color_rgba source_rgba[16];
+                // BC7F takes 16 RGBA pixels in row-major order.
+                // Clamp partial edge blocks to the last valid texel.
                 for (unsigned py = 0; py < 4; py++)
                 {
                     for (unsigned px = 0; px < 4; px++)
                     {
-                        // get the source pixel in the image
-                        unsigned sx = x + px;
-                        unsigned sy = y + py;
-                        // enable if we're in the image
-                        if (sx < level.m_dim.Width && sy < level.m_dim.Height)
-                        {
-                            uint8_t* rgba = (uint8_t*)level.m_data;
-                            const unsigned pitch = level.m_dim.Width * 4;
-                            uint8_t* source_pixel = rgba + pitch * sy + 4 * sx;
-                            memcpy(target_pixel, source_pixel, 4);
-                        }
-                        // advance to the next pixel
-                        target_pixel += 4;
+                        const unsigned sx = std::min(x + px, width - 1);
+                        const unsigned sy = std::min(y + py, height - 1);
+                        const uint8_t* src =
+                            rgba + size_t(sy) * pitch + size_t(sx) * 4;
+                        basist::color_rgba& dst = source_rgba[py * 4 + px];
+                        dst.r = src[0];
+                        dst.g = src[1];
+                        dst.b = src[2];
+                        dst.a = src[3];
                     }
                 }
-                ispc::bc7e_compress_blocks(1, (uint64_t*)out, source_rgba, &p);
+                basist::bc7f::fast_pack_bc7_auto_rgba(
+                    out, source_rgba, bc7f_flags);
                 out += 16;
             }
         }
-        unsigned cur_size = get4x4CompressedTextureSize(level.m_dim.Width,
-            level.m_dim.Height);
+        const unsigned cur_size = get4x4CompressedTextureSize(width, height);
         compressed_levels.push_back({ level.m_dim, cur_size, cur_offset });
         cur_offset += cur_size;
     }

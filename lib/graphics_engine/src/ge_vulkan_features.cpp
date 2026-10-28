@@ -96,15 +96,11 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
     vkGetPhysicalDeviceFormatProperties(vk->getPhysicalDevice(),
         VK_FORMAT_BC3_UNORM_BLOCK, &format_properties);
     g_supports_s3tc_bc3 = format_properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
-#ifdef BC7_ISPC
+#ifdef BASISU_TC
     format_properties = {};
-    // We compile bc7e.ispc with avx2 on
-    if (SDL_HasAVX2() == SDL_TRUE)
-    {
-        vkGetPhysicalDeviceFormatProperties(vk->getPhysicalDevice(),
-            VK_FORMAT_BC7_UNORM_BLOCK, &format_properties);
-        g_supports_bptc_bc7 = format_properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
-    }
+    vkGetPhysicalDeviceFormatProperties(vk->getPhysicalDevice(),
+        VK_FORMAT_BC7_UNORM_BLOCK, &format_properties);
+    g_supports_bptc_bc7 = format_properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
 #endif
     format_properties = {};
     vkGetPhysicalDeviceFormatProperties(vk->getPhysicalDevice(),
