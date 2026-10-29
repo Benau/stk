@@ -16,6 +16,8 @@
 
 #include "GlyphLayout.h"
 
+class ScrollSwipe;
+
 namespace irr
 {
     namespace gui
@@ -197,14 +199,13 @@ namespace irr
             s32 ItemHeightOverride;
             s32 TotalItemHeight;
             s32 ItemsIconWidth;
-            s32 MousePosY;
             gui::IGUIFont* m_font;
             gui::IGUISpriteBank* IconBank;
             gui::IGUIScrollBar* ScrollBar;
+            ScrollSwipe* m_swipe;
             u32 selectTime;
             core::stringw KeyBuffer;
             bool Selecting;
-            bool Moving;
             bool DrawBack;
             bool MoveOverSelect;
             bool AutoScroll;
