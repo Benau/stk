@@ -1538,6 +1538,9 @@ found_mode:
     // swapchain image and the GUI is drawn over it), so the scene is rendered
     // to one (not to the swapchain image) even without render scaling and
     // deferred rendering
+    m_final_pass_handles.clear();
+    for (const GEFinalPassInfo& info : getEnabledFinalPasses())
+        m_final_pass_handles.push_back(info.m_handle);
     const bool final_chain = isFinalChainEnabled();
     if (scale != 1.0f || needs_deferred || final_chain)
     {
@@ -3146,7 +3149,17 @@ void GEVulkanDriver::updateDriver(bool scale_changed, bool pbr_changed,
     // Different FBO class (and SPLIT in shaders) if changed
     const bool deferred_split_changed =
         prev_deferred_split != getGEConfig()->m_deferred_split;
-    if (scale_changed || pbr_changed || deferred_split_changed)
+    // A pass was enabled or disabled (the game decides it, see
+    // GEFinalPassInfo::m_enabled): the scene is rendered to a FBO and has the
+    // chain only if there is a pass, and the depth is kept for the passes
+    // which need it
+    std::vector<unsigned> final_pass_handles;
+    for (const GEFinalPassInfo& info : getEnabledFinalPasses())
+        final_pass_handles.push_back(info.m_handle);
+    const bool final_pass_changed = final_pass_handles != m_final_pass_handles;
+    const bool recreate_swapchain = scale_changed || pbr_changed ||
+        deferred_split_changed || final_pass_changed;
+    if (recreate_swapchain)
         destroySwapChainRelated(false/*handle_surface*/);
     bool reload_split_shader =
         (prev_deferred_split == 0 && getGEConfig()->m_deferred_split != 0) ||
@@ -3189,11 +3202,11 @@ void GEVulkanDriver::updateDriver(bool scale_changed, bool pbr_changed,
     }
     if (pbr_changed || ibl_changed)
         m_skybox_renderer->reset();
-    if (scale_changed || pbr_changed || deferred_split_changed)
+    if (recreate_swapchain)
         createSwapChainRelated(false/*handle_surface*/);
     static_cast<GEVulkanSceneManager*>(
         m_irrlicht_device->getSceneManager())->resetDrawCalls();
-    if (scale_changed || pbr_changed || deferred_split_changed)
+    if (recreate_swapchain)
     {
         GEVulkan2dRenderer::destroy();
         GEVulkan2dRenderer::init(this);

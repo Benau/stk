@@ -89,6 +89,11 @@ struct GEFinalPassInfo
     // For the log
     std::string m_name;
 
+    // The handle addFinalPass() returned, which the copies the chain gets
+    // (getEnabledFinalPasses) have, so GE can see which passes the chain was
+    // made with. Ignored by addFinalPass()
+    unsigned m_handle;
+
     // See GEFinalPassOrder
     int m_order;
 
@@ -103,9 +108,12 @@ struct GEFinalPassInfo
     bool m_main_target_only;
 
     // Called when the chain is created, which is when the swapchain is
-    // (re)created: false if the pass is not used. A change of what it returns
-    // needs the swapchain to be created again, like the anti-aliasing and the
-    // depth of field. NULL means always enabled. Passes need compute in the
+    // (re)created: false if the pass is not used. It decides if the scene is
+    // rendered to a FBO and if the depth is kept, so the swapchain has to be
+    // created again if what it returns changes: GEVulkanDriver::updateDriver()
+    // does it (it compares the enabled passes with the ones the chain was made
+    // with), so call it after the setting changed. NULL means always
+    // enabled. Passes need compute in the
     // main queue, if the device can't they are never enabled
     std::function<bool()> m_enabled;
 
@@ -118,6 +126,7 @@ struct GEFinalPassInfo
     // ------------------------------------------------------------------------
     GEFinalPassInfo()
     {
+        m_handle = 0;
         m_order = GFPO_DEFAULT;
         m_needs_depth = false;
         m_main_target_only = true;

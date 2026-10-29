@@ -574,6 +574,10 @@ namespace GE
         unsigned int m_current_frame;
 
         uint64_t m_frame_number;
+
+        // The handles of the final passes (GEFinalPassInfo::m_handle) which
+        // the swapchain (and its final chain, if any) was created with
+        std::vector<unsigned> m_final_pass_handles;
         uint32_t m_image_index;
         unsigned int m_current_semaphore;
         video::SColor m_clear_color, m_rtt_clear_color;
