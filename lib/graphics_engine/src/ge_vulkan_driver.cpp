@@ -647,7 +647,7 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
         GEVulkanCommandLoader::init(this);
         GEVulkanShaderManager::init(this);
         // Bloom pipeline needs texture compression for bloom blend texture
-        GECompressorBPTCBC7::init();
+        GECompressorBasisUniversal::init();
         // For createUnicolorTextures
         GE::setVideoDriver(this);
         createUnicolorTextures();

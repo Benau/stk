@@ -93,6 +93,8 @@ public:
     unsigned getMipmapSizes() const                  { return m_mipmap_sizes; }
     // ------------------------------------------------------------------------
     std::vector<GEImageLevel>& getAllLevels()              { return m_levels; }
+    // ------------------------------------------------------------------------
+    virtual void handleMipmap() {}
 };   // GEMipmapGenerator
 
 }

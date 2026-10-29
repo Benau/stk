@@ -198,6 +198,7 @@ void GEVulkanArrayTexture::ThreadLoader::load(unsigned layer)
         mipmap_generator = new GEMipmapGenerator(texture_data, 4, size,
             normal_map);
     }
+    mipmap_generator->handleMipmap();
     m_mipmaps[layer] = mipmap_generator;
     m_images[layer] = texture_image;
 }   // GEVulkanArrayTexture::load
