@@ -127,8 +127,10 @@ std::vector<GEFinalPassInfo> getEnabledFinalPasses()
     // stable
     for (const RegisteredPass& p : getRegistry())
     {
-        if (isPassEnabled(p.m_info))
-            passes.push_back(p.m_info);
+        if (!isPassEnabled(p.m_info))
+            continue;
+        passes.push_back(p.m_info);
+        passes.back().m_handle = p.m_handle;
     }
     std::stable_sort(passes.begin(), passes.end(),
         [](const GEFinalPassInfo& a, const GEFinalPassInfo& b)
