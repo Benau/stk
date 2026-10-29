@@ -1,0 +1,12 @@
+// Used by GEVulkanComputeFinalPass for the pixels which are not in any
+// viewport (the passes have to write all pixels of the image): the output is
+// the input
+#include "utils/final_pass.glsl"
+
+void main()
+{
+    const ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pos, imageSize(u_dst))))
+        return;
+    imageStore(u_dst, pos, texelFetch(u_src, pos, 0));
+}

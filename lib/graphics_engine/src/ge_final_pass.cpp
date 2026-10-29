@@ -2,6 +2,7 @@
 
 #include "ge_main.hpp"
 #include "ge_vulkan_anti_aliasing.hpp"
+#include "ge_vulkan_compute_final_pass.hpp"
 #include "ge_vulkan_depth_of_field.hpp"
 #include "ge_vulkan_features.hpp"
 #include "ge_vulkan_final_chain.hpp"
@@ -91,6 +92,23 @@ unsigned addFinalPass(const GEFinalPassInfo& info)
     registry.push_back({ g_next_handle++, info });
     return registry.back().m_handle;
 }   // addFinalPass
+
+// ----------------------------------------------------------------------------
+unsigned addComputeFinalPass(const GEFinalPassInfo& info,
+                             const GEComputePassDesc& desc)
+{
+    GEFinalPassInfo pass = info;
+    const bool needs_depth = info.m_needs_depth;
+    pass.m_create = [desc, needs_depth](GEVulkanDriver* vk,
+        VkDescriptorSetLayout io_layout,
+        const irr::core::dimension2d<irr::u32>& capacity)
+        -> GEVulkanFinalStage*
+    {
+        return new GEVulkanComputeFinalPass(vk, io_layout, capacity,
+            needs_depth, desc);
+    };
+    return addFinalPass(pass);
+}   // addComputeFinalPass
 
 // ----------------------------------------------------------------------------
 void removeFinalPass(unsigned handle)

@@ -18,7 +18,8 @@ GEVulkanCameraSceneNode::GEVulkanCameraSceneNode(irr::scene::ISceneNode* parent,
                                                  irr::s32 id,
                                            const irr::core::vector3df& position,
                                              const irr::core::vector3df& lookat)
-                       : CCameraSceneNode(parent, mgr, id, position, lookat)
+                       : CCameraSceneNode(parent, mgr, id, position, lookat),
+                         m_history_frame(0), m_has_history(false)
 {
     static_cast<GEVulkanSceneManager*>(SceneManager)->detectAutoDeferred();
 }   // GEVulkanCameraSceneNode
@@ -105,6 +106,8 @@ void GEVulkanCamera::update(GEVulkanCameraSceneNode* node)
     mat = m_ubo_data.m_projection_matrix * m_ubo_data.m_view_matrix;
 
     m_ubo_data.m_projection_view_matrix = mat;
+    m_user_data = node->getUserData();
+    m_prev_pvm = node->advanceHistory(vk->getFrameNumber(), mat);
 
     m_ubo_data.m_projection_view_matrix.getInverse(
         m_ubo_data.m_inverse_projection_view_matrix);
@@ -143,6 +146,19 @@ void GEVulkanCamera::update(GEVulkanCameraSceneNode* node)
         m_ubo_data.m_screensize.LowerRightCorner.Y = 0.0;
     }
 }   // update
+
+// ----------------------------------------------------------------------------
+void setFinalPassUserData(irr::scene::ICameraSceneNode* camera,
+                          const GECameraUserData& data)
+{
+    static_cast<GEVulkanCameraSceneNode*>(camera)->setUserData(data);
+}   // setFinalPassUserData
+
+// ----------------------------------------------------------------------------
+void resetFinalPassHistory(irr::scene::ICameraSceneNode* camera)
+{
+    static_cast<GEVulkanCameraSceneNode*>(camera)->resetHistory();
+}   // resetFinalPassHistory
 
 // ----------------------------------------------------------------------------
 irr::core::matrix4 GEVulkanCamera::getPVM() const
