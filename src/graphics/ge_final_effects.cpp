@@ -2,6 +2,7 @@
 
 #include "graphics/ge_final_effects.hpp"
 
+#include "graphics/motion_blur.hpp"
 #include "config/user_config.hpp"
 #include "graphics/camera/camera.hpp"
 #include "graphics/irr_driver.hpp"
@@ -121,7 +122,7 @@ void GEFinalEffects::update(float dt)
 }   // update
 
 // ----------------------------------------------------------------------------
-void GEFinalEffects::prepareCamera(Camera* camera)
+void GEFinalEffects::prepareCamera(Camera* camera, float dt)
 {
     GE::GECameraUserData data;
     World* world = World::getWorld();
@@ -143,7 +144,8 @@ void GEFinalEffects::prepareCamera(Camera* camera)
         // Same as PostProcessing::renderMotionBlur
         const unsigned index = camera->getIndex();
         if (UserConfigParams::m_motionblur && index < m_boost_time.size())
-            data.m_values[UD_MOTION_BLUR_AMOUNT] = m_boost_time[index] * 10.0f;
+            data.m_values[UD_MOTION_BLUR_AMOUNT] = m_boost_time[index] *
+                10.0f * MotionBlur::getFrameRateFactor(dt);
     }
     GE::setFinalPassUserData(camera->getCameraSceneNode(), data);
 }   // prepareCamera

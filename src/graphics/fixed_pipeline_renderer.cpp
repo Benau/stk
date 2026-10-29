@@ -72,9 +72,6 @@ void FixedPipelineRenderer::render(float dt, bool is_loading)
 {
     World *world = World::getWorld(); // Never NULL.
 
-    if (m_final_effects)
-        m_final_effects->update(dt);
-
     irr_driver->getVideoDriver()->beginScene(/*backBuffer clear*/ true,
                                              /*zBuffer*/ true,
                                              irr_driver->getClearColor());
@@ -96,7 +93,7 @@ void FixedPipelineRenderer::render(float dt, bool is_loading)
         camera->activate();
         rg->preRenderCallback(camera);   // adjusts start referee
         if (m_final_effects)
-            m_final_effects->prepareCamera(camera);
+            m_final_effects->prepareCamera(camera, dt);
 
         // Lightning quad of this camera only (GLSL renderer doesn't use this)
         Weather* weather = Weather::getInstance();
@@ -165,7 +162,8 @@ void FixedPipelineRenderer::render(float dt, bool is_loading)
 #endif
 
     irr_driver->getVideoDriver()->endScene();
-    
+    if (m_final_effects)
+        m_final_effects->update(dt);
 }
 
 std::unique_ptr<RenderTarget> FixedPipelineRenderer::createRenderTarget(const irr::core::dimension2du &dimension,

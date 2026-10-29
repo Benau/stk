@@ -543,13 +543,13 @@ void ShaderBasedRenderer::debugPhysics()
 
 // ----------------------------------------------------------------------------
 void ShaderBasedRenderer::renderPostProcessing(Camera * const camera,
-                                               bool first_cam)
+                                               bool first_cam, float dt)
 {
     scene::ICameraSceneNode * const camnode = camera->getCameraSceneNode();
     const core::recti &viewport = camera->getViewport();
 
     bool isRace = StateManager::get()->getGameState() == GUIEngine::GAME;
-    FrameBuffer *fbo = m_post_processing->render(camnode, isRace, m_rtts);
+    FrameBuffer *fbo = m_post_processing->render(camnode, isRace, m_rtts, dt);
 
     // The viewport has been changed using glViewport function directly
     // during scene rendering, but irrlicht thinks that nothing changed
@@ -769,7 +769,7 @@ void ShaderBasedRenderer::render(float dt, bool is_loading)
         
         if (CVS->isDeferredEnabled() && !is_loading)
         {
-            renderPostProcessing(camera, cam == 0);
+            renderPostProcessing(camera, cam == 0, dt);
         }
 
         // Save projection-view matrix for the next frame
@@ -861,7 +861,7 @@ void ShaderBasedRenderer::renderToTexture(GL3RenderTarget *render_target,
     {
         renderSceneDeferred(camera, dt, false, true);
         render_target->setFrameBuffer(m_post_processing.get()
-            ->render(camera, false, m_rtts));
+            ->render(camera, false, m_rtts, dt));
     }
     else
     {

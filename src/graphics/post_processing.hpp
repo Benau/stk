@@ -86,7 +86,7 @@ public:
 
     void renderMotionBlur(const FrameBuffer &in_fbo,
                           FrameBuffer &out_fbo,
-                          GLuint depth_stencil_texture);
+                          GLuint depth_stencil_texture, float dt);
 
     void renderSpeedStreaks();
 
@@ -98,7 +98,7 @@ public:
     
     /** Render the post-processed scene */
     FrameBuffer *render(scene::ICameraSceneNode * const camnode, bool isRace,
-                        RTT *rtts);
+                        RTT *rtts, float dt);
 };   // class PostProcessing
 
 #endif // HEADER_POST_PROCESSING_HPP
