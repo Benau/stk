@@ -57,6 +57,7 @@ using namespace irr::gui;
 EventHandler::EventHandler()
 {
     m_accept_events = false;
+    m_mouse_capture = NULL;
 }
 
 // -----------------------------------------------------------------------------
@@ -80,6 +81,20 @@ bool EventHandler::OnEvent (const SEvent &event)
             return true; // EVENT_BLOCK
     }
     
+    if (event.EventType == EET_MOUSE_INPUT_EVENT && m_mouse_capture)
+    {
+        irr::gui::IGUIElement* target = m_mouse_capture;
+
+        if (event.MouseInput.Event == EMIE_MOUSE_MOVED)
+        {
+            m_mouse_pos.X = event.MouseInput.X;
+            m_mouse_pos.Y = event.MouseInput.Y;
+        }
+
+        target->OnEvent(event);
+        return true;
+    }
+
     // TO DEBUG HATS (when you don't actually have a hat)
     /*
     if (event.EventType == EET_KEY_INPUT_EVENT)

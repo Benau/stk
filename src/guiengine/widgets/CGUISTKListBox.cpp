@@ -7,6 +7,8 @@
 
 #include "font/font_drawer.hpp"
 #include "graphics/2dutils.hpp"
+#include "guiengine/event_handler.hpp"
+#include "guiengine/scroll_swipe.hpp"
 #include "IGUISkin.h"
 #include "IGUIEnvironment.h"
 #include "IVideoDriver.h"
@@ -29,8 +31,8 @@ CGUISTKListBox::CGUISTKListBox(IGUIEnvironment* environment, IGUIElement* parent
             bool drawBack, bool moveOverSelect)
 : IGUIElement(EGUIET_LIST_BOX, environment, parent, id, rectangle), Selected(-1),
     m_item_height(0),ItemHeightOverride(0),
-    TotalItemHeight(0), ItemsIconWidth(0), MousePosY(0), m_font(0), IconBank(0),
-    ScrollBar(0), selectTime(0), Selecting(false), Moving(false),
+    TotalItemHeight(0), ItemsIconWidth(0), m_font(0), IconBank(0),
+    ScrollBar(0), m_swipe(0), selectTime(0), Selecting(false),
     DrawBack(drawBack), MoveOverSelect(moveOverSelect), AutoScroll(true),
     HighlightWhenNotFocused(true)
 {
@@ -49,6 +51,10 @@ CGUISTKListBox::CGUISTKListBox(IGUIEnvironment* environment, IGUIElement* parent
     ScrollBar->setVisible(false);
     ScrollBar->setPos(0);
 
+    m_swipe = new ScrollSwipe(Environment, this, ScrollSwipe::VERTICAL);
+    m_swipe->setScrollBar(ScrollBar);
+    m_swipe->setScrollFactor(-1.0f);
+
     updateScrollBarSize(skin->getSize(EGDS_SCROLLBAR_SIZE));
 
     setNotClipped(!clip);
@@ -65,6 +71,12 @@ CGUISTKListBox::CGUISTKListBox(IGUIEnvironment* environment, IGUIElement* parent
 //! destructor
 CGUISTKListBox::~CGUISTKListBox()
 {
+    auto* event_handler = GUIEngine::EventHandler::get();
+    if (event_handler)
+        event_handler->releaseMouse(this);
+
+    delete m_swipe;
+
     if (ScrollBar)
         ScrollBar->drop();
 
@@ -275,7 +287,9 @@ bool CGUISTKListBox::OnEvent(const SEvent& event)
                 {
                     if (event.GUIEvent.Caller == this)
                     {
-                        Moving = false;
+                        GUIEngine::EventHandler::get()->releaseMouse(this);
+                        if (m_swipe)
+                            m_swipe->cancelSwipe();
                         Selecting = false;
                     }
                     break;
@@ -284,61 +298,57 @@ bool CGUISTKListBox::OnEvent(const SEvent& event)
             break;
             }
             break;
-
         case EET_MOUSE_INPUT_EVENT:
+        {
+            if (event.MouseInput.Event == EMIE_MOUSE_MOVED &&
+                !event.MouseInput.isLeftPressed() && Selecting)
             {
-                core::position2d<s32> p(event.MouseInput.X, event.MouseInput.Y);
+                GUIEngine::EventHandler::get()->releaseMouse(this);
 
-                switch(event.MouseInput.Event)
-                {
-                case EMIE_MOUSE_WHEEL:
-                    ScrollBar->setPos(ScrollBar->getPos() + event.MouseInput.Wheel * - m_item_height / 2);
-                    return true;
+                if (m_swipe)
+                    m_swipe->cancelSwipe();
 
-                case EMIE_LMOUSE_PRESSED_DOWN:
-                {
-                    Selecting = true;
-                    Moving = false;
-                    MousePosY = event.MouseInput.Y;
-                    return true;
-                }
-
-                case EMIE_LMOUSE_LEFT_UP:
-                {
-                    Selecting = false;
-
-                    if (isPointInside(p) && !Moving)
-                        selectNew(event.MouseInput.Y);
-
-                    return true;
-                }
-
-                case EMIE_MOUSE_MOVED:
-                    if (!event.MouseInput.isLeftPressed())
-                    {
-                        Selecting = false;
-                        Moving = false;
-                    }
-
-                    if (Selecting &&
-                        std::abs(event.MouseInput.Y - MousePosY) > m_item_height/3)
-                    {
-                        Moving = true;
-                        Selecting = false;
-                        MousePosY = event.MouseInput.Y;
-                    }
-
-                    if (Moving)
-                    {
-                        int pos = ScrollBar->getPos() - event.MouseInput.Y + MousePosY;
-                        ScrollBar->setPos(pos);
-                        MousePosY = event.MouseInput.Y;
-                    }
-                default:
-                break;
-                }
+                Selecting = false;
+                return true;
             }
-            break;
+
+            if (m_swipe && m_swipe->onEvent(event))
+            {
+                if (event.MouseInput.Event == EMIE_LMOUSE_LEFT_UP)
+                    GUIEngine::EventHandler::get()->releaseMouse(this);
+
+                Selecting = false;
+                return true;
+            }
+
+            core::position2d<s32> p(event.MouseInput.X, event.MouseInput.Y);
+
+            switch(event.MouseInput.Event)
+            {
+            case EMIE_MOUSE_WHEEL:
+                ScrollBar->setPos(ScrollBar->getPos() + event.MouseInput.Wheel * - m_item_height / 2);
+                return true;
+
+            case EMIE_LMOUSE_PRESSED_DOWN:
+                GUIEngine::EventHandler::get()->captureMouse(this);
+                Selecting = true;
+                return true;
+
+            case EMIE_LMOUSE_LEFT_UP:
+                GUIEngine::EventHandler::get()->releaseMouse(this);
+                Selecting = false;
+                if (isPointInside(p))
+                    selectNew(event.MouseInput.Y);
+                return true;
+
+            case EMIE_MOUSE_MOVED:
+                break;
+
+            default:
+                break;
+            }
+        }
+        break;
         case EET_KEY_INPUT_EVENT: // keyboard events are captured and handled elsewhere
         case EET_LOG_TEXT_EVENT:
         case EET_USER_EVENT:
@@ -413,6 +423,9 @@ void CGUISTKListBox::updateAbsolutePosition()
 void CGUISTKListBox::draw()
 {
 #ifndef SERVER_ONLY
+    if (m_swipe)
+        m_swipe->updateScrollCoasting();
+
     if (!IsVisible)
         return;
 

@@ -83,6 +83,8 @@ namespace GUIEngine
         /** Last position of the mouse cursor */
         irr::core::vector2di     m_mouse_pos;
 
+        irr::gui::IGUIElement* m_mouse_capture;
+
     public:
 
         LEAK_CHECK()
@@ -116,6 +118,13 @@ namespace GUIEngine
         void setAcceptEvents(bool value) { m_accept_events = value; }
         int findIDClosestWidget(const NavigationDirection nav, const int playerID,
                                 Widget* w, bool ignore_disabled, int recursion_counter=0);
+
+        void captureMouse(irr::gui::IGUIElement* e) { m_mouse_capture = e; }
+        void releaseMouse(irr::gui::IGUIElement* e)
+        {
+            if (m_mouse_capture == e)
+                m_mouse_capture = NULL;
+        }
     };
 
 }
