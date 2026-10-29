@@ -2043,6 +2043,33 @@ bool GEVulkanDriver::endScene()
         }
     }
 
+    if (m_final_chain)
+    {
+        // Which stages of the final chain run in this frame decides which
+        // image of the targets is sampled (GEVulkanFBOTexture::getImageView),
+        // so it has to be known before the descriptors are updated. The same
+        // targets and draw calls as buildCommandBuffers
+        static const std::vector<std::pair<GEVulkanDrawCall*,
+            GEVulkanCamera*> > no_draw_calls;
+        bool main_prepared = false;
+        for (GEVulkanTargetGroup* g : sm->getFrameGroups())
+        {
+            if (!g->m_target)
+                continue;
+            if (g->m_target == m_rtt_texture)
+            {
+                m_final_chain->prepare(g->m_target, g->m_dcs);
+                main_prepared = true;
+            }
+            else if (!g->m_observer.expired())
+                m_final_chain->prepare(g->m_target, g->m_dcs);
+        }
+        // The main target is rendered (and the chain runs) also without draw
+        // calls
+        if (!main_prepared && m_rtt_texture)
+            m_final_chain->prepare(m_rtt_texture, no_draw_calls);
+    }
+
     GEVulkan2dRenderer::updateTextureDescriptor();
     m_mesh_texture_descriptor->updateDescriptor();
     const auto recreate_swap_chain = [this](bool handle_surface)

@@ -318,11 +318,34 @@ void GEVulkanFinalChain::initTarget(GEVulkanFBOTexture* fbo, bool main_target)
 }   // initTarget
 
 // ----------------------------------------------------------------------------
+void GEVulkanFinalChain::prepare(GEVulkanFBOTexture* fbo,
+    const std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCamera*> >& p)
+{
+    GEVulkanFinalTarget* target = fbo->getFinalTarget();
+    if (!target)
+        return;
+    uint32_t active_mask = 0;
+    unsigned active_count = 0;
+    for (unsigned i = 0; i < m_stages.size(); i++)
+    {
+        if ((target->m_stage_mask & (1u << i)) == 0 ||
+            !m_stages[i].m_stage->isActive(p))
+            continue;
+        active_mask |= 1u << i;
+        active_count++;
+    }
+    target->m_active_mask = active_mask;
+    target->m_active_count = active_count;
+}   // prepare
+
+// ----------------------------------------------------------------------------
 void GEVulkanFinalChain::render(VkCommandBuffer cmd, GEVulkanFBOTexture* fbo,
     const std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCamera*> >& p)
 {
     GEVulkanFinalTarget* target = fbo->getFinalTarget();
-    if (!target || m_stages.empty() || target->m_stage_count == 0)
+    // No active stage (see prepare): nothing is written, the FBO is sampled
+    // directly
+    if (!target || m_stages.empty() || target->m_active_count == 0)
         return;
 
     const VkPipelineStageFlags all_graphics_and_compute =
@@ -349,10 +372,11 @@ void GEVulkanFinalChain::render(VkCommandBuffer cmd, GEVulkanFBOTexture* fbo,
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, NULL, 0,
             NULL);
     }
-    for (GEVulkanAttachmentTexture* image : target->m_images)
+    // Only the images which the active stages write (the second one is only
+    // written by the second active stage and the next ones)
+    for (unsigned i = 0; i < std::min(target->m_active_count, 2u); i++)
     {
-        if (!image)
-            continue;
+        GEVulkanAttachmentTexture* image = target->m_images[i];
         imageBarrier(cmd, image->getImage(), VK_IMAGE_LAYOUT_UNDEFINED,
             VK_IMAGE_LAYOUT_GENERAL, all_graphics_and_compute,
             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
@@ -360,19 +384,20 @@ void GEVulkanFinalChain::render(VkCommandBuffer cmd, GEVulkanFBOTexture* fbo,
             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
     }
 
-    // The stage k which runs is the first one if k is 0, so it reads the FBO,
+    // The stage k which runs (of the active ones) is the first one if k is 0,
+    // so it reads the FBO,
     // otherwise the one the previous stage wrote (images[0] if k is odd,
     // images[1] if it's even), see GEVulkanFinalTarget::m_sets
     unsigned k = 0;
     for (unsigned i = 0; i < m_stages.size(); i++)
     {
-        if ((target->m_stage_mask & (1u << i)) == 0)
+        if ((target->m_active_mask & (1u << i)) == 0)
             continue;
         const unsigned set = k == 0 ? 0 : (k % 2 == 1 ? 1 : 2);
         m_stages[i].m_stage->apply(cmd, target->m_sets[set], fbo->getSize(),
             p);
         k++;
-        if (k < target->m_stage_count)
+        if (k < target->m_active_count)
         {
             VkMemoryBarrier barrier = {};
             barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;

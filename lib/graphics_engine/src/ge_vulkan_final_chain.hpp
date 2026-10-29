@@ -69,12 +69,20 @@ public:
     // Set once, when the target is created
     uint32_t m_stage_mask;
 
-    // How many bits of m_stage_mask are set, the last stage writes
-    // m_images[(m_stage_count - 1) % 2]: it's the final image, in shader read
-    // only layout after the chain, and what samples the FBO uses it
-    // (GEVulkanFBOTexture::getImageView), so nothing is copied back to the
-    // image of the FBO
+    // How many bits of m_stage_mask are set: the most stages which can run
+    // for this target, so it decides how many images and sets it has
     unsigned m_stage_count;
+
+    // The stages (bits of m_stage_mask) which run this frame, and how many of
+    // them there are, set by GEVulkanFinalChain::prepare() every frame. The
+    // last active stage writes m_images[(m_active_count - 1) % 2]: it's the
+    // final image, in shader read only layout after the chain, and what
+    // samples the FBO uses it (GEVulkanFBOTexture::getImageView), so nothing
+    // is copied back to the image of the FBO. With no active stage (also
+    // before the first prepare) the FBO is sampled directly
+    uint32_t m_active_mask;
+
+    unsigned m_active_count;
 
     // The sets of the layout of GEVulkanFinalChain::getIOLayout():
     // [0] = image of the FBO (sampled) -> m_images[0] (storage), for the first
@@ -93,16 +101,18 @@ public:
         m_images = {{ NULL, NULL }};
         m_stage_mask = 0;
         m_stage_count = 0;
+        m_active_mask = 0;
+        m_active_count = 0;
         m_sets = {{ VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE }};
     }
     // ------------------------------------------------------------------------
     ~GEVulkanFinalTarget();
     // ------------------------------------------------------------------------
-    // The image the last stage writes
+    // The image the last active stage writes, NULL if no stage is active
     GEVulkanAttachmentTexture* getResultImage() const
     {
-        return m_stage_count == 0 ? NULL :
-            m_images[(m_stage_count - 1) % 2];
+        return m_active_count == 0 ? NULL :
+            m_images[(m_active_count - 1) % 2];
     }
     // ------------------------------------------------------------------------
     // True if what samples the FBO has to use getResultImage()
@@ -194,6 +204,18 @@ public:
     // the separate render targets are what the GUI shows (the preview of a
     // kart for example), their distances are not the ones of a race
     void initTarget(GEVulkanFBOTexture* fbo, bool main_target);
+    // ------------------------------------------------------------------------
+    // Decides which stages run for the FBO this frame (GEVulkanFinalStage::
+    // isActive), it does nothing if the FBO has no GEVulkanFinalTarget. It has
+    // to be called for every target which is rendered in the frame, with the
+    // same draw calls as render(), before the 2D texture descriptors are
+    // updated (GEVulkanDriver::endScene): the image which the users of the FBO
+    // sample depends on it, and the descriptor update waits for the device when
+    // an image view changed, which is only when a stage starts or stops being
+    // active, not every frame
+    void prepare(GEVulkanFBOTexture* fbo,
+                 const std::vector<std::pair<GEVulkanDrawCall*,
+                 GEVulkanCamera*> >& p);
     // ------------------------------------------------------------------------
     // After the last render pass of the FBO has ended (outside of render
     // pass), p are the draw calls (viewports) which were rendered to it

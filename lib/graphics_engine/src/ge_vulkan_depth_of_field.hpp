@@ -95,6 +95,10 @@ public:
     // ------------------------------------------------------------------------
     virtual bool needsDepth() const                              { return true; }
     // ------------------------------------------------------------------------
+    // Nothing to blur: the stage is skipped, not an image copied
+    virtual bool isActive(const std::vector<std::pair<GEVulkanDrawCall*,
+                          GEVulkanCamera*> >& p) const;
+    // ------------------------------------------------------------------------
     // Not used, it's the stage of GEVulkanFinalChain (see apply)
     virtual bool render(VkCommandBuffer cmd,
                         const std::vector<std::pair<GEVulkanDrawCall*,

@@ -41,6 +41,18 @@ public:
     // to be the same as GEFinalPassInfo::m_needs_depth
     virtual bool needsDepth() const                           { return false; }
     // ------------------------------------------------------------------------
+    // False if the stage has nothing to do this frame: it is skipped (apply()
+    // isn't called and nothing is copied), and what the stage after it reads
+    // is what the stage before it wrote. If no stage is active the FBO is
+    // sampled directly, as if there was no chain. It's called once per frame,
+    // for every target, in GEVulkanFinalChain::prepare(), which is before the
+    // descriptors of the 2D renderer are updated (that's when the image the
+    // users of the FBO sample has to be known), so it has to be cheap and can
+    // only use what the game set before the draw calls were made (the camera
+    // snapshots). p are the same draw calls as apply() gets
+    virtual bool isActive(const std::vector<std::pair<GEVulkanDrawCall*,
+                          GEVulkanCamera*> >& p) const         { return true; }
+    // ------------------------------------------------------------------------
     // Outside of render pass. Reads binding 0 (and binding 2, the depth, if
     // needsDepth()) and writes binding 1 of io_set (set 0 of the pipeline
     // layout of the stage, which must be created with
