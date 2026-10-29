@@ -11,11 +11,8 @@ private:
     uint8_t* m_compressed_data;
 public:
     // ------------------------------------------------------------------------
-    static void init();
-    // ------------------------------------------------------------------------
-    static void destroy();
-    // ------------------------------------------------------------------------
-    static bool loaded();
+    // Basisu initialization is done in GECompressorBPTCBC7::init
+    //static void init() {}
     // ------------------------------------------------------------------------
     GECompressorASTC4x4(uint8_t* texture, unsigned channels,
                         const irr::core::dimension2d<irr::u32>& size,

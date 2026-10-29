@@ -1,6 +1,5 @@
 #include "ge_vulkan_driver.hpp"
 
-#include "ge_compressor_astc_4x4.hpp"
 #include "ge_compressor_bptc_bc7.hpp"
 #include "ge_main.hpp"
 #include "ge_material_manager.hpp"
@@ -646,6 +645,8 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
         // For deferred split fbo, which glow outline maybe needed
         GEVulkanCommandLoader::init(this);
         GEVulkanShaderManager::init(this);
+        // Bloom pipeline needs texture compression for bloom blend texture
+        GECompressorBPTCBC7::init();
         // For createUnicolorTextures
         GE::setVideoDriver(this);
         createUnicolorTextures();
@@ -685,8 +686,6 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
         createCommandBuffers();
         GEVulkan2dRenderer::init(this);
         m_skybox_renderer = new GEVulkanSkyBoxRenderer();
-        GECompressorASTC4x4::init();
-        GECompressorBPTCBC7::init();
         GEMaterialManager::init();
         GEVulkanFeatures::printStats();
         VkFormatProperties format_props = {};
@@ -723,7 +722,6 @@ GEVulkanDriver::~GEVulkanDriver()
 // ----------------------------------------------------------------------------
 void GEVulkanDriver::destroyVulkan()
 {
-    GECompressorASTC4x4::destroy();
     if (m_depth_texture)
     {
         m_depth_texture->drop();
