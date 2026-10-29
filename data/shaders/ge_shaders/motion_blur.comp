@@ -1,0 +1,93 @@
+// motion_blur.comp
+//
+// The pass of GEVulkanFinalChain (see ge_final_pass.hpp) which is the same
+// effect as data/shaders/motion_blur.frag of the OpenGL renderer, for the
+// viewport of one camera: the pixel is blurred along the way it moved on the
+// screen since the previous frame of the camera (from its depth), more the
+// farther it is from the center, and not at all in a circle around it so the
+// kart isn't blurred.
+
+#define FINAL_PASS_DEPTH
+#include "utils/final_pass.glsl"
+#include "utils/camera.glsl"
+
+layout(push_constant) uniform PushConstants
+{
+    FinalPassHeader m_header;
+    // projection * view of the previous frame of the camera
+    mat4 u_previous_pvm;
+    // The actual boost amount (which linearly scales the blur to be shown).
+    float boost_amount;
+} pc;
+
+// Number of samples used for blurring
+const int NB_SAMPLES = 8;
+
+// Center (in texture coordinates of the viewport) at which the kart is. A small
+// circle around this center is not blurred (see mask_radius below)
+const vec2 center = vec2(0.5, 0.5);
+
+// Radius of mask around the character in which no blurring happens
+// so that the kart doesn't get blurred.
+const float mask_radius = 0.15;
+
+// Bilinear and clamped to the viewport (the other viewports of the image have
+// nothing to do with this one)
+vec3 sampleColor(const vec2 texcoords)
+{
+    const vec2 rect_min = vec2(pc.m_header.m_rect.xy);
+    const vec2 rect_max = vec2(pc.m_header.m_rect.zw);
+    const vec2 size = rect_max - rect_min;
+    const vec2 pixel = clamp(rect_min + texcoords * size,
+        rect_min + 0.5, rect_max - 0.5);
+    return textureLod(u_src, pixel / vec2(textureSize(u_src, 0)), 0.0).rgb;
+}
+
+void main()
+{
+    ivec2 pos;
+    if (!finalPassGetPixel(pc.m_header, pos))
+        return;
+    const vec2 size = vec2(pc.m_header.m_rect.zw - pc.m_header.m_rect.xy);
+    // Same orientation as the framebuffer, the same as the matrices (y down in
+    // both), so there is nothing to flip
+    const vec2 texcoords = (vec2(pos - pc.m_header.m_rect.xy) + 0.5) / size;
+
+    // Sample the color buffer
+    vec3 color = texelFetch(u_src, pos, 0).rgb;
+
+    // Where the pixel was in the previous frame: it's reprojected with the
+    // homogeneous position, so the pixels at the far plane (the sky, reverse Z
+    // is 0 there) keep the rotation of the camera and have no translation
+    const float z = texelFetch(u_depth, pos, 0).r;
+    const vec4 clip = vec4(texcoords * 2.0 - 1.0, z, 1.0);
+    const vec4 old_clip = pc.u_previous_pvm *
+        (u_camera.m_inverse_projection_view_matrix * clip);
+    const vec2 old_screen_pos = old_clip.xy / old_clip.w * 0.5 + 0.5;
+
+    // Compute the blur direction.
+    // IMPORTANT: we don't normalize it so that it avoids a glitch around 'center',
+    // plus it naturally scales the motion blur in a cool way :)
+    vec2 blur_dir = texcoords - old_screen_pos;
+
+    // Compute the blurring factor:
+    // - apply the mask, i.e. no blurring in a small circle around the kart
+    float blur_factor = max(0.0, length(texcoords - center) - mask_radius);
+
+    // - apply the boost amount
+    blur_factor *= pc.boost_amount;
+
+    // Scale the blur direction
+    blur_dir *= blur_factor;
+
+    // Compute the blur
+    vec2 inc_vec = blur_dir / vec2(NB_SAMPLES);
+    vec2 blur_texcoords = texcoords - inc_vec * float(NB_SAMPLES) / 2.0;
+    for (int i = 1; i < NB_SAMPLES; i++)
+    {
+        color += sampleColor(blur_texcoords);
+        blur_texcoords += inc_vec;
+    }
+    color /= vec3(NB_SAMPLES);
+    imageStore(u_dst, pos, vec4(color, 1.0));
+}
