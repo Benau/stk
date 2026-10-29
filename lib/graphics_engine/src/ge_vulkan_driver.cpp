@@ -541,6 +541,7 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
     m_features = {};
 
     m_current_frame = 0;
+    m_frame_number = 0;
     m_image_index = 0;
     m_current_semaphore = 0;
     m_clear_color = video::SColor(0);
@@ -1971,6 +1972,7 @@ bool GEVulkanDriver::beginScene(bool backBuffer, bool zBuffer, SColor color,
 
     m_clear_color = color;
     PrimitivesDrawn = 0;
+    m_frame_number++;
 
     if (m_rtt_texture && !m_rtt_texture->useSwapChainOutput())
     {

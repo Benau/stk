@@ -41,6 +41,7 @@ set(GE_SOURCES
     src/ge_vulkan_camera_scene_node.cpp
     src/ge_vulkan_combined_shadow_fbo.cpp
     src/ge_vulkan_command_loader.cpp
+    src/ge_vulkan_compute_final_pass.cpp
     src/ge_vulkan_deferred_fbo.cpp
     src/ge_vulkan_deferred_fbo_split.cpp
     src/ge_vulkan_driver.cpp

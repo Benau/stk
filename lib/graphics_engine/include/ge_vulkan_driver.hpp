@@ -370,6 +370,10 @@ namespace GE
                                        { return m_vk->swap_chain_framebuffers; }
 
         unsigned int getCurrentFrame() const         { return m_current_frame; }
+        // ---------------------------------------------------------------------
+        // Counts the frames (beginScene()), it's the frame of the draw calls
+        // of drawAll() before the next one
+        uint64_t getFrameNumber() const               { return m_frame_number; }
         unsigned int getCurrentImageIndex() const      { return m_image_index; }
         constexpr static unsigned getMaxFrameInFlight()            { return 2; }
         video::SColor getClearColor() const            { return m_clear_color; }
@@ -568,6 +572,8 @@ namespace GE
         VkPhysicalDeviceFeatures m_features;
 
         unsigned int m_current_frame;
+
+        uint64_t m_frame_number;
         uint32_t m_image_index;
         unsigned int m_current_semaphore;
         video::SColor m_clear_color, m_rtt_clear_color;
