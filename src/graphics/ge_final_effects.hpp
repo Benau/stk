@@ -57,7 +57,7 @@ public:
     // ------------------------------------------------------------------------
     /** Gives GE the data of the camera, call it before the drawAll() of
      *  the camera. */
-    void prepareCamera(Camera* camera);
+    void prepareCamera(Camera* camera, float dt);
 };   // GEFinalEffects
 
 #endif   // !SERVER_ONLY

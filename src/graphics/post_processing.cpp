@@ -21,6 +21,7 @@
 
 #include "config/user_config.hpp"
 #include "graphics/camera/camera.hpp"
+#include "graphics/motion_blur.hpp"
 #include "graphics/central_settings.hpp"
 #include "graphics/frame_buffer.hpp"
 #include "graphics/graphics_restrictions.hpp"
@@ -573,7 +574,7 @@ public:
         // Todo : use a previousPVMatrix per cam, not global
         drawFullScreenEffect(cam->getPreviousPVMatrix(),
                              core::vector2df(0.5, 0.5),
-                             boost_time, // Todo : should be framerate dependent=
+                             boost_time, // Normalized to a 1/60 second frame
                              0.15f);
     }   // render
 };   // MotionBlurShader
@@ -1043,13 +1044,15 @@ void PostProcessing::renderSSAO(const FrameBuffer& linear_depth_framebuffer,
 // ----------------------------------------------------------------------------
 void PostProcessing::renderMotionBlur(const FrameBuffer &in_fbo,
                                       FrameBuffer &out_fbo,
-                                      GLuint depth_stencil_texture)
+                                      GLuint depth_stencil_texture,
+                                      float dt)
 {
     Camera *cam = Camera::getActiveCamera();
     out_fbo.bind();
     glClear(GL_COLOR_BUFFER_BIT);
 
-    float boost_time = m_boost_time.at(cam->getIndex()) * 10.0f;
+    float boost_time = m_boost_time.at(cam->getIndex()) * 10.0f *
+        MotionBlur::getFrameRateFactor(dt);
     MotionBlurShader::getInstance()->render(in_fbo, boost_time, depth_stencil_texture);
 }   // renderMotionBlur
 
@@ -1206,7 +1209,8 @@ void PostProcessing::renderLightning(core::vector3df intensity)
 /** Render the post-processed scene */
 FrameBuffer *PostProcessing::render(scene::ICameraSceneNode * const camnode,
                                     bool isRace,
-                                    RTT *rtts)
+                                    RTT *rtts,
+                                    float dt)
 {
     // Set of ping pong buffers to feed to the post processing passes.
     //
@@ -1375,7 +1379,7 @@ FrameBuffer *PostProcessing::render(scene::ICameraSceneNode * const camnode,
         if (isRace && UserConfigParams::m_motionblur && World::getWorld() &&
             m_boost_time.at(Camera::getActiveCamera()->getIndex()) > 0.0f) // motion blur
         {
-            renderMotionBlur(*in_fbo, *out_fbo, irr_driver->getDepthStencilTexture());
+            renderMotionBlur(*in_fbo, *out_fbo, irr_driver->getDepthStencilTexture(), dt);
             std::swap(in_fbo, out_fbo);
         }
         PROFILER_POP_CPU_MARKER();
