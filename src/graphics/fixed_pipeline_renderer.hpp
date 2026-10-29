@@ -40,6 +40,8 @@ public:
     ~FixedPipelineRenderer();
     
     void onLoadWorld() OVERRIDE;
+    void resetPostProcessing() OVERRIDE;
+    void giveBoost(unsigned int cam_index) OVERRIDE;
     void onUnloadWorld() OVERRIDE;
 
     void render(float dt, bool is_loading) OVERRIDE;

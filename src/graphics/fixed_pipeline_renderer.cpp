@@ -38,6 +38,18 @@ void FixedPipelineRenderer::onLoadWorld()
     
 }
 
+void FixedPipelineRenderer::resetPostProcessing()
+{
+    if (m_final_effects)
+        m_final_effects->reset();
+}
+
+void FixedPipelineRenderer::giveBoost(unsigned int cam_index)
+{
+    if (m_final_effects)
+        m_final_effects->giveBoost(cam_index);
+}
+
 void FixedPipelineRenderer::onUnloadWorld()
 {
     if (GERTTTest::isEnabled())
@@ -59,6 +71,9 @@ FixedPipelineRenderer::~FixedPipelineRenderer()
 void FixedPipelineRenderer::render(float dt, bool is_loading)
 {
     World *world = World::getWorld(); // Never NULL.
+
+    if (m_final_effects)
+        m_final_effects->update(dt);
 
     irr_driver->getVideoDriver()->beginScene(/*backBuffer clear*/ true,
                                              /*zBuffer*/ true,

@@ -15,11 +15,13 @@
 
 #include <IFileSystem.h>
 
+#include <algorithm>
 #include <cstring>
 
 // ----------------------------------------------------------------------------
 GEFinalEffects::GEFinalEffects()
 {
+    // The streaks
     // The same noise as the OpenGL renderer (PostProcessing)
     GE::GEFinalPassInfo info;
     info.m_name = "speed_streaks";
@@ -53,6 +55,33 @@ GEFinalEffects::GEFinalEffects()
     };
     m_speed_streaks_handle = GE::addComputeFinalPass(info, desc);
 
+    // The motion blur, which reads the depth (so it needs the pbr shaders,
+    // GE doesn't enable it without them) and is after the streaks (which it
+    // blurs too, like OpenGL)
+    GE::GEFinalPassInfo blur_info;
+    blur_info.m_name = "motion_blur";
+    blur_info.m_order = GE::GFPO_DEFAULT + 20;
+    blur_info.m_needs_depth = true;
+    blur_info.m_main_target_only = true;
+    blur_info.m_enabled = []() { return UserConfigParams::m_motionblur; };
+
+    GE::GEComputePassDesc blur_desc;
+    blur_desc.m_shader = "motion_blur.comp";
+    // The previous projection view matrix and the boost amount
+    blur_desc.m_push_size = 16 * sizeof(float) + sizeof(float);
+    blur_desc.m_camera_set = true;
+    blur_desc.m_is_active = [](const GE::GEFinalPassView& view)
+    {
+        return view.m_user_data.m_values[UD_MOTION_BLUR_AMOUNT] > 0.0f;
+    };
+    blur_desc.m_fill = [](const GE::GEFinalPassView& view, void* out)
+    {
+        memcpy(out, view.m_prev_pvm.pointer(), 16 * sizeof(float));
+        const float amount = view.m_user_data.m_values[UD_MOTION_BLUR_AMOUNT];
+        memcpy((char*)out + 16 * sizeof(float), &amount, sizeof(float));
+    };
+    m_motion_blur_handle = GE::addComputeFinalPass(blur_info, blur_desc);
+
     // The swapchain was created without them, if one of them is enabled it
     // has to be made again with the chain (nothing is done otherwise)
     GE::getVKDriver()->updateDriver(false/*scale_changed*/,
@@ -63,7 +92,33 @@ GEFinalEffects::GEFinalEffects()
 GEFinalEffects::~GEFinalEffects()
 {
     GE::removeFinalPass(m_speed_streaks_handle);
+    GE::removeFinalPass(m_motion_blur_handle);
 }   // ~GEFinalEffects
+
+// ----------------------------------------------------------------------------
+void GEFinalEffects::reset()
+{
+    m_boost_time.assign(Camera::getNumCameras(), 0.0f);
+}   // reset
+
+// ----------------------------------------------------------------------------
+void GEFinalEffects::giveBoost(unsigned int camera_index)
+{
+    if (camera_index >= m_boost_time.size())
+        m_boost_time.resize(camera_index + 1, 0.0f);
+    // The same as PostProcessing
+    m_boost_time[camera_index] = 0.75f;
+}   // giveBoost
+
+// ----------------------------------------------------------------------------
+void GEFinalEffects::update(float dt)
+{
+    for (float& boost_time : m_boost_time)
+    {
+        if (boost_time > 0.0f)
+            boost_time = std::max(boost_time - dt, 0.0f);
+    }
+}   // update
 
 // ----------------------------------------------------------------------------
 void GEFinalEffects::prepareCamera(Camera* camera)
@@ -84,6 +139,11 @@ void GEFinalEffects::prepareCamera(Camera* camera)
         data.m_values[UD_STREAKS_INTENSITY] = intensity;
         data.m_values[UD_STREAKS_RADIAL_SCROLL_OFFSET] = radial_scroll_offset;
         data.m_values[UD_TIME] = world->getTime();
+
+        // Same as PostProcessing::renderMotionBlur
+        const unsigned index = camera->getIndex();
+        if (UserConfigParams::m_motionblur && index < m_boost_time.size())
+            data.m_values[UD_MOTION_BLUR_AMOUNT] = m_boost_time[index] * 10.0f;
     }
     GE::setFinalPassUserData(camera->getCameraSceneNode(), data);
 }   // prepareCamera
