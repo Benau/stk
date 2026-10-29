@@ -17,6 +17,7 @@
 //  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "graphics/speed_streaks.hpp"
+#include "graphics/camera/camera.hpp"
 #include "karts/kart.hpp"
 
 #include <irrMath.h>
@@ -70,3 +71,41 @@ void SpeedStreaks::update(float dt)
     const float streak_speed = s_streaks_speed_min + s_streaks_speed_max * m_filtered_boost_intensity;
     m_radial_scroll_offset += dt * streak_speed * m_direction;
 }
+
+// ----------------------------------------------------------------------------
+bool SpeedStreaks::getCameraParams(Camera* cam, float* intensity,
+                                   float* radial_scroll_offset)
+{
+#ifndef SERVER_ONLY
+    *intensity = 0.0f;
+    *radial_scroll_offset = 0.0f;
+    const Kart* kart = dynamic_cast<const Kart*>(cam->getKart());
+    SpeedStreaks* speed_streaks = kart ? kart->getSpeedStreaks() : nullptr;
+
+    const Camera::CameraType cam_type = cam->getType();
+    const Camera::Mode       cam_mode = cam->getMode();
+
+    const bool is_valid_cam_mode = cam_mode == Camera::CM_NORMAL      ||
+                                   cam_mode == Camera::CM_REVERSE     ||
+                                   cam_mode == Camera::CM_LEADER_MODE ||
+                                   cam_mode == Camera::CM_FALLING;
+
+    // Determine if we should display speed streaks based on camera type/mode
+    if (!speed_streaks || cam_type != Camera::CM_TYPE_NORMAL ||
+        !is_valid_cam_mode)
+        return false;
+
+    *radial_scroll_offset = speed_streaks->getRadialScrollOffset();
+    *intensity            = speed_streaks->getBoostIntensity();
+
+    // Change on screen direction of speedstreaks based on active camera mode
+    auto direction = SpeedStreaks::Direction::FORWARD;
+    if (cam_mode == Camera::CM_REVERSE ||
+        cam_mode == Camera::CM_LEADER_MODE)
+    {
+        direction = SpeedStreaks::Direction::REVERSE;
+    }
+    speed_streaks->setDirection(direction);
+#endif
+    return true;
+}   // getCameraParams

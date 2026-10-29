@@ -1057,38 +1057,10 @@ void PostProcessing::renderMotionBlur(const FrameBuffer &in_fbo,
 void PostProcessing::renderSpeedStreaks()
 {
     World* world = World::getWorld();
-    Camera* cam  = Camera::getActiveCamera();
-    const Kart* kart = dynamic_cast<const Kart*>(cam->getKart());
-    SpeedStreaks* speed_streaks = kart ? kart->getSpeedStreaks() : nullptr;
-
-    const Camera::CameraType cam_type = cam->getType();
-    const Camera::Mode       cam_mode = cam->getMode();
-
-    const bool is_valid_cam_mode = cam_mode == Camera::CM_NORMAL      ||
-                                   cam_mode == Camera::CM_REVERSE     ||
-                                   cam_mode == Camera::CM_LEADER_MODE ||
-                                   cam_mode == Camera::CM_FALLING;
-
     float radial_scroll_offset  =  0.0f;
     float intensity             =  0.0f;
-
-    // Determine if we should display speed streaks based on camera type/mode
-    if (speed_streaks &&
-        cam_type == Camera::CM_TYPE_NORMAL &&
-        is_valid_cam_mode)
-    {
-        radial_scroll_offset = speed_streaks->getRadialScrollOffset();
-        intensity            = speed_streaks->getBoostIntensity();
-
-        // Change on screen direction of speedstreaks based on active camera mode
-        auto direction = SpeedStreaks::Direction::FORWARD;
-        if (cam_mode == Camera::CM_REVERSE ||
-            cam_mode == Camera::CM_LEADER_MODE)
-        {
-            direction = SpeedStreaks::Direction::REVERSE;
-        }
-        speed_streaks->setDirection(direction);
-    }
+    SpeedStreaks::getCameraParams(Camera::getActiveCamera(), &intensity,
+                                  &radial_scroll_offset);
 
     glEnable(GL_BLEND);
     glBlendEquation(GL_FUNC_ADD);
