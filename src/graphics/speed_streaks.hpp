@@ -19,6 +19,7 @@
 #ifndef HEADER_SPEED_STREAKS_HPP
 #define HEADER_SPEED_STREAKS_HPP
 
+class Camera;
 class Kart;
 class SpeedStreaks
 {
@@ -37,6 +38,12 @@ public:
 
     // Set the direction in which the streaks should move on screen (inwards/outwards).
     void  setDirection(Direction direction) { m_direction = direction; }
+
+    // The speed streaks the camera shows (the kart of the camera, if its type
+    // and mode have streaks, and which way they go): false (and zeros) if
+    // there are none. Same for all renderers.
+    static bool getCameraParams(Camera* cam, float* intensity,
+                                float* radial_scroll_offset);
 
     float getBoostIntensity() const { return m_filtered_boost_intensity; }
     float getRadialScrollOffset() const { return m_radial_scroll_offset; }

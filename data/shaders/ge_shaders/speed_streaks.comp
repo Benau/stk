@@ -1,0 +1,134 @@
+// speed_streaks.comp
+//
+// The pass of GEVulkanFinalChain (see GraphicsEngine ge_final_pass.hpp) which
+// is the same effect as data/shaders/speed_streaks.frag of the OpenGL renderer,
+// added to the tonemapped image (the additive blend of OpenGL) for the
+// viewport of one camera. The parameters of GEFinalEffects (the camera data)
+// are the ones of the uniforms of the fragment shader.
+
+#include "utils/final_pass.glsl"
+
+layout(set = 2, binding = 0) uniform sampler2D u_noise;
+
+layout(push_constant) uniform PushConstants
+{
+    FinalPassHeader m_header;
+    float u_intensity;             // 0.0 to 1.0, how strong the effect is (derived from the kart's speed excess)
+    float u_radial_scroll_offset;  // Integrated uv offset: encodes speed/time/direction.
+    float u_time;                  // Raw world->getTime() specifically needed for color change over time.
+} pc;
+
+const float WISP_DENSITY            = 0.60;     // Density <=> how many wisps should survive the density smoothstep.
+const float WISP_SOFTNESS           = 0.30;     // Cutoff for noise range, determines how soft the wisps appear.
+const float WISP_LENGTH             = 0.10;     // How much should we stretch the UV space radially.
+const float WISP_AMOUNT             = 6.0;      // Amount of discrete sectors at the reference aspect ratio below.
+const float WISP_REFERENCE_ASPECT   = 1.77;     // Aspect ratio the wisp amount is tuned for.
+const float WISP_RIPPLE             = 0.003;    // Strength of the distortion applied to the noise_texture.y coordinates.
+const float WISP_ACTIVATION         = 0.05;     // Threshold boost level at which the effect starts being fully visible.
+
+const float RADIAL_MASK_SOFTNESS    = 1.0;
+const float RADIAL_MASK_SIZE_MIN    = 0.75;
+const float RADIAL_MASK_SIZE_MAX    = 0.5;
+
+const float COLOR_CHANGE_SPEED      = 8.0;      // At what speed should the color change clockwise over time.
+const float COLOR_SATURATION_MIN    = 0.1;
+const float COLOR_SATURATION_MAX    = 1.0;
+
+const float PI  = 3.14159;
+
+void main()
+{
+    ivec2 pos;
+    if (!finalPassGetPixel(pc.m_header, pos))
+        return;
+
+    // -- COORDS SETUP -- //
+    // Normalize UVs [0, 1] in the viewport of the camera, y up like
+    // gl_FragCoord so the angles (and the color change over time) turn the
+    // same way as the OpenGL one
+    const vec2 screen = vec2(pc.m_header.m_rect.zw - pc.m_header.m_rect.xy);
+    vec2 uv = (vec2(pos - pc.m_header.m_rect.xy) + 0.5) / screen;
+    uv.y = 1.0 - uv.y;
+
+    // Centre UVs [-0.5f, 0.5f]
+    uv = uv - 0.5;
+
+    // Scale X coords to convert rectangular screen UVs into a square 1:1 space.
+    float aspect_ratio = screen.x / screen.y;
+    uv.x *= aspect_ratio;
+
+    // Convert Cartesian coords to Polar coords (angle, distance & unit direction)
+    float polar_angle_radians = atan(uv.y, uv.x);
+    float polar_distance      = length(uv);
+    vec2  polar_unit_vector   = vec2(cos(polar_angle_radians), sin(polar_angle_radians));
+
+    // -- ASPECT RATIO CORRECTION -- //
+    // Do a ray (unit_vector from before) box (screen extents) intersection to find the normalized polar_distance
+    // to ensure UVs are mapped correctly to the whole screen.
+    vec2  box_extents   = vec2(0.5 * aspect_ratio, 0.5);
+    vec2  ray_direction = max(abs(polar_unit_vector), vec2(0.0001));
+
+    // t = distance / direction
+    vec2  distances       = box_extents / ray_direction;
+    float border_distance = min(distances.x, distances.y);
+
+    // Normalized polar coords.
+    float polar_distance_normalized = polar_distance / border_distance;
+
+    // Dynamically increase sector count on wider screens to keep streak density even
+    float aspect_scale = sqrt(max(1.0, aspect_ratio / WISP_REFERENCE_ASPECT));
+    float sectors = max(0.5 * WISP_AMOUNT, round(0.5 * WISP_AMOUNT * aspect_scale));
+    float sector_index = polar_angle_radians / PI * sectors;
+
+    // Radial coordinate (y portion of noise texture UVs) used for scrolling the texture outwards.
+    float base_radial_scroll = (polar_distance_normalized * WISP_LENGTH) - pc.u_radial_scroll_offset;
+
+    // -- NOISE SAMPLE(s) -- //
+    // Wisp noise distortion, one ripple per wisp sector.
+    float radial_ripple = sin(2.0 * PI * sector_index) * WISP_RIPPLE;
+    float distorted_radial_scroll = base_radial_scroll + radial_ripple;
+
+    // First layer of simplex noise (base noise layer)
+    vec2 noise_uv_primary = vec2(sector_index, distorted_radial_scroll);
+    float noise_sample_primary = textureLod(u_noise, noise_uv_primary, 0.0).r;
+
+    // Second layer of simplex noise
+    // Scale and shift coords at different frequencies to create parallax between noise layers.
+    vec2 secondary_noise_modifiers = vec2(1.5, 1.350);
+    vec2 noise_uv_secondary = noise_uv_primary * secondary_noise_modifiers;
+
+    float noise_sample_secondary = textureLod(u_noise, noise_uv_secondary, 0.0).r;
+
+    // Intersection of both noise layers, final noise data.
+    float wisp_noise_mask = min(noise_sample_primary, noise_sample_secondary);
+
+    // Threshold wisp mask using density parameters (e.g. discard range of noise frequencies)
+    wisp_noise_mask = smoothstep(WISP_DENSITY, WISP_DENSITY + WISP_SOFTNESS, wisp_noise_mask);
+
+    // -- RADIAL MASK -- //
+    float radial_t = polar_distance_normalized;
+    float radial_mask_size = mix(RADIAL_MASK_SIZE_MIN, RADIAL_MASK_SIZE_MAX, pc.u_intensity);
+    float radial_mask = smoothstep(radial_mask_size, radial_mask_size + RADIAL_MASK_SOFTNESS, radial_t);
+    wisp_noise_mask = wisp_noise_mask * radial_mask;
+
+    // -- ACTIVATION FADE -- //
+    // Threshold the visibility of the effect at low boost levels and smoothly fade in at target edge.
+    float wisp_activation_fade = smoothstep(0.0, WISP_ACTIVATION, pc.u_intensity);
+    wisp_noise_mask = wisp_noise_mask * wisp_activation_fade;
+
+    //-------------//
+    // -- COLOR -- //
+    //-------------//
+    // Inigo Quilez cosine palette technique to generate smooth procedural gradient based on input factor.
+    float color_change_offset = pc.u_time * COLOR_CHANGE_SPEED; // Rotate/Offset through color clockwise over time.
+    float base_hue_shift = sector_index / (2.0 * sectors) + color_change_offset;
+    float color_saturation = mix(COLOR_SATURATION_MIN, COLOR_SATURATION_MAX, pc.u_intensity);
+
+    vec3 spectral_hue = 0.5 + 0.5 * cos(6.28318 * (base_hue_shift + vec3(0.0, 0.333, 0.667)));
+    vec3 palette_output_color = mix(vec3(1.0), spectral_hue, color_saturation);
+
+    // -- FINAL OUTPUT -- /
+    // Additive blend (GL_ONE, GL_ONE), the image is clamped when it's stored
+    const vec4 streaks = vec4(palette_output_color * wisp_noise_mask, wisp_noise_mask);
+    imageStore(u_dst, pos, texelFetch(u_src, pos, 0) + streaks);
+}

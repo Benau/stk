@@ -23,13 +23,21 @@
 #include "utils/cpp2011.hpp"
 
 #include <map>
+#include <memory>
 
+class GEFinalEffects;
 class RenderTarget;
 class GL1RenderTarget;
 
 class FixedPipelineRenderer: public AbstractRenderer
 {
+private:
+    // Only with GE Vulkan, the passes of its final chain
+    std::unique_ptr<GEFinalEffects> m_final_effects;
+
 public:
+    FixedPipelineRenderer();
+    ~FixedPipelineRenderer();
     
     void onLoadWorld() OVERRIDE;
     void onUnloadWorld() OVERRIDE;

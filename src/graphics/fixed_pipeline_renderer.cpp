@@ -19,6 +19,7 @@
 #include "graphics/fixed_pipeline_renderer.hpp"
 #include "config/user_config.hpp"
 #include "graphics/camera/camera.hpp"
+#include "graphics/ge_final_effects.hpp"
 #include "graphics/ge_rtt_test.hpp"
 #include "graphics/irr_driver.hpp"
 #include "graphics/weather.hpp"
@@ -26,6 +27,8 @@
 #include "modes/world.hpp"
 #include "physics/physics.hpp"
 #include "utils/profiler.hpp"
+
+#include <ge_main.hpp>
 
 #include <ISceneManager.h>
 #include <IVideoDriver.h>
@@ -41,6 +44,18 @@ void FixedPipelineRenderer::onUnloadWorld()
         GERTTTest::getInstance()->reset();
 }
 
+FixedPipelineRenderer::FixedPipelineRenderer()
+{
+    if (GE::getDriver()->getDriverType() == video::EDT_VULKAN)
+        m_final_effects.reset(new GEFinalEffects());
+}   // FixedPipelineRenderer
+
+// ----------------------------------------------------------------------------
+FixedPipelineRenderer::~FixedPipelineRenderer()
+{
+}   // ~FixedPipelineRenderer
+
+// ----------------------------------------------------------------------------
 void FixedPipelineRenderer::render(float dt, bool is_loading)
 {
     World *world = World::getWorld(); // Never NULL.
@@ -65,6 +80,8 @@ void FixedPipelineRenderer::render(float dt, bool is_loading)
                                  0x00, 0x00);
         camera->activate();
         rg->preRenderCallback(camera);   // adjusts start referee
+        if (m_final_effects)
+            m_final_effects->prepareCamera(camera);
 
         // Lightning quad of this camera only (GLSL renderer doesn't use this)
         Weather* weather = Weather::getInstance();
