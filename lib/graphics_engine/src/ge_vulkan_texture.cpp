@@ -196,6 +196,7 @@ bool GEVulkanTexture::createTextureImage(uint8_t* texture_data,
             mipmap_generator = new GEMipmapGenerator(texture_data, channels,
                 m_size, normal_map);
         }
+        mipmap_generator->handleMipmap();
         mipmap_data_size = mipmap_generator->getMipmapSizes();
     }
 

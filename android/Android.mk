@@ -209,13 +209,12 @@ LOCAL_CFLAGS       := -DBASISD_SUPPORT_KTX2_ZSTD=0        \
                       -I../lib/bullet/src/                \
                       -I../lib/irrlicht/include/          \
                       -I../lib/shaderc/libshaderc/include \
-                      -I../lib/libsquish                  \
                       -I../lib/simd_wrapper               \
                       -I../lib/graphics_engine/transcoder \
 #ifeq ($(TARGET_ARCH_ABI), armeabi-v7a)
 #LOCAL_ARM_NEON     := false
 #endif
-LOCAL_STATIC_LIBRARIES := shaderc libsquish
+LOCAL_STATIC_LIBRARIES := shaderc
 include $(BUILD_STATIC_LIBRARY)
 include $(CLEAR_VARS)
 
@@ -387,7 +386,7 @@ LOCAL_STATIC_LIBRARIES := irrlicht bullet enet ifaddrs angelscript mcpp SDL2 \
                           vorbisfile vorbis ogg openal curl libmbedtls       \
                           libmbedcrypto libmbedx509 sheenbidi                \
                           harfbuzz freetype tinygettext graphics_utils       \
-                          graphics_engine
+                          graphics_engine libsquish
 
 #ifeq ($(TARGET_ARCH_ABI), armeabi-v7a)
 #LOCAL_ARM_NEON     := false
