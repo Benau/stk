@@ -1,6 +1,5 @@
 #include "ge_vulkan_features.hpp"
 
-#include "ge_compressor_astc_4x4.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_shader_manager.hpp"
 
@@ -101,11 +100,11 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
     vkGetPhysicalDeviceFormatProperties(vk->getPhysicalDevice(),
         VK_FORMAT_BC7_UNORM_BLOCK, &format_properties);
     g_supports_bptc_bc7 = format_properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
-#endif
     format_properties = {};
     vkGetPhysicalDeviceFormatProperties(vk->getPhysicalDevice(),
         VK_FORMAT_ASTC_4x4_UNORM_BLOCK, &format_properties);
     g_supports_astc_4x4 = format_properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+#endif
     g_supports_shader_storage_image_extended_format = vk->getPhysicalDeviceFeatures().shaderStorageImageExtendedFormats;
     if (g_supports_shader_storage_image_extended_format)
     {
@@ -503,7 +502,7 @@ bool GEVulkanFeatures::supportsBPTCBC7()
 // ----------------------------------------------------------------------------
 bool GEVulkanFeatures::supportsASTC4x4()
 {
-    return g_supports_astc_4x4 && GECompressorASTC4x4::loaded();
+    return g_supports_astc_4x4;
 }   // supportsASTC4x4
 
 // ----------------------------------------------------------------------------

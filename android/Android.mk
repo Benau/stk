@@ -107,13 +107,6 @@ include $(PREBUILT_STATIC_LIBRARY)
 include $(CLEAR_VARS)
 
 
-# astc-encoder
-LOCAL_MODULE       := libastcenc
-LOCAL_SRC_FILES    := deps-$(TARGET_ARCH_ABI)/astc-encoder/Source/libastcenc.a
-include $(PREBUILT_STATIC_LIBRARY)
-include $(CLEAR_VARS)
-
-
 # libadrenotools
 ifeq ($(TARGET_ARCH_ABI), arm64-v8a)
 LOCAL_MODULE       := libadrenotools
@@ -206,8 +199,10 @@ LOCAL_MODULE       := graphics_engine
 LOCAL_PATH         := .
 LOCAL_CPP_FEATURES += rtti exceptions
 LOCAL_SRC_FILES    := $(wildcard ../lib/graphics_engine/src/*.c) \
+                      ../lib/graphics_engine/transcoder/basisu_transcoder.cpp \
                       $(wildcard ../lib/graphics_engine/src/*.cpp)
-LOCAL_CFLAGS       := -DENABLE_LIBASTCENC                 \
+LOCAL_CFLAGS       := -DBASISD_SUPPORT_KTX2_ZSTD=0        \
+                      -DBASISU_TC                         \
                       -I../lib/graphics_engine/include    \
                       -I../lib/graphics_utils             \
                       -I../lib/sdl2/include/              \
@@ -216,11 +211,11 @@ LOCAL_CFLAGS       := -DENABLE_LIBASTCENC                 \
                       -I../lib/shaderc/libshaderc/include \
                       -I../lib/libsquish                  \
                       -I../lib/simd_wrapper               \
-                      -Ideps-$(TARGET_ARCH_ABI)/astc-encoder/Source
+                      -I../lib/graphics_engine/transcoder \
 #ifeq ($(TARGET_ARCH_ABI), armeabi-v7a)
 #LOCAL_ARM_NEON     := false
 #endif
-LOCAL_STATIC_LIBRARIES := shaderc libsquish libastcenc
+LOCAL_STATIC_LIBRARIES := shaderc libsquish
 include $(BUILD_STATIC_LIBRARY)
 include $(CLEAR_VARS)
 
