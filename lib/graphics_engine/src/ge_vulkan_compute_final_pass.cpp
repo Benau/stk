@@ -4,6 +4,7 @@
 #include "ge_vulkan_draw_call.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_shader_manager.hpp"
+#include "ge_vulkan_texture.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -18,6 +19,9 @@ GEVulkanComputeFinalPass::GEVulkanComputeFinalPass(GEVulkanDriver* vk,
     const GEComputePassDesc& desc)
                         : GEVulkanPostProcessing(vk, capacity), m_desc(desc),
                           m_needs_depth(needs_depth),
+                          m_texture_layout(VK_NULL_HANDLE),
+                          m_texture_pool(VK_NULL_HANDLE),
+                          m_texture_set(VK_NULL_HANDLE),
                           m_data_layout(VK_NULL_HANDLE),
                           m_pipeline_layout(VK_NULL_HANDLE),
                           m_pipeline(VK_NULL_HANDLE),
@@ -31,11 +35,18 @@ GEVulkanComputeFinalPass::GEVulkanComputeFinalPass(GEVulkanDriver* vk,
                 m_desc.m_shader + " are too big");
         }
         std::vector<VkDescriptorSetLayout> layouts = { io_layout };
-        if (m_desc.m_camera_set)
+        // The camera is set 1 in utils/camera.glsl, the layouts have to be
+        // consecutive so it's there for the textures (set 2) even if it's not
+        // used
+        if (m_desc.m_camera_set || !m_desc.m_texture_paths.empty())
         {
-            // The camera is set 1 in utils/camera.glsl
             m_data_layout = GEVulkanDrawCall::createDataLayout(m_vk);
             layouts.push_back(m_data_layout);
+        }
+        if (!m_desc.m_texture_paths.empty())
+        {
+            createTextureDescriptor();
+            layouts.push_back(m_texture_layout);
         }
         VkPushConstantRange push_constant = {};
         push_constant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -82,10 +93,96 @@ void GEVulkanComputeFinalPass::destroy()
         vkDestroyPipelineLayout(device, m_pipeline_layout, NULL);
     if (m_data_layout != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(device, m_data_layout, NULL);
+    // Frees the set too
+    if (m_texture_pool != VK_NULL_HANDLE)
+        vkDestroyDescriptorPool(device, m_texture_pool, NULL);
+    if (m_texture_layout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, m_texture_layout, NULL);
+    for (irr::video::ITexture* texture : m_textures)
+        texture->drop();
+    m_textures.clear();
+    m_texture_pool = VK_NULL_HANDLE;
+    m_texture_layout = VK_NULL_HANDLE;
+    m_texture_set = VK_NULL_HANDLE;
     m_pipeline = m_copy_pipeline = VK_NULL_HANDLE;
     m_pipeline_layout = VK_NULL_HANDLE;
     m_data_layout = VK_NULL_HANDLE;
 }   // destroy
+
+// ----------------------------------------------------------------------------
+void GEVulkanComputeFinalPass::createTextureDescriptor()
+{
+    const unsigned count = m_desc.m_texture_paths.size();
+    for (const std::string& path : m_desc.m_texture_paths)
+    {
+        GEVulkanTexture* texture = new GEVulkanTexture(path);
+        if (texture->loadingFailed())
+        {
+            texture->drop();
+            throw std::runtime_error("texture " + path + " can't be loaded");
+        }
+        m_textures.push_back(texture);
+    }
+
+    std::vector<VkDescriptorSetLayoutBinding> bindings(count);
+    for (unsigned i = 0; i < count; i++)
+    {
+        bindings[i] = {};
+        bindings[i].binding = i;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo layout_info = {};
+    layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layout_info.bindingCount = count;
+    layout_info.pBindings = bindings.data();
+    VkDevice device = m_vk->getDevice();
+    if (vkCreateDescriptorSetLayout(device, &layout_info, NULL,
+        &m_texture_layout) != VK_SUCCESS)
+        throw std::runtime_error("vkCreateDescriptorSetLayout failed");
+
+    VkDescriptorPoolSize pool_size = {};
+    pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pool_size.descriptorCount = count;
+    VkDescriptorPoolCreateInfo pool_info = {};
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.poolSizeCount = 1;
+    pool_info.pPoolSizes = &pool_size;
+    pool_info.maxSets = 1;
+    if (vkCreateDescriptorPool(device, &pool_info, NULL, &m_texture_pool) !=
+        VK_SUCCESS)
+        throw std::runtime_error("vkCreateDescriptorPool failed");
+
+    VkDescriptorSetAllocateInfo alloc_info = {};
+    alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc_info.descriptorPool = m_texture_pool;
+    alloc_info.descriptorSetCount = 1;
+    alloc_info.pSetLayouts = &m_texture_layout;
+    if (vkAllocateDescriptorSets(device, &alloc_info, &m_texture_set) !=
+        VK_SUCCESS)
+        throw std::runtime_error("vkAllocateDescriptorSets failed");
+
+    std::vector<VkDescriptorImageInfo> image_infos(count);
+    std::vector<VkWriteDescriptorSet> writes(count);
+    for (unsigned i = 0; i < count; i++)
+    {
+        image_infos[i] = {};
+        // Linear and repeat
+        image_infos[i].sampler = m_vk->getSampler(GVS_3D_MESH_MIPMAP_2);
+        image_infos[i].imageView =
+            (VkImageView)m_textures[i]->getTextureHandler();
+        image_infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        writes[i] = {};
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = m_texture_set;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &image_infos[i];
+    }
+    vkUpdateDescriptorSets(device, writes.size(), writes.data(), 0, NULL);
+}   // createTextureDescriptor
 
 // ----------------------------------------------------------------------------
 VkPipeline GEVulkanComputeFinalPass::createPipeline(const char* shader) const
@@ -176,6 +273,11 @@ void GEVulkanComputeFinalPass::apply(VkCommandBuffer cmd,
         return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
+    if (m_texture_set != VK_NULL_HANDLE)
+    {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            m_pipeline_layout, 2, 1, &m_texture_set, 0, NULL);
+    }
     // The viewports don't overlap and only read what is inside of their rect,
     // so there is no barrier between them
     uint8_t constants[sizeof(Header) + GE_FINAL_PASS_MAX_PUSH_SIZE];

@@ -233,6 +233,14 @@ struct GEComputePassDesc
     // pass runs
     std::function<bool(const GEFinalPassView& view)> m_is_active;
 
+    // Files of the textures the pass samples (full path, like
+    // GEConfig::m_bloom_blend_texture), loaded by GE when the pass is created
+    // and dropped when it's destroyed (a pass whose texture can't be loaded is
+    // not created). Texture i is binding i of set 2, sampled with a linear
+    // sampler which repeats: use textureLod(), a compute shader has no
+    // implicit level of detail
+    std::vector<std::string> m_texture_paths;
+
     // Writes the m_push_size bytes of the push constants of the viewport
     std::function<void(const GEFinalPassView& view, void* out)> m_fill;
     // ------------------------------------------------------------------------

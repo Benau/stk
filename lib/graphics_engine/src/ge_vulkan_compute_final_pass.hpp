@@ -4,6 +4,11 @@
 #include "ge_final_pass.hpp"
 #include "ge_vulkan_post_processing.hpp"
 
+namespace irr
+{
+    namespace video { class ITexture; }
+}
+
 namespace GE
 {
 
@@ -39,16 +44,28 @@ private:
 
     bool m_needs_depth;
 
-    // Set 1: the camera of the viewport (utils/camera.glsl), only if
-    // m_desc.m_camera_set
+    // Set 1: the camera of the viewport (utils/camera.glsl)
     VkDescriptorSetLayout m_data_layout;
 
-    // Set 0 is the one of GEVulkanFinalChain::getIOLayout()
+    // Set 2: GEComputePassDesc::m_texture_paths, one binding for each
+    std::vector<irr::video::ITexture*> m_textures;
+
+    VkDescriptorSetLayout m_texture_layout;
+
+    VkDescriptorPool m_texture_pool;
+
+    VkDescriptorSet m_texture_set;
+
+    // Set 0 is the one of GEVulkanFinalChain::getIOLayout(), set 1 the camera
+    // (always in the layout, bound if m_desc.m_camera_set) so set 2 can be
+    // the textures
     VkPipelineLayout m_pipeline_layout;
 
     VkPipeline m_pipeline;
 
     VkPipeline m_copy_pipeline;
+    // ------------------------------------------------------------------------
+    void createTextureDescriptor();
     // ------------------------------------------------------------------------
     // The size of the push constants, a multiple of 4
     uint32_t getPushSize() const
