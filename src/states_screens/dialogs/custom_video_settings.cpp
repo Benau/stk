@@ -106,6 +106,7 @@ void CustomVideoSettingsDialog::beforeAddingWidgets()
     getWidget<CheckBoxWidget>("lightshaft")->setState(UserConfigParams::m_light_shaft);
     getWidget<CheckBoxWidget>("ibl")->setState(!UserConfigParams::m_degraded_IBL);
     getWidget<CheckBoxWidget>("motionblur")->setState(UserConfigParams::m_motionblur);
+    getWidget<CheckBoxWidget>("speedstreaks")->setState(UserConfigParams::m_speed_streaks);
     getWidget<CheckBoxWidget>("glow")->setState(UserConfigParams::m_glow);
     getWidget<CheckBoxWidget>("ssao")->setState(UserConfigParams::m_ssao);
     getWidget<CheckBoxWidget>("ssr")->setState(UserConfigParams::m_ssr);
@@ -256,8 +257,18 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
             }
             UserConfigParams::m_dof = dof;
 
-            UserConfigParams::m_motionblur      =
-                advanced_pipeline && getWidget<CheckBoxWidget>("motionblur")->getState();
+            // The passes of the final chain of GE Vulkan, which has to make
+            // the swapchain again (updateDriver) when one is enabled or
+            // disabled, it needs a FBO (and the depth for the motion blur)
+            const bool motionblur = advanced_pipeline &&
+                getWidget<CheckBoxWidget>("motionblur")->getState();
+            const bool speed_streaks = advanced_pipeline &&
+                getWidget<CheckBoxWidget>("speedstreaks")->getState();
+            const bool final_pass_changed =
+                UserConfigParams::m_motionblur != motionblur ||
+                UserConfigParams::m_speed_streaks != speed_streaks;
+            UserConfigParams::m_motionblur = motionblur;
+            UserConfigParams::m_speed_streaks = speed_streaks;
 
             if (advanced_pipeline)
             {
@@ -400,6 +411,7 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
                 if (need_recreate_swapchain || pbr_changed || ibl_changed ||
                     glow_changed || light_scatter_changed || bloom_changed ||
                     ssao_changed || god_rays_changed || dof_changed ||
+                    final_pass_changed ||
                     prev_shadow_size != GE::getGEConfig()->m_shadow_size ||
                     prev_shadow_type != GE::getGEConfig()->m_shadow_type)
                     GE::getVKDriver()->updateDriver(need_recreate_swapchain, pbr_changed, ibl_changed);
@@ -469,7 +481,8 @@ void CustomVideoSettingsDialog::updateActivation()
         getWidget<CheckBoxWidget>("dynamiclight")->setActive(true);
         light = false;
     }
-    getWidget<CheckBoxWidget>("motionblur")->setActive(light);
+    getWidget<CheckBoxWidget>("motionblur")->setActive(light || (vk && real_light));
+    getWidget<CheckBoxWidget>("speedstreaks")->setActive(light || (vk && real_light));
     getWidget<CheckBoxWidget>("dof")->setActive(light || (vk && real_light));
     getWidget<SpinnerWidget>("shadows")->setActive(light || (vk && real_light));
     getWidget<SpinnerWidget>("anti_aliasing")->setActive(light || vk);
