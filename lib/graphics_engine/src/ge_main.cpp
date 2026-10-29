@@ -313,9 +313,11 @@ void refreshDeferredSplit()
     // shaders before the lighting pass
     if (g_config.m_god_rays)
         g_config.m_deferred_split |= 1 << 6;
-    // The depth of field reads the depth which the FBO keeps after its last
-    // render pass (a regular sampled texture, not a transient attachment)
-    if (isDepthOfFieldEnabled())
+    // The depth of field (and the passes of the game which read the depth, see
+    // GEFinalPassInfo::m_needs_depth) read the depth which the FBO keeps after
+    // its last render pass (a regular sampled texture, not a transient
+    // attachment)
+    if (needsFinalPassDepth())
         g_config.m_deferred_split |= 1 << 7;
 }
 
@@ -364,11 +366,6 @@ bool isDepthOfFieldEnabled()
 {
     return g_config.m_dof && g_config.m_pbr &&
         GEVulkanFeatures::supportsComputeInMainQueue();
-}
-
-bool isFinalChainEnabled()
-{
-    return isAntiAliasingEnabled() || isDepthOfFieldEnabled();
 }
 
 GEAntiAliasing getAntiAliasingFromName(const std::string& name)

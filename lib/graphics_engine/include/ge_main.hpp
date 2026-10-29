@@ -227,8 +227,12 @@ bool isAntiAliasingEnabled();
 // used (the split deferred FBO is needed)
 bool isDepthOfFieldEnabled();
 // True if the scene is rendered to a FBO which has the stages of
-// GEVulkanFinalChain: the anti-aliasing or the depth of field
+// GEVulkanFinalChain: the anti-aliasing, the depth of field, or a pass added
+// with addFinalPass() (ge_final_pass.hpp) which is enabled
 bool isFinalChainEnabled();
+// True if an enabled pass of the final chain reads the depth of the FBO (the
+// depth of field is one), which needs the split deferred FBO
+bool needsFinalPassDepth();
 // The anti-aliasing of the lower case name the game saves in its config: "fxaa"
 // or "cmaa2", GAA_NONE for any other name (the game resolves the names of the
 // other renderers itself)
