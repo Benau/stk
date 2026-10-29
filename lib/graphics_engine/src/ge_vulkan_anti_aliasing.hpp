@@ -1,7 +1,7 @@
 #ifndef HEADER_GE_VULKAN_ANTI_ALIASING_HPP
 #define HEADER_GE_VULKAN_ANTI_ALIASING_HPP
 
-#include "ge_vulkan_final_chain.hpp"
+#include "ge_final_pass.hpp"
 #include "ge_vulkan_post_processing.hpp"
 
 #include "ge_vma.hpp"

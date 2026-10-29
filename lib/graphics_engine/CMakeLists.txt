@@ -50,6 +50,7 @@ set(GE_SOURCES
     src/ge_vulkan_environment_map.cpp
     src/ge_vulkan_fbo_texture.cpp
     src/ge_vulkan_features.cpp
+    src/ge_final_pass.cpp
     src/ge_vulkan_final_chain.cpp
     src/ge_vulkan_depth_of_field.cpp
     src/ge_vulkan_fxaa.cpp

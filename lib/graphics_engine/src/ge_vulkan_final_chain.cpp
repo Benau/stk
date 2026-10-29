@@ -1,12 +1,9 @@
 #include "ge_vulkan_final_chain.hpp"
 
 #include "ge_main.hpp"
-#include "ge_vulkan_anti_aliasing.hpp"
 #include "ge_vulkan_attachment_texture.hpp"
-#include "ge_vulkan_depth_of_field.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_fbo_texture.hpp"
-#include "ge_vulkan_fxaa.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -107,34 +104,42 @@ GEVulkanFinalChain::GEVulkanFinalChain(GEVulkanDriver* vk,
     try
     {
         createIOLayout();
-        // The order of the stages is the order they run: the anti-aliasing
-        // is after the depth of field, so it works on the edges of it too
-        if (isDepthOfFieldEnabled())
-        {
-            m_stages.push_back(new GEVulkanDepthOfField(m_vk, m_io_layout,
-                m_capacity));
-        }
-        switch (isAntiAliasingEnabled() ? getGEConfig()->m_anti_aliasing :
-            GAA_NONE)
-        {
-        case GAA_FXAA:
-            m_stages.push_back(new GEVulkanFXAA(m_vk, m_io_layout,
-                m_capacity));
-            break;
-        case GAA_CMAA2:
-            m_stages.push_back(new GEVulkanAntiAliasing(m_vk, m_io_layout,
-                m_capacity));
-            break;
-        default:
-            break;
-        }
     }
     catch (std::exception& e)
     {
-        // A stage which can't be created doesn't stop the other ones
-        logMessage(GLL_ERROR, "GEVulkanFinalChain: %s, anti-aliasing and "
-            "depth of field are disabled", e.what());
+        logMessage(GLL_ERROR, "GEVulkanFinalChain: %s, the final passes are "
+            "disabled", e.what());
         destroy();
+        return;
+    }
+    // Sorted by order, so for example the anti-aliasing is after the depth of
+    // field and works on the edges of it too
+    for (const GEFinalPassInfo& info : getEnabledFinalPasses())
+    {
+        if (m_stages.size() >= 32)
+        {
+            logMessage(GLL_WARNING, "GEVulkanFinalChain: too many passes, %s "
+                "is ignored", info.m_name.c_str());
+            continue;
+        }
+        try
+        {
+            GEVulkanFinalStage* stage = info.m_create ?
+                info.m_create(m_vk, m_io_layout, m_capacity) : NULL;
+            if (!stage)
+                continue;
+            Stage s;
+            s.m_stage = stage;
+            s.m_main_only = info.m_main_target_only;
+            s.m_name = info.m_name;
+            m_stages.push_back(s);
+        }
+        catch (std::exception& e)
+        {
+            // A stage which can't be created doesn't stop the other ones
+            logMessage(GLL_ERROR, "GEVulkanFinalChain: %s is disabled: %s",
+                info.m_name.c_str(), e.what());
+        }
     }
 }   // GEVulkanFinalChain
 
@@ -148,8 +153,8 @@ GEVulkanFinalChain::~GEVulkanFinalChain()
 void GEVulkanFinalChain::destroy()
 {
     // The pipeline layouts of the stages use the layout
-    for (GEVulkanFinalStage* stage : m_stages)
-        delete stage;
+    for (Stage& stage : m_stages)
+        delete stage.m_stage;
     m_stages.clear();
     if (m_io_layout != VK_NULL_HANDLE)
     {
@@ -230,7 +235,9 @@ void GEVulkanFinalChain::initTarget(GEVulkanFBOTexture* fbo, bool main_target)
         fbo->getDepthTexture();
     for (unsigned i = 0; i < m_stages.size(); i++)
     {
-        if (m_stages[i]->needsDepth() && !has_depth)
+        if (m_stages[i].m_stage->needsDepth() && !has_depth)
+            continue;
+        if (m_stages[i].m_main_only && !main_target)
             continue;
         mask |= 1u << i;
         count++;
@@ -302,8 +309,8 @@ void GEVulkanFinalChain::initTarget(GEVulkanFBOTexture* fbo, bool main_target)
     }
     catch (std::exception& e)
     {
-        logMessage(GLL_WARNING, "GEVulkanFinalChain: no anti-aliasing and "
-            "depth of field for a target: %s", e.what());
+        logMessage(GLL_WARNING, "GEVulkanFinalChain: no final passes for a "
+            "target: %s", e.what());
         delete target;
         return;
     }
@@ -362,7 +369,8 @@ void GEVulkanFinalChain::render(VkCommandBuffer cmd, GEVulkanFBOTexture* fbo,
         if ((target->m_stage_mask & (1u << i)) == 0)
             continue;
         const unsigned set = k == 0 ? 0 : (k % 2 == 1 ? 1 : 2);
-        m_stages[i]->apply(cmd, target->m_sets[set], fbo->getSize(), p);
+        m_stages[i].m_stage->apply(cmd, target->m_sets[set], fbo->getSize(),
+            p);
         k++;
         if (k < target->m_stage_count)
         {

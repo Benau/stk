@@ -26,7 +26,7 @@ GEVulkanDeferredFBO::GEVulkanDeferredFBO(GEVulkanDriver* vk,
                      getGEConfig()->m_auto_deferred_type == GADT_DISPLACE)),
                      m_swapchain_output(swapchain_output),
                      m_keep_depth(getGEConfig()->m_deferred_split != 0 &&
-                     !s_creating_offscreen_rtt && isDepthOfFieldEnabled())
+                     !s_creating_offscreen_rtt && needsFinalPassDepth())
 {
     m_attachments = {};
     m_descriptor_layout.fill(VK_NULL_HANDLE);

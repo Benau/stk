@@ -1,6 +1,8 @@
 #ifndef HEADER_GE_VULKAN_FINAL_CHAIN_HPP
 #define HEADER_GE_VULKAN_FINAL_CHAIN_HPP
 
+#include "ge_final_pass.hpp"
+
 #include "vulkan_wrapper.h"
 
 #include "dimension2d.h"
@@ -8,6 +10,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -109,59 +112,45 @@ public:
     }
 };   // GEVulkanFinalTarget
 
-// One step of the chain, rendered with compute shaders after the FBO is
-// rendered and before it is sampled by anything (the 2D renderer, or the
-// users of a separate render target): the depth of field and the
-// anti-aliasing now, and for example an upscaler later
-class GEVulkanFinalStage
-{
-public:
-    // ------------------------------------------------------------------------
-    virtual ~GEVulkanFinalStage()                                            {}
-    // ------------------------------------------------------------------------
-    // True if the stage reads the depth of the FBO (binding 2 of io_set, in
-    // shader read only layout), so it only runs for the FBO which keeps it
-    // (GEVulkanFBOTexture::hasStoredDepth()), and only for the main one (not
-    // the separate render targets, see GEVulkanFinalChain::initTarget)
-    virtual bool needsDepth() const                           { return false; }
-    // ------------------------------------------------------------------------
-    // Outside of render pass. Reads binding 0 (and binding 2, the depth, if
-    // needsDepth()) and writes binding 1 of io_set (set 0 of the pipeline
-    // layout of the stage, which must be created with
-    // GEVulkanFinalChain::getIOLayout()) and has to write all pixels of the
-    // image, also the ones which are not in any viewport. The first one of
-    // the chain is called with the layouts (shader read only for the sampled
-    // image, general for the storage image) and the memory barriers for the
-    // compute shaders of the chain already done, the chain does the barriers
-    // between the stages and after the last one
-    virtual void apply(VkCommandBuffer cmd, VkDescriptorSet io_set,
-        const irr::core::dimension2d<irr::u32>& size,
-        const std::vector<std::pair<GEVulkanDrawCall*,
-        GEVulkanCamera*> >& p) = 0;
-};   // GEVulkanFinalStage
+// The passes which are enabled now (GEFinalPassInfo::m_enabled, and the
+// device can run them), sorted by GEFinalPassOrder
+std::vector<GEFinalPassInfo> getEnabledFinalPasses();
 
 // The last step of the rendering of a FBO (the main one, and the separate
 // render targets which have a GEVulkanFinalTarget), after its last render pass:
 //
-// 1. The stages of GEConfig run in order: the depth of field
-//    (GEVulkanDepthOfField, main FBO only), then the anti-aliasing
-//    (GEVulkanFXAA or GEVulkanAntiAliasing), so the edges between the sharp
-//    and the blurred areas are anti-aliased too. Both can be used at the same
-//    time, or only one of them. One reads what the previous one wrote: the
-//    first reads the FBO and writes GEVulkanFinalTarget::m_images[0], the
-//    second reads it and writes m_images[1], the third reads that and writes
-//    m_images[0]...
+// 1. The enabled passes (see GEFinalPassInfo) run in the order of
+//    GEFinalPassOrder: the depth of field (GEVulkanDepthOfField, main FBO
+//    only), the passes of the game, then the anti-aliasing (GEVulkanFXAA or
+//    GEVulkanAntiAliasing), so the edges between the sharp and the blurred
+//    areas are anti-aliased too. Any of them can be used at the same time, or
+//    none. One reads what the previous one wrote: the first reads the FBO
+//    and writes GEVulkanFinalTarget::m_images[0], the second reads it and
+//    writes m_images[1], the third reads that and writes m_images[0]...
 // 2. The final image is the one the last stage wrote, in shader read only
 //    layout. GEVulkanFBOTexture::getImageView returns the view of it, so
 //    everything which samples the FBO (the 2D renderer when it presents the
 //    main one, and the users of a separate target) reads it directly: no copy
 //    back to the image of the FBO
 //
-// To add a stage: implement GEVulkanFinalStage and add it in the constructor in
-// the order it has to run
+// To add a stage: implement GEVulkanFinalStage and register it with
+// addFinalPass() (ge_final_pass.hpp), the passes of GE are registered the same
+// way
 class GEVulkanFinalChain
 {
 private:
+    struct Stage
+    {
+        GEVulkanFinalStage* m_stage;
+
+        // See GEFinalPassInfo::m_main_target_only
+        bool m_main_only;
+
+        std::string m_name;
+        // --------------------------------------------------------------------
+        Stage() : m_stage(NULL), m_main_only(true)                           {}
+    };
+
     GEVulkanDriver* m_vk;
 
     // Targets bigger than this have no GEVulkanFinalTarget (the working
@@ -174,16 +163,17 @@ private:
 
     std::shared_ptr<GEVulkanFinalPool> m_pool;
 
-    std::vector<GEVulkanFinalStage*> m_stages;
+    // In the order they run, at most 32 (GEVulkanFinalTarget::m_stage_mask)
+    std::vector<Stage> m_stages;
     // ------------------------------------------------------------------------
     void createIOLayout();
     // ------------------------------------------------------------------------
     void destroy();
 public:
     // ------------------------------------------------------------------------
-    // The stages are created with the setting of GEConfig, it has no stage
-    // (isEmpty()) if there is none or it can't be created. capacity is the
-    // size of the biggest FBO
+    // The stages of the enabled passes (getEnabledFinalPasses()) are created,
+    // it has no stage (isEmpty()) if there is none or they can't be created.
+    // capacity is the size of the biggest FBO
     GEVulkanFinalChain(GEVulkanDriver* vk,
                        const irr::core::dimension2d<irr::u32>& capacity);
     // ------------------------------------------------------------------------
