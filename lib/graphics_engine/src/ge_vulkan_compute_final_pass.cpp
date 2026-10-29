@@ -133,6 +133,20 @@ void GEVulkanComputeFinalPass::collect(const std::vector<std::pair<
 }   // collect
 
 // ----------------------------------------------------------------------------
+bool GEVulkanComputeFinalPass::isActive(const std::vector<std::pair<
+    GEVulkanDrawCall*, GEVulkanCamera*> >& p) const
+{
+    // Without a condition the pass runs for any viewport
+    if (!m_desc.m_is_active)
+        return !p.empty();
+    // The rect is the one clamped to the biggest FBO here, only the
+    // viewports of the camera matter
+    std::vector<Item> items;
+    collect(p, &items);
+    return !items.empty();
+}   // isActive
+
+// ----------------------------------------------------------------------------
 void GEVulkanComputeFinalPass::apply(VkCommandBuffer cmd,
     VkDescriptorSet io_set, const irr::core::dimension2d<irr::u32>& size,
     const std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCamera*> >& p)

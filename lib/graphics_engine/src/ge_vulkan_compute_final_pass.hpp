@@ -75,6 +75,10 @@ public:
     // ------------------------------------------------------------------------
     virtual bool needsDepth() const                   { return m_needs_depth; }
     // ------------------------------------------------------------------------
+    // True if GEComputePassDesc::m_is_active is true for any viewport
+    virtual bool isActive(const std::vector<std::pair<GEVulkanDrawCall*,
+                          GEVulkanCamera*> >& p) const;
+    // ------------------------------------------------------------------------
     // Not used, it's the stage of GEVulkanFinalChain (see apply)
     virtual bool render(VkCommandBuffer cmd,
                         const std::vector<std::pair<GEVulkanDrawCall*,

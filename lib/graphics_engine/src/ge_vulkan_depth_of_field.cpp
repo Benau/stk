@@ -224,6 +224,14 @@ void GEVulkanDepthOfField::createPipelines(VkDescriptorSetLayout io_layout)
 }   // createPipelines
 
 // ----------------------------------------------------------------------------
+bool GEVulkanDepthOfField::isActive(const std::vector<std::pair<
+    GEVulkanDrawCall*, GEVulkanCamera*> >& p) const
+{
+    // Same as the radius which apply() only copies the image for
+    return getGEConfig()->m_dof_max_radius >= 0.5f;
+}   // isActive
+
+// ----------------------------------------------------------------------------
 void GEVulkanDepthOfField::apply(VkCommandBuffer cmd, VkDescriptorSet io_set,
     const irr::core::dimension2d<irr::u32>& size,
     const std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCamera*> >& p)
