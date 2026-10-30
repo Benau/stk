@@ -28,7 +28,9 @@
 #include "graphics/irr_driver.hpp"
 #include "guiengine/CGUISpriteBank.hpp"
 #include "guiengine/emoji_keyboard.hpp"
+#include "guiengine/event_handler.hpp"
 #include "guiengine/scalable_font.hpp"
+#include "guiengine/scroll_swipe.hpp"
 #include "guiengine/widgets/CGUIEditBox.hpp"
 #include "guiengine/widgets/button_widget.hpp"
 #include "guiengine/widgets/icon_button_widget.hpp"
@@ -93,6 +95,7 @@ NetworkingLobby::NetworkingLobby() : Screen("online/networking_lobby.stkgui")
     m_chat_box = NULL;
     m_send_button = NULL;
     m_icon_bank = NULL;
+    m_swipe = NULL;
     m_reload_server_info = false;
     m_addon_install = NULL;
     
@@ -274,6 +277,8 @@ void NetworkingLobby::init()
     if (m_text_bubble && !m_chat_scrollbar)
     {
         initChatScrollbar();
+        // Force chat to scroll to bottom when the peer/player enter in the server
+        scrollChatToBottom();
     }
     
     // If we have chat content, restore scroll position (scroll to bottom if auto-scroll enabled)
@@ -297,6 +302,16 @@ void NetworkingLobby::init()
     
     gui::IGUIStaticText* st =
         m_text_bubble->getIrrlichtElement<gui::IGUIStaticText>();
+
+    delete m_swipe;
+    m_swipe = NULL;
+    if (m_chat_scrollbar)
+    {
+        m_swipe = new ScrollSwipe(GUIEngine::getGUIEnv(), st, ScrollSwipe::VERTICAL);
+        m_swipe->setScrollBar(m_chat_scrollbar);
+        m_swipe->setScrollFactor(-1.0f);
+    }
+
     NetworkingLobby* lobby = this;
     st->setMouseCallback([lobby](gui::IGUIStaticText* text, SEvent::SMouseInput mouse)->bool
     {
@@ -315,8 +330,36 @@ void NetworkingLobby::init()
             return false;
         }
         
-        if (mouse.Event == EMIE_LMOUSE_PRESSED_DOWN)
+        ScrollSwipe* swipe = lobby->m_swipe;
+        if (swipe && lobby->m_chat_scrollbar && lobby->m_chat_scrollbar->isVisible())
         {
+            if (mouse.Event == EMIE_MOUSE_MOVED && !mouse.isLeftPressed())
+            {
+                EventHandler::get()->releaseMouse(text);
+                swipe->cancelSwipe();
+            }
+
+            SEvent ev;
+            ev.EventType = EET_MOUSE_INPUT_EVENT;
+            ev.MouseInput = mouse;
+
+            if (swipe->onEvent(ev))
+            {
+                if (mouse.Event == EMIE_LMOUSE_LEFT_UP)
+                    EventHandler::get()->releaseMouse(text);
+                return true;
+            }
+            if (mouse.Event == EMIE_LMOUSE_PRESSED_DOWN)
+            {
+                EventHandler::get()->captureMouse(text);
+                return true;
+            }
+        }
+
+        if (mouse.Event == EMIE_LMOUSE_LEFT_UP)
+        {
+            EventHandler::get()->releaseMouse(text);
+
             std::shared_ptr<std::u32string> s;
             int glyph_idx = -1;
             int cluster = text->getCluster(mouse.X, mouse.Y, &s, &glyph_idx);
@@ -697,6 +740,9 @@ void NetworkingLobby::filterGlyphLayoutsForScroll()
 // ----------------------------------------------------------------------------
 void NetworkingLobby::onUpdate(float delta)
 {
+    if (m_swipe)
+        m_swipe->updateScrollCoasting();
+
     m_addon_install = NULL;
     if (NetworkConfig::get()->isServer() || !STKHost::existHost())
         return;
@@ -1048,6 +1094,7 @@ bool NetworkingLobby::onEnterPressed(const irr::core::stringw& text)
             }
             else
                 cl->sendChat(text, KART_TEAM_NONE);
+            scrollChatToBottom();
         }
     }
     return true;
@@ -1161,6 +1208,11 @@ void NetworkingLobby::tearDown()
 
     gui::IGUIStaticText* st =
         m_text_bubble->getIrrlichtElement<gui::IGUIStaticText>();
+
+    EventHandler::get()->releaseMouse(st);
+    delete m_swipe;
+    m_swipe = NULL;
+
     st->setMouseCallback(nullptr);
     m_player_list = NULL;
     m_joined_server.reset();
