@@ -4,10 +4,11 @@
 //
 // u_history is the tonemapped output of the previous frame (the attachment of
 // the tonemap pass, so it has the bloom, the ghost and transparent materials
-// too), converted back to hdr. The traced color replaces the (already lit)
-// color of the glossy pixel by the weight of SSRBlendWeight, so the output is
-// premultiplied (blended by m_alphablend: src + dst * (1 - alpha)). Pixels
-// without a hit, or not glossy, are discarded.
+// too), converted back to hdr. The traced color replaces the specular IBL of
+// the (already lit) color of the glossy pixel, scaled by the weight of
+// SSRBlendWeight and the Fresnel of the IBL (reflectionSpecularAlbedo), so the
+// output is hit - ibl added to it (m_additive, it can be negative, the diffuse
+// is not changed). Pixels without a hit, or not glossy, are discarded.
 //
 // Set 0 is the one of GEVulkanHiZDepth::getRenderingDescriptorSet() (same
 // layout as the displace pass, the first image is the history instead of the
@@ -16,6 +17,7 @@
 layout(set = 0, binding = 0) uniform sampler2D u_history;
 layout(set = 0, binding = 1) uniform sampler2DShadow u_depth_shadow;
 layout(set = 0, binding = 2) uniform sampler2D u_hiz_depth;
+layout(set = 2, binding = 0) uniform sampler2D u_color;
 layout(set = 2, binding = 1) uniform sampler2D u_normal;
 layout(set = 2, binding = 2) uniform sampler2D u_depth;
 layout(set = 3, binding = 1) uniform samplerCube u_specular;
@@ -55,21 +57,7 @@ void main()
     // Disable raycasts towards camera
     float cosine = dot(reflected, eyedir);
     if (!SSRIsReflective(specval, cosine))
-    {
-        if (u_ibl)
-        {
-            vec3 world_reflection = (u_camera.m_inverse_view_matrix *
-                vec4(reflected, 0.0)).xyz;
-            float perceptual_roughness = 1.0 - specval;
-            float weight = 0.35 * smoothstep(0.2, 0.5, cosine);
-            vec3 ibl = textureLod(u_specular, world_reflection,
-                perceptual_roughness * u_specular_levels_minus_one).rgb;
-            o_color = vec4(ibl * weight, weight);
-            return;
-        }
-        else
-            discard;
-    }
+        discard;
 
     vec2 viewport_scale = u_camera.m_viewport.zw / u_camera.m_screensize.xy;
     vec2 viewport_offset = u_camera.m_viewport.xy / u_camera.m_screensize.xy;
@@ -103,5 +91,22 @@ void main()
         discard;
 
     vec3 hdr = inverseConvertColor(texture(u_history, coords).rgb);
-    o_color = vec4(hdr * weight, weight);
+    // Replace the specular IBL of the lit color by the hit, with the same
+    // Fresnel and F0 (metallic) of it, the diffuse is not touched. The
+    // output is added (m_additive) and can be negative
+    float perceptual_roughness = 1.0 - specval;
+    float metallic = normal_data.w;
+    vec3 albedo = texelFetch(u_color, pixel, 0).rgb;
+    float NdotV = max(dot(normal, eyedir), 0.0001);
+    vec3 spec_albedo = reflectionSpecularAlbedo(albedo, metallic,
+        perceptual_roughness, NdotV);
+    vec3 ibl = vec3(0.0);
+    if (u_ibl)
+    {
+        vec3 world_reflection = (u_camera.m_inverse_view_matrix *
+            vec4(reflected, 0.0)).xyz;
+        ibl = textureLod(u_specular, world_reflection,
+            perceptual_roughness * u_specular_levels_minus_one).rgb;
+    }
+    o_color = vec4(weight * spec_albedo * (hdr - ibl), 0.0);
 }
