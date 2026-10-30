@@ -335,20 +335,40 @@ void GEVulkanShaderManager::loadAllShaders(const std::string& match_filename)
             kind = shaderc_tess_evaluation_shader;
         else
             continue;
-        g_shaders[filename] = std::unique_ptr<ShaderHolder>(new ShaderHolder);
-        auto holder = g_shaders.at(filename).get();
+        // Reuse the holder when reloading, so a shader failed to compile
+        // (typo...) keeps its previous working version instead of being gone
+        auto& slot = g_shaders[filename];
+        if (!slot)
+            slot = std::unique_ptr<ShaderHolder>(new ShaderHolder);
+        auto holder = slot.get();
         holder->m_lock.lock();
         GEVulkanCommandLoader::addMultiThreadingCommand(
             [holder, kind, filename]()
             {
                 try
                 {
-                    holder->m_spirv = Private::compileShader(kind, filename,
-                        true/*set_reload_data*/);
+                    std::vector<uint32_t> spirv = Private::compileShader(kind,
+                        filename, true/*set_reload_data*/);
+                    // Pipelines already created from the old module retain
+                    // their shader code, so the module can be destroyed here
+                    if (holder->m_shader_module != VK_NULL_HANDLE)
+                    {
+                        vkDestroyShaderModule(g_vk->getDevice(),
+                            holder->m_shader_module, NULL);
+                        holder->m_shader_module = VK_NULL_HANDLE;
+                    }
+                    holder->m_spirv.swap(spirv);
                 }
                 catch (std::exception& e)
                 {
                     GE::logMessage(GE::GLL_ERROR, "%s", e.what());
+                    if (holder->m_shader_module != VK_NULL_HANDLE ||
+                        !holder->m_spirv.empty())
+                    {
+                        GE::logMessage(GE::GLL_ERROR,
+                            "Keeping the previous version of %s",
+                            filename.c_str());
+                    }
                 }
                 holder->m_lock.unlock();
             });
