@@ -7195,3 +7195,58 @@ msgstr "Αν χρειάζεσε περισσότερη σταθερότητα, �
 #: net.supertuxkart.SuperTuxKart.metainfo.xml:49
 msgid "SuperTuxKart Team"
 msgstr "Ομάδα SuperTuxKart"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Ray Tracing Settings"
+msgstr "Ρυθμίσεις ray tracing"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Ray tracing"
+msgstr "Ray tracing"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Realistic solid reflections"
+msgstr "Ρεαλιστικές αντανακλάσεις σε συμπαγείς επιφάνειες"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Realistic water reflections"
+msgstr "Ρεαλιστικές αντανακλάσεις στο νερό"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Realistic shadows"
+msgstr "Ρεαλιστικές σκιές"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Karts and items"
+msgstr "Καρτ και αντικείμενα"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Plants and fences"
+msgstr "Φυτά και φράχτες"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Moving plants"
+msgstr "Κινούμενα φυτά"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Ray tracing needs advanced pipeline and a compatible device."
+msgstr "Το ray tracing απαιτεί προηγμένο αγωγό γραφικών (pipeline) και συμβατή συσκευή."
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Point light shadows"
+msgstr "Σκιές σημειακών φωτεινών πηγών"
+
+#. I18N: ./data/gui/options/options_video.stkgui
+#. I18N: Video settings
+msgid "Ray tracing settings..."
+msgstr "Ρυθμίσεις ray tracing..."
