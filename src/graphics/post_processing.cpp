@@ -746,8 +746,8 @@ PostProcessing::PostProcessing()
 
     // Load the simplex noise texture
     const std::string noiseTexturePath = file_manager->getAsset(
-        FileManager::AssetType::TEXTURE,
-        "stk_noise_simplex.png");
+        FileManager::AssetType::SHADER,
+        "stk_noise_simplex.jpg");
 
     img = irr_driver->getVideoDriver()->createImageFromFile(
         noiseTexturePath.c_str());
