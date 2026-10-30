@@ -38,8 +38,8 @@ GEFinalEffects::GEFinalEffects()
     desc.m_camera_set = false;
     desc.m_texture_paths.push_back(
         file_manager->getFileSystem()->getAbsolutePath(
-        file_manager->getAsset(FileManager::TEXTURE,
-        "stk_noise_simplex.png").c_str()).c_str());
+        file_manager->getAsset(FileManager::SHADER,
+        "stk_noise_simplex.jpg").c_str()).c_str());
     desc.m_is_active = [](const GE::GEFinalPassView& view)
     {
         return view.m_user_data.m_values[UD_STREAKS_INTENSITY] > 0.0f;
