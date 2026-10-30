@@ -238,6 +238,7 @@ void OnlineScreen::onUpdate(float delta)
     // In case for entering server address finished
     if (m_entered_server)
     {
+        user_config->saveConfig();
         NetworkConfig::get()->setIsLAN();
         NetworkConfig::get()->setIsServer(false);
         ServerConfig::m_private_server_password = "";
