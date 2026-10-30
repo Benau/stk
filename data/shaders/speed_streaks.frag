@@ -94,14 +94,14 @@ void main() {
 
     // First layer of simplex noise (base noise layer)
 	vec2 noise_uv_primary = vec2(sector_index, distorted_radial_scroll);
-	float noise_sample_primary = texture(noise_texture, noise_uv_primary).r;
+	float noise_sample_primary = texture(noise_texture, noise_uv_primary).a;
 
     // Second layer of simplex noise
     // Scale and shift coords at different frequencies to create parallax between noise layers.
 	vec2 secondary_noise_modifiers = vec2(1.5, 1.350);
 	vec2 noise_uv_secondary = noise_uv_primary * secondary_noise_modifiers;
 
-	float noise_sample_secondary = texture(noise_texture, noise_uv_secondary).r;
+	float noise_sample_secondary = texture(noise_texture, noise_uv_secondary).a;
 
     // Intersection of both noise layers, final noise data.
 	float wisp_noise_mask = min(noise_sample_primary, noise_sample_secondary);
