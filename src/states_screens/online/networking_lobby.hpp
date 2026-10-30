@@ -29,6 +29,7 @@
 class Addon;
 class InputDevice;
 class Server;
+class ScrollSwipe;
 enum KartTeam : int8_t;
 struct LobbyPlayer;
 
@@ -110,6 +111,8 @@ private:
     GUIEngine::ButtonWidget* m_emoji_button;
 
     irr::gui::STKModifiedSpriteBank* m_icon_bank;
+
+    ScrollSwipe* m_swipe;
 
     /** \brief implement optional callback from parent class GUIEngine::Screen */
     virtual void unloaded() OVERRIDE;
