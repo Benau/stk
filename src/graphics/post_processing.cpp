@@ -749,13 +749,32 @@ PostProcessing::PostProcessing()
         FileManager::AssetType::TEXTURE,
         "stk_noise_simplex.png");
 
-    //TODO: implement single_channel path, currently loads rgba even though noise_texture is single channel only.
-    m_noise_texture = GE::createTexture(noiseTexturePath); 
+    img = irr_driver->getVideoDriver()->createImageFromFile(
+        noiseTexturePath.c_str());
+    if (!img)
+        return;
+    unsigned width = img->getDimension().Width;
+    unsigned height = img->getDimension().Height;
+    if (width != height)
+        return;
+    std::vector<uint8_t> single_channel(width * height);
+    for (unsigned y = 0; y < height; y++)
+    {
+        for (unsigned x = 0; x < width; x++)
+        {
+            single_channel[y * width + x] = img->getPixel(x, y).getRed();
+        }
+    }
+    img->drop();
+    m_noise_texture = GE::createFontTexture("noiseTexture", width,
+        true/*single_channel*/);
     if (!m_noise_texture || m_noise_texture->getTextureHandler() == 0)
     {
         Log::fatal("postprocessing", "Failed to load %s", noiseTexturePath.c_str());
         return;
     }
+    m_noise_texture->updateTexture(single_channel.data(), video::ECF_R8, width,
+        height, 0, 0);
     STKTexManager::getInstance()->addTexture(m_noise_texture);
 
     // For preloading shaders
