@@ -1197,30 +1197,31 @@ void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
         def_mat.m_additive = false;
     }
 
-    // The color is premultiplied by the weight (alpha), so it's blended over
-    // hdr as mix(hdr, reflection, weight)
+    // The color is (traced - specular IBL) scaled by the fresnel of the IBL,
+    // it can be negative (the lit color is a float format), so it's added to
+    // hdr
     if (m_deferred_layouts[GVDFP_SOLID_SSR] != VK_NULL_HANDLE)
     {
-        def_mat.m_alphablend = true;
+        def_mat.m_additive = true;
         def_mat.m_fragment_shader = "solid_ssr.frag";
         settings.loadMaterial(def_mat);
         settings.m_shader_name = "solid_ssr";
         settings.m_pipeline_type = GVPT_SOLID_SSR;
         settings.m_custom_pl = m_deferred_layouts[GVDFP_SOLID_SSR];
         createPipeline(vk, settings, dp_cache);
-        def_mat.m_alphablend = false;
+        def_mat.m_additive = false;
     }
 
     if (m_solid_rt_layout != VK_NULL_HANDLE)
     {
-        def_mat.m_alphablend = true;
+        def_mat.m_additive = true;
         def_mat.m_fragment_shader = "solid_rt.frag";
         settings.loadMaterial(def_mat);
         settings.m_shader_name = "solid_rt";
         settings.m_pipeline_type = GVPT_SOLID_RT;
         settings.m_custom_pl = m_solid_rt_layout;
         createPipeline(vk, settings, dp_cache);
-        def_mat.m_alphablend = false;
+        def_mat.m_additive = false;
     }
 
     if (has_displace)
