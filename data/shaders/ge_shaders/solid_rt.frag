@@ -19,6 +19,7 @@
 
 #define MESH_TEXTURES_SET 4
 
+layout(set = 2, binding = 0) uniform sampler2D u_color;
 layout(set = 2, binding = 1) uniform sampler2D u_normal;
 layout(set = 2, binding = 2) uniform sampler2D u_depth;
 layout(set = 3, binding = 0) uniform samplerCube u_diffuse;
@@ -68,23 +69,27 @@ void main()
     float cosine = dot(reflected, eyedir);
 
     vec3 hit_color;
+    // A ray without a hit keeps the specular IBL of the lit color
     if (!traceReflection(world_position, world_reflection, hit_color))
-    {
-        // Same as the rays of solid_ssr.frag that can't be traced, the
-        // specular IBL, and without IBL the lit color stays
-        if (u_ibl)
-        {
-            float perceptual_roughness = 1.0 - specval;
-            float miss_weight = 0.35 * smoothstep(0.2, 0.5, cosine);
-            vec3 ibl = textureLod(u_specular, world_reflection,
-                perceptual_roughness * u_specular_levels_minus_one).rgb;
-            o_color = vec4(ibl * miss_weight, miss_weight);
-            return;
-        }
         discard;
-    }
 
-    // Glossy 0.5 - 1.0 to 0.0 - 1.0
+    // Replace the specular IBL of the lit color by the hit, with the same
+    // Fresnel and F0 (metallic) of it, the diffuse is not touched. The
+    // output is added (m_additive) and can be negative
+    float perceptual_roughness = 1.0 - specval;
+    float metallic = normal_data.w;
+    vec3 albedo = texelFetch(u_color, pixel, 0).rgb;
+    float NdotV = max(dot(normal, eyedir), 0.0001);
+    vec3 spec_albedo = reflectionSpecularAlbedo(albedo, metallic,
+        perceptual_roughness, NdotV);
+    vec3 ibl = vec3(0.0);
+    if (u_ibl)
+    {
+        ibl = textureLod(u_specular, world_reflection,
+            perceptual_roughness * u_specular_levels_minus_one).rgb;
+    }
+    // Glossy 0.5 - 1.0 to 0.0 - 1.0 (the ray is sharp, a rougher surface
+    // gets less of it)
     float weight = (specval - 0.5) * 2.0;
-    o_color = vec4(hit_color * weight, weight);
+    o_color = vec4(weight * spec_albedo * (hit_color - ibl), 0.0);
 }

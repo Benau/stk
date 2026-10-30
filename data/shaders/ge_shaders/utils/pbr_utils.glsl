@@ -91,3 +91,19 @@ vec3 environmentLight(
     vec3 specular = FssEss * radiance * ao_specular;
     return diffuse + specular;
 }
+
+// The scale of the specular IBL in environmentLight() (FssEss), the
+// reflection of the traced color (SSR and ray traced) uses it, so it
+// replaces the specular IBL in the lit color:
+// lit + conf * spec_albedo * (traced - specular_ibl)
+vec3 reflectionSpecularAlbedo(vec3 albedo, float metallic,
+                              float perceptual_roughness, float NdotV)
+{
+    vec3 F0 = mix(vec3(0.04), albedo, metallic);
+    float F90 = clamp(dot(F0, vec3(50.0 * 0.33)), 0.0, 1.0);
+    float roughness = perceptualRoughnessToRoughness(perceptual_roughness);
+    vec2 F_ab = F_AB(perceptual_roughness, NdotV);
+    vec3 Fr = max(vec3(1.0 - roughness), F0) - F0;
+    vec3 kS = F0 + Fr * pow(1.0 - NdotV, 5.0);
+    return kS * (F_ab.x + F_ab.y) * F90;
+}
