@@ -1416,7 +1416,7 @@ found_mode:
         swap_chain_images_count = m_surface_capabilities.maxImageCount;
     }
 
-    int w, h = 0;
+    int w = 0, h = 0;
     SDL_Vulkan_GetDrawableSize(m_params.m_sdl_window, &w, &h);
     VkExtent2D max_extent = m_surface_capabilities.maxImageExtent;
     VkExtent2D min_extent = m_surface_capabilities.minImageExtent;
@@ -1427,10 +1427,34 @@ found_mode:
         std::max(
             std::min((unsigned)h, max_extent.height), min_extent.height)
     };
+
+    // 0xFFFFFFFF means the surface size is decided by the swapchain, and 0
+    // means the surface is currently not presentable (minimized)
+    const VkExtent2D surface_extent = m_surface_capabilities.currentExtent;
+    const bool surface_extent_valid =
+        surface_extent.width != std::numeric_limits<uint32_t>::max() &&
+        surface_extent.height != std::numeric_limits<uint32_t>::max() &&
+        surface_extent.width != 0 && surface_extent.height != 0;
 #if defined(__APPLE__)
     // MoltenVK stores the correctly rounded, high-dpi screen size in
     // currentExtent using half-to-even rounding
     actual_extent = m_surface_capabilities.currentExtent;
+#elif defined(ANDROID)
+    // The size SDL reports can lag behind (or differ from) the real size of
+    // the surface, for example on foldables or in multi-window mode. The
+    // surface itself knows best, currentExtent is in the current display
+    // orientation, so it's swapped below (like before) when pre-rotating
+    // https://developer.android.com/games/optimize/vulkan-prerotation
+    if (surface_extent_valid)
+    {
+        actual_extent =
+        {
+            std::max(std::min(surface_extent.width, max_extent.width),
+                min_extent.width),
+            std::max(std::min(surface_extent.height, max_extent.height),
+                min_extent.height)
+        };
+    }
 #endif
 
     VkSwapchainCreateInfoKHR create_info = {};
@@ -2639,6 +2663,9 @@ void GEVulkanDriver::getRotatedViewport(VkViewport* vp, bool handle_rtt)
 // ----------------------------------------------------------------------------
 void GEVulkanDriver::initPreRotationMatrix()
 {
+    // The swapchain is recreated (not the driver), so the matrix of the previous
+    // transform must not survive if the transform is now identity
+    m_pre_rotation_matrix = core::matrix4(core::matrix4::EM4CONST_IDENTITY);
     const double pi = 3.14159265358979323846;
     if (m_surface_capabilities.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR)
         m_pre_rotation_matrix.setRotationAxisRadians(90.0 * pi / 180., core::vector3df(0.0f, 0.0f, 1.0f));
