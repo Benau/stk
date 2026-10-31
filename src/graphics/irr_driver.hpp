@@ -362,7 +362,7 @@ public:
     // The indirect diffuse of the surfels, only the Vulkan renderer shows it
     void toggleGIDebug();
     // ------------------------------------------------------------------------
-    void toggleShadowViz()        { m_shadowviz = !m_shadowviz;     }
+    void toggleShadowViz();
     // ------------------------------------------------------------------------
     bool getShadowViz()           { return m_shadowviz;             }
     // ------------------------------------------------------------------------

@@ -28,6 +28,7 @@ void main()
         u_counter.m_rays = 0u;
         u_counter.m_active = 0u;
         u_counter.m_sleeping_spawns = 0u;
+        u_counter.m_hole_spawns = 0u;
         u_counter.m_last_ray_requests = pc.m_first_frame != 0u ? 0u :
             u_counter.m_ray_requests;
         u_counter.m_ray_requests = 0u;

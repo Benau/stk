@@ -51,6 +51,7 @@ GEConfig g_config =
     // The debug views are off until the debug menu turns one on
     false,
     false,
+    false,
     GAA_NONE,
     false,
     72.0f,

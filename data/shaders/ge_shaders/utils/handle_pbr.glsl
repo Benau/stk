@@ -36,7 +36,8 @@ vec3 gtaoMultiBounce(float visibility, vec3 albedo)
 // forward (gi_lighting is false) keep the environment and the flat ambient light
 vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
                        vec3 eyedir, vec3 normal, float perceptual_roughness,
-                       vec4 world_position, float camera_distance, float ao,
+                       vec4 world_position, float camera_distance,
+                       float view_depth, float ao,
                        float rt_shadow, vec4 gi_irradiance, bool gi_lighting)
 {
     // The GI is the ambient of the deferred pixels alone
@@ -94,7 +95,7 @@ vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
     {
         float NdotL = clamp(dot(normal, lightdir), 0.0, 1.0);
         shadow = getShadowFactor(u_shadow_map, world_position.xyz,
-            camera_distance, NdotL, world_normal,
+            camera_distance, view_depth, NdotL, world_normal,
             u_global_light.m_sun_direction);
     }
 
@@ -138,8 +139,8 @@ vec3 handlePBR(vec3 diffuse_color, vec3 pbr, vec4 world_position,
     float perceptual_roughness = 1.0 - pbr.x;
 
     vec3 mixed_color = handlePBRDeferred(diffuse_color, pbr, world_normal,
-        eyedir, normal, perceptual_roughness, world_position, length(xpos), 1.0,
-        1.0, vec4(0.0), false);
+        eyedir, normal, perceptual_roughness, world_position, length(xpos),
+        xpos.z, 1.0, 1.0, vec4(0.0), false);
 
     mixed_color += accumulateLights(u_global_light.m_light_count,
         diffuse_color, normal, xpos, eyedir, perceptual_roughness, pbr.y,

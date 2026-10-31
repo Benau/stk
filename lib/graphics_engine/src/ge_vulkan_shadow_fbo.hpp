@@ -3,6 +3,8 @@
 
 #include "ge_vulkan_texture.hpp"
 
+#include "aabbox3d.h"
+
 #include <memory>
 #include <vector>
 
@@ -53,21 +55,39 @@ protected:
 
     irr::core::matrix4 m_shadow_view_matrix;
 
+    // Union of the transformed bounding boxes of the nodes registered for the
+    // shadow pass, used to clip the cascade bodies to the scene. It only
+    // grows so the cascade bounds don't change with the culled nodes.
+    irr::core::aabbox3df m_scene_bbox;
+    bool m_scene_bbox_valid = false;
+
     std::vector<irr::core::matrix4> m_shadow_projection_matrices;
 
     GEVulkanCameraUBO* m_shadow_camera_ubo_data;
 
     // ------------------------------------------------------------------------
-    static const float getSplitNear(GEVulkanShadowCameraCascade cascade)
-    {
-        const float cascade_near[GVSCC_COUNT] = { 1.0f, 9.0f, 40.0f };
-        return cascade_near[cascade];
-    }
-    // ------------------------------------------------------------------------
+    // The camera distance where the cascade ends (the far boundary of the
+    // body is the sphere of this radius)
     static const float getSplitFar(GEVulkanShadowCameraCascade cascade)
     {
-        const float cascade_far[GVSCC_COUNT] = { 10.0f, 45.0f, 150.0f };
+        const float cascade_far[GVSCC_COUNT] = { 10.0f, 45.0f, 200.0f };
         return cascade_far[cascade];
+    }
+    // ------------------------------------------------------------------------
+    // The view depth where the cascade starts (the near boundary of the body
+    // is the plane of constant view depth): the previous cascade is the
+    // largest one which still covers the whole screen there, its far sphere
+    // of radius split_far reaches the distance view_depth / min_ray_cos, so
+    // view_depth = split_far * min_ray_cos. The first cascade starts at the
+    // near plane of the camera, min_ray_cos is the cosine of the largest
+    // angle between the view direction and a ray of the frustum
+    static const float getSplitNear(GEVulkanShadowCameraCascade cascade,
+                float cam_near, float min_ray_cos)
+    {
+        if (cascade == GVSCC_NEAR)
+            return cam_near;
+        return getSplitFar((GEVulkanShadowCameraCascade)(cascade - 1)) *
+            min_ray_cos;
     }
 public:
     // ------------------------------------------------------------------------

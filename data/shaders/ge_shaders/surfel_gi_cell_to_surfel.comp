@@ -24,7 +24,11 @@ void main()
             continue;
         const uint flat_index = surfelCellIndex(neighbour);
         const uint offset = u_cells[flat_index].m_offset;
-        const uint at = offset + atomicAdd(u_cells[flat_index].m_count, 1u);
+        // The list length is the low 16 bits of the count, the high ones count
+        // the surfels of the moving objects (see CellInfo.m_count)
+        const uint at = offset + surfelCellCount(atomicAdd(
+            u_cells[flat_index].m_count, 1u + (surfel.m_pad == SURFEL_PAD_DYNAMIC ?
+            0x10000u : 0u)));
         if (at < SURFEL_CELL_SURFEL_COUNT)
             u_cell_surfels[at] = index;
     }

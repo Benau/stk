@@ -36,7 +36,9 @@ void main()
     }
     if (index >= SURFEL_CELL_COUNT)
         return;
-    const uint count = u_cells[index].m_count;
+    // The high 16 bits of the count are the surfels of the moving objects (see
+    // utils/surfel_gi.glsl): the range holds the whole list
+    const uint count = surfelCellCount(u_cells[index].m_count);
     if (count == 0u)
         return;
     const uint offset = atomicAdd(u_counter.m_cell_surfels, count);

@@ -15,11 +15,11 @@
 // ends at the first hit the field of the surfels covers (the light of the sun,
 // the point lights and the sky on the way), with the directions of the rays
 // sampled with the R3 low discrepancy sequence and guided by the irradiance map
-// of the surfel. A hit which no surfel covers spawns a sleeping surfel there
-// (W298 SurfelGI), so the field grows where the rays go and not only where the
-// camera looks. The visibility of the sun at a surfel is traced by its first
-// ray of the frame, and the hits of the paths take it from the field instead of
-// tracing a shadow ray of their own.
+// of the surfel. Every first hit of the rays spawns a sleeping surfel there
+// (W298 SurfelGI), the ones the field covers too, so the field grows where the
+// rays go and not only where the camera looks. The visibility of the sun at a
+// surfel is traced by its first ray of the frame, and the hits of the paths
+// take it from the field instead of tracing a shadow ray of their own.
 // surfel_gi_integrate.comp: one 32 lane group per surfel which has rays: the
 // multiscale mean estimator (Ray Tracing Gems chapter 25) of its rays, the
 // accumulation of their radiance in its 6x6 irradiance map (which guides its
@@ -31,8 +31,12 @@
 // which follows the noise of the surfel.
 // surfel_gi_generate.comp: the irradiance of the pixels (the weighted mean of
 // the surfels of their cell), and the spawn of the surfels where the coverage
-// is low (the pool is flooded at the start, then the surfels of the over
-// covered pixels are removed and the holes are filled).
+// is low: the pool is flooded at the start, then the holes are filled, and a
+// spawn which has no free slot evicts the oldest surfel which no ray of the
+// frame uses (see surfelEvict), so a full pool never leaves a surface the
+// camera reveals without surfels. A surfel of a moving object is only replaced
+// by the same eviction, never by the recycling of the update pass while its
+// surface covers it.
 //
 // The cells are camera relative: the inner cube of the grid (2 * m_half_d world
 // units, m_delta per cell) is uniform, and the 6 frustums around it are larger
@@ -117,6 +121,8 @@ struct Surfel
     // rays of the frames continue each other, so the directions of its few
     // rays are as uniform as the ones of a fast sequence
     uint m_ray_index;
+    // SURFEL_PAD_DYNAMIC when the surfel is of the surface of a moving object
+    // (see SURFEL_CELL_DYNAMIC_LIMIT)
     uint m_pad;
 };
 
@@ -148,7 +154,7 @@ struct SurfelLight
     float m_sun;
 };
 
-// Same layout as GEVulkanSurfelGI::SurfelCounter (std430, 32 bytes)
+// Same layout as GEVulkanSurfelGI::SurfelCounter (std430, 36 bytes)
 struct SurfelCounter
 {
     // Number of surfels which are alive
@@ -169,11 +175,21 @@ struct SurfelCounter
     uint m_last_ray_requests;
     // Sleeping surfels the tracing of the frame spawned
     uint m_sleeping_spawns;
+    // Spawns of the holes of the screen which the generate pass of the frame
+    // tried (see SURFEL_HOLE_SPAWNS)
+    uint m_hole_spawns;
 };
 
 struct CellInfo
 {
-    // First index of the surfels of the cell in the list, and their number
+    // First index of the surfels of the cell in the list, and their number:
+    // the low 16 bits are the whole list (static and dynamic surfels) and the
+    // high 16 bits the surfels of the moving objects (see SURFEL_PAD_DYNAMIC).
+    // The spawn of each kind is gated by its own count (see
+    // surfel_gi_generate.comp), so the surfels of a kart don't stop the ground
+    // under it from refilling its field and the ground doesn't stop the kart.
+    // Every reader of the list length masks the low 16 bits (see
+    // surfelCellCount)
     uint m_offset;
     uint m_count;
 };
@@ -296,20 +312,16 @@ layout(push_constant) uniform PushConstants
 
 // Same as GEVulkanSurfelGI
 const uint SURFEL_MAX_COUNT = 131072u;
-// Rays a surfel traces in a frame at most. The estimator merges the rays in
-// packets (see surfel_gi_integrate.comp), so the few rays of a converged
-// surfel would follow a change of its lighting slower with 8 rays than with
-// 16: the reference gives every surfel which is not converged 64 rays. 16
-// rays for the whole pool costs too much of the frame here (the tracing is the
-// mass of the pass), 8 keeps the packets which follow a change of the lighting
+// Rays a surfel traces in a frame: the count of the reference. The estimator
+// merges them in packets of 4 (see surfel_gi_integrate.comp), so the mean of a
+// surfel follows the light of its surface without the noise of a few rays, and
+// the first frames of the pool reach the light of the scene at once instead of
+// averaging the noise of a few samples for a second
 const uint SURFEL_MAX_RAYS = 8u;
-// Rays of a surfel which is warmed up (see SURFEL_WARMUP_FRAMES): its first
-// frames are the ones which converge it, so it traces twice the rays of a
-// converged surfel (the reference gives every surfel which is not converged
-// 64 rays, which the frame of the game doesn't afford; the pool is only young
-// after the camera moved into a new area, so the extra rays of the warm up are
-// not the whole pool)
-const uint SURFEL_WARMUP_RAYS = 16u;
+// Rays of a surfel which is warmed up (see SURFEL_WARMUP_FRAMES): the same as
+// the maximum, the count of the reference. The pool is only young after the
+// camera moved into a new area, so the warm up doesn't cost the whole pool
+const uint SURFEL_WARMUP_RAYS = 64u;
 // Rays of all the surfels of a frame at most, the surfels which don't get any
 // keep their radiance (they're traced in the next frame). This is the only
 // limit of the cost of a frame (the same as kMaxRayCount of the reference),
@@ -318,11 +330,11 @@ const uint SURFEL_WARMUP_RAYS = 16u;
 // past the u_ray_ids, u_ray_results and u_ray_data buffers of the pool
 const uint SURFEL_RAY_BUDGET = SURFEL_MAX_COUNT * SURFEL_WARMUP_RAYS;
 // Rays the surfels ask for in a frame, before the adaptive ray counts of the
-// frame before scale them down when the pool is full: the surfels which are
-// not converged get up to 8 rays (see surfel_gi_update.comp), so the budget of
-// a frame of the pool is the target, and a frame which asked for more is
-// scaled down smoothly instead of dropping the rays of a part of the pool
-const uint SURFEL_RAY_TARGET = 3u * SURFEL_MAX_COUNT;
+// frame before scale them down when the pool is full. Every surfel asks for
+// SURFEL_MAX_RAYS (see surfel_gi_update.comp), so the target is the budget:
+// the soft cut only scales the frame down if the requests of the pool would
+// take more than the rays of the buffers, which the update pass never asks
+const uint SURFEL_RAY_TARGET = SURFEL_RAY_BUDGET;
 // Frames a surfel is warmed up: a surfel which the camera just created has
 // only the seed of the generate pass (the field around it, or the environment)
 // as its value, so its first frames merge the samples with a large temporal
@@ -333,14 +345,36 @@ const uint SURFEL_RAY_TARGET = 3u * SURFEL_MAX_COUNT;
 // keeps averaging the noise of the few rays, and the fade in of the generate
 // pass (10 frames) hides the first frames
 const uint SURFEL_WARMUP_FRAMES = 12u;
-// Life of a surfel which the tracing spawned (a sleeping surfel): it's outside
-// of the view, so only the paths of the surfels near its cell use it (and keep
-// its life), and it's recycled after this many frames without a use
-const uint SURFEL_SLEEPING_LIFE = 60u;
+// Life of a surfel which the tracing spawned (a sleeping surfel): until a pixel
+// of the camera sees it, only the paths of the surfels near its cell use it
+// (and keep its life), and it's recycled after this many frames without a use.
+// The surfels which the rays spawn are the field of the surfaces which the
+// camera doesn't see and the density of the ones it does (the slow growth of
+// the coverage of the reference), so they live long enough to be found by the
+// rays of the neighbours; a slot which the pool needs is taken from the oldest
+// of them (see surfelEvict)
+const uint SURFEL_SLEEPING_LIFE = 300u;
 // Sleeping surfels the tracing of a frame spawns at most: the cells of the
-// surfaces a bit outside of the view are filled in a few frames, and the pool
-// is not taken from the surfels which the camera sees
+// surfaces the rays reach are filled in a few frames without the tracing
+// taking the mass of the frame. A sleeping spawn takes the slot of the oldest
+// surfel which the camera doesn't see when the pool is full (see surfelEvict),
+// so the limit is the growth of the field of the view and not a part of the
+// pool
 const uint SURFEL_SLEEPING_SPAWNS = 512u;
+// Coverage of a block under which the field doesn't cover its pixel: it's a
+// hole, and the generate pass creates a surfel for it at once (see
+// surfel_gi_generate.comp). The spawn of the reference waits for the minimum
+// coverage of a 16x16 group and a random chance which falls with the coverage,
+// so the pixels the camera reveals stay black for seconds
+const float SURFEL_HOLE_COVERAGE = 0.5;
+// Spawns of the holes a frame tries at most: the holes of the screen are
+// filled within a few frames, without the fill of a screen which no surfel
+// covers at all (a turn, a teleport) turning the pool over in one frame and
+// leaving the field of the frame's rays without surfels. The count is of the
+// tries and not of the surfels: a spawn which a full cell refuses spends its
+// try too, and the cost which the limit bounds is the query of the triangle of
+// every try
+const uint SURFEL_HOLE_SPAWNS = 32768u;
 // Window of the merge of the radiance of the neighbours in the mean of a
 // surfel (see surfel_gi_share.comp) falls with the noise of its mean: a surfel
 // which is not converged merges the field around it with a large window, so
@@ -352,23 +386,54 @@ const uint SURFEL_SLEEPING_SPAWNS = 512u;
 // trust a sample which is not from its rays
 const float SURFEL_SHARING_WINDOW_CONVERGED = 0.02;
 const float SURFEL_SHARING_WINDOW_NOISY = 0.15;
+// The same windows for the surfel of a moving object (a kart, an item, a
+// wheel, see SURFEL_PAD_DYNAMIC): it accepts the light around it much faster
+// than a static surfel, because the surface it lights moves through the scene,
+// so the light of its surroundings is the light of its new area every frame
+// while its own rays reach it with the lag of the estimator (see
+// surfel_gi_share.comp)
+const float SURFEL_SHARING_WINDOW_DYNAMIC_CONVERGED = 0.3;
+const float SURFEL_SHARING_WINDOW_DYNAMIC_NOISY = 0.6;
 // Relative noise of the mean of a surfel (the standard error of its rays over
 // its level, see surfelMeanNoise) which is the one of a converged surfel and
 // the one of a surfel which is not converged: the noise of the sharing window
 // and of the number of rays of the frame (see surfel_gi_update.comp)
 const float SURFEL_NOISE_LOW = 0.03;
 const float SURFEL_NOISE_HIGH = 0.2;
+// Surfels a cell takes at most from the static surfaces (surfel_gi_generate
+// comp and surfel_gi_trace.comp refuse to spawn into a cell which has this
+// many, the same kind of limit as kPerCellSurfelLimit of W298 SurfelGI, tuned
+// for our cell and surfel sizes). The list of a cell is the surfels whose
+// sphere intersects it, from the cells around it too (a cell is 3 units
+// across and a surfel reaches 1.5), so it holds the surfels of every surface
+// of the cell and of its neighbours: the cell under a kart already has
+// hundreds from the ground. The limit over the static surfels alone (see
+// CellInfo.m_count) regulates the pool (the surfels of the static surfaces are
+// the mass of it) without counting the surfels of a moving object, so the
+// kart over the ground doesn't stop the ground from refilling its field
+const uint SURFEL_CELL_SPAWN_LIMIT = 256u;
+// Surfels a cell takes at most from the surface of a moving object (a kart, an
+// item, a wheel), over its static surfels and not instead of them (the spawn
+// gate of each kind counts its own surfels, see CellInfo.m_count): the kart
+// over the ground keeps its own budget whatever the ground has, so its field
+// fills while it's in the view. The grass is dynamic too, but it's a thin
+// surface everywhere, which the field of its cells already lights, so it keeps
+// the static limit (a bypass for every dynamic node floods the pool with the
+// grass of the track). The surfels of an object move with it, so a few dozens
+// of them per cell light it and the pool keeps its free surfels for the
+// surfaces the camera reveals
+const uint SURFEL_CELL_DYNAMIC_LIMIT = 256u;
 // Entries of the list of a cell which the gather of a pixel of
-// surfel_gi_generate.comp walks at most. The list of a cell near the camera
-// holds hundreds of surfels (the surfels are as large as a few pixels, the
-// cell is 1.5 units), and the list is not ordered: a sample of it (or its
-// first entries alone) leaves the pixels which that sample doesn't reach with
-// no field, which the lighting pass reads as no ambient diffuse light (black
-// patches near the camera). The walk covers the whole list up to this count,
-// which is longer than the list of a cell in practice; the image of the pass
-// is a quarter of the g-buffer, so the walk is still the cost of the image and
-// not of the viewport (see surfel_gi_generate.comp)
-const uint SURFEL_CELL_LIST_MAX = 256u;
+// surfel_gi_generate.comp walks at most. The list is not ordered: the walk has
+// to cover the whole list, a sample of it (or its first entries alone) leaves
+// the pixels which that sample doesn't reach with no field. The limits above
+// keep a cell under this bound with headroom for the surfels which its
+// neighbours register in it (a surfel is in the 27 cells around it), so the
+// walk covers every list in practice (a list which was cut would leave the
+// surface of the cell which is not the one of the object which crowds it
+// without light, in world space blocks); the loop stops at the count of the
+// cell, so a long bound costs nothing outside of the crowded cells
+const uint SURFEL_CELL_LIST_MAX = 2048u;
 // (surfel, cell) pairs of a frame at most (a surfel is in 27 cells at most)
 const uint SURFEL_CELL_SURFEL_COUNT = SURFEL_MAX_COUNT * 32u;
 // Entries of the list of a cell which surfelGatherIrradiance walks at most,
@@ -424,10 +489,19 @@ const float SURFEL_MSME_N_MAX = 64.0;
 // the tracing
 const uint SURFEL_PATH_SEGMENTS = 3u;
 // Frames a surfel lives when it's not seen (it's seen when its radiance is
-// used by a pixel)
+// used by a pixel). A surfel which the field of a ray uses is not seen either,
+// but it's the light of a hit, so its life stays full while it's used (see
+// surfel_gi_update.comp)
 const uint SURFEL_MAX_LIFE = 1200u;
-// A surfel radius is this part of the radius of its cell at least
-const float SURFEL_MIN_SIZE_RATIO = 0.15;
+// A surfel radius is this part of the radius of its cell at least. The radius
+// of a surfel which covers the pixels of its surface shrinks with the distance
+// of the camera (see surfelCoverRadius), so without a large floor the surfels
+// of a close surface (a kart a few units away) are a fraction of the size of
+// the ones of the track ahead: the field is finer and denser where the camera
+// is close, which the smooth ambient light of the GI doesn't need. Half of the
+// radius of the cell keeps a surfel as large as a good part of it wherever the
+// camera is, so the near surfaces have fewer, larger surfels like the far ones
+const float SURFEL_MIN_SIZE_RATIO = 0.5;
 // Cells per axis of the inner cube of the grid, layers of each frustum, ratio
 // of the size of the layers, half size of the inner cube (in cells: (2 *
 // SURFEL_CELL_N + 6 * SURFEL_CELL_M) * SURFEL_CELL_N * SURFEL_CELL_N). The 32
@@ -452,6 +526,12 @@ const uint SURFEL_STATUS_ALIVE = 8u;
 // samples of the frame with a large short window blend (see
 // surfel_gi_update.comp and surfel_gi_integrate.comp). The bit lasts one frame
 const uint SURFEL_STATUS_TURNED = 16u;
+// Surfel.m_pad: the surfel is of the surface of a moving object (a kart, an
+// item, a wheel; not the grass, see SURFEL_CELL_DYNAMIC_LIMIT). The spawn gate
+// of its kind counts it apart (see CellInfo.m_count), so the field of a kart
+// never waits for the budget of the ground under it, and the ground never
+// waits for the surfels of the kart
+const uint SURFEL_PAD_DYNAMIC = 1u;
 
 // The same luminance as utils/rt_reflection.glsl (the weights of the samples of
 // surfelMSME are the ones of Ray Tracing Gems)
@@ -593,6 +673,19 @@ uint surfelCellIndex(ivec4 cell)
         uint(cell.x) * n * n + uint(cell.y * SURFEL_CELL_N + cell.z);
 }
 
+// Length of the list of a cell from its CellInfo.m_count (the low 16 bits, see
+// the struct): the high ones are the surfels of the moving objects
+uint surfelCellCount(uint count)
+{
+    return count & 0xFFFFu;
+}
+
+// Number of surfels of the moving objects in the list of a cell
+uint surfelCellDynamicCount(uint count)
+{
+    return count >> 16u;
+}
+
 // Offsets of the 27 cells around a cell
 const ivec3 SURFEL_NEIGHBORS[27] = ivec3[27](
     ivec3(-1, -1, -1), ivec3(-1, 0, -1), ivec3(-1, 1, -1),
@@ -728,14 +821,21 @@ bool surfelIntersectsCell(Surfel surfel, ivec4 cell)
 // surfelMaxRadius, i.e. it's about the size of the cell of the grid at its
 // distance, and the pool covers the screen (with the radius of surfelSize
 // pixels it would need thousands of times more surfels and every texel would be
-// unfilled)
+// unfilled). The area of a surfel of the reference is scaled by
+// SURFEL_SIZE_SCALE: the surfels are fewer and larger (the area of a surfel, so
+// the square of its radius), which the smooth light of the GI doesn't need
+// finer. The area of a surfel is 16x the one of a surfel of 4, so the density
+// of the surfels (surfels per unit of surface) is 16x lower: the pool of 65536
+// has the coverage of a pool of 1M surfels of 4, and the pool of 131072 has
+// twice that coverage
+const float SURFEL_SIZE_SCALE = 64.0;
 float surfelCoverRadius(float distance)
 {
     const float resolution = max(float(pc.m_full_width),
         float(pc.m_full_height));
     const float fov = degrees(pc.m_fov);
-    const float angle = sqrt(pc.m_surfel_size / 3.14159265) * fov * 2.0 /
-        max(resolution, 1.0);
+    const float angle = sqrt(pc.m_surfel_size * SURFEL_SIZE_SCALE / 3.14159265) *
+        fov * 2.0 / max(resolution, 1.0);
     return distance * tan(angle);
 }
 
@@ -1162,6 +1262,56 @@ void surfelFree(uint index)
     atomicAdd(u_counter.m_alive, -1);
 }
 
+// The slot of a surfel which the pool can reuse when it has no free one: the
+// surfel which the camera doesn't see, the oldest seen one first. A surface
+// which the camera reveals must always have a slot for its surfels (a spawn
+// which fails is a pixel with no ambient light until the life of a surfel of
+// an area the camera left runs out), so the spawns reuse the slot of the least
+// valuable surfel of the pool instead of stopping when it's full. The surfels
+// which the camera saw in the last frames are never taken (the field of the
+// view is the light of the pixels), and a surfel which the rays of the frame
+// use is never taken either: one whose own rays are traced now, and one which
+// a ray used as the light of its hit (a sleeping surfel outside of the view,
+// see surfelGatherIrradiance). The scan is a few slots of the pool: a spawn
+// which has no free slot is the exception, and the field of the view is a
+// small part of a full pool, so one of the slots of the scan is a surfel of an
+// area the camera left. The slot is claimed by clearing its alive bit (the
+// spawns of a frame run at once, so two of them would take the same slot and
+// lose a surfel): SURFEL_NONE if another spawn claimed the best candidate
+// first, so the caller gives up this spawn instead of writing the slot of
+// another one
+uint surfelEvict(uint seed)
+{
+    const uint scan = 8u;
+    const uint start = uint(surfelRand(seed, pc.m_frame + 31u) *
+        float(SURFEL_MAX_COUNT));
+    uint best = SURFEL_NONE;
+    // A surfel which the camera saw in the last frames is not a candidate
+    const uint min_age = 10u;
+    uint best_age = min_age;
+    for (uint i = 0u; i < scan; i++)
+    {
+        // A stride which visits the pool (it's not a divisor of its size)
+        const uint candidate = (start + i * 40961u) % SURFEL_MAX_COUNT;
+        const Surfel other = u_surfels[candidate];
+        const uint age = pc.m_frame - other.m_last_seen;
+        if ((other.m_status & SURFEL_STATUS_ALIVE) == 0u ||
+            other.m_ray_count != 0u ||
+            (other.m_status & (SURFEL_STATUS_SEEN | SURFEL_STATUS_REFED)) !=
+            0u || age <= best_age)
+            continue;
+        best = candidate;
+        best_age = age;
+    }
+    if (best >= SURFEL_MAX_COUNT)
+        return SURFEL_NONE;
+    const uint status = u_surfels[best].m_status;
+    if (atomicCompSwap(u_surfels[best].m_status, status,
+        status & ~SURFEL_STATUS_ALIVE) != status)
+        return SURFEL_NONE;
+    return best;
+}
+
 // The visibility of a surfel from a point of the world (Chebyshev's inequality
 // on the depth moments of the texel of its direction, the same test as the
 // probes of DDGI and W298 SurfelGI): the rays of the surfel which its map sent
@@ -1243,7 +1393,8 @@ bool surfelGatherIrradiance(vec3 position, vec3 normal,
     const CellInfo cell_info = u_cells[surfelCellIndex(cell)];
     if (cell_info.m_offset >= SURFEL_CELL_SURFEL_COUNT)
         return false;
-    const uint count = min(cell_info.m_count, SURFEL_CELL_LIST_MAX);
+    const uint count = min(surfelCellCount(cell_info.m_count),
+        SURFEL_CELL_LIST_MAX);
     if (count == 0u)
         return false;
     const uint start = uint(surfelRand(random_index, pc.m_frame) *

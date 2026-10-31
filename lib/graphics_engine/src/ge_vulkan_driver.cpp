@@ -1977,7 +1977,9 @@ bool GEVulkanDriver::beginScene(bool backBuffer, bool zBuffer, SColor color,
     PrimitivesDrawn = 0;
     m_frame_number++;
 
-    if (m_rtt_texture && !m_rtt_texture->useSwapChainOutput())
+    if (m_rtt_texture && !m_rtt_texture->useSwapChainOutput() &&
+        !(getGEConfig()->m_shadow_debug &&
+        (getShadowType() & GST_SUN) != 0 && getShadowSize() > 0))
     {
         draw2DImage(m_rtt_texture,core::recti(0, 0,
             ScreenSize.Width, ScreenSize.Height),
@@ -2996,7 +2998,23 @@ void GEVulkanDriver::buildCommandBuffers()
             VK_SUBPASS_CONTENTS_INLINE);
     }
 
-    GEVulkan2dRenderer::render();
+    // The depth layers of the sun shadow map instead of the scene, the 2D
+    // renderer draws it before the queued UIs (which stay visible)
+    VkImageView shadow_map_view = VK_NULL_HANDLE;
+    if (getGEConfig()->m_shadow_debug && default_group &&
+        (getShadowType() & GST_SUN) != 0 && getShadowSize() > 0)
+    {
+        for (auto& p : default_group->m_dcs)
+        {
+            GEVulkanShadowFBO* sfbo = p.first->getShadowFBO();
+            if (sfbo)
+            {
+                shadow_map_view = sfbo->getImageView();
+                break;
+            }
+        }
+    }
+    GEVulkan2dRenderer::render(shadow_map_view);
 
     vkCmdEndRenderPass(getCurrentCommandBuffer());
     vkEndCommandBuffer(getCurrentCommandBuffer());

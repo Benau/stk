@@ -56,9 +56,10 @@ struct GEGlobalLightBuffer
     irr::core::vector3df m_skytop_color;
     irr::u32             m_light_count;
     // Start and end of the linear fog of transparent materials
-    irr::f32             m_fog_start;
-    irr::f32             m_fog_end;
-    irr::f32             m_padding[2];
+    irr::f32             m_fog_range[4];
+    // xyz: view depth where each sun cascade starts, w: cosine of the largest
+    // angle between the view direction and a frustum ray (see setShadowSplit)
+    irr::f32             m_shadow_split[4];
     //std::array<GELight, MAX_RENDERING_LIGHT> m_rendering_lights;
 };
 
@@ -312,8 +313,8 @@ void GEVulkanLightHandler::prepare()
         buffer->m_fog_color.g = fog_color.getGreen() / 255.0f;
         buffer->m_fog_color.b = fog_color.getBlue() / 255.0f;
         buffer->m_fog_color.a = max_fog;
-        buffer->m_fog_start = start;
-        buffer->m_fog_end = end;
+        buffer->m_fog_range[0] = start;
+        buffer->m_fog_range[1] = end;
     }
 }   // prepare
 
@@ -573,6 +574,17 @@ void GEVulkanLightHandler::setShadowMatrices(GEVulkanCameraUBO* ubo,
     buffer->m_shadow_projection_view_matrix[cc] =
         ubo->m_projection_view_matrix;
 }   // setShadowMatrices
+
+// ----------------------------------------------------------------------------
+void GEVulkanLightHandler::setShadowSplit(
+    const irr::core::vector3df& near_depths, float min_ray_cos)
+{
+    GEGlobalLightBuffer* buffer = getGlobalLightPtr();
+    buffer->m_shadow_split[0] = near_depths.X;
+    buffer->m_shadow_split[1] = near_depths.Y;
+    buffer->m_shadow_split[2] = near_depths.Z;
+    buffer->m_shadow_split[3] = min_ray_cos;
+}   // setShadowSplit
 
 // ----------------------------------------------------------------------------
 void GEVulkanLightHandler::setLightShadowMatrices(GEVulkanCameraUBO* ubo,

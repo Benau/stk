@@ -314,44 +314,92 @@ vec3 calculateLight(int i, vec3 diffuse_color, vec3 normal, vec3 xpos,
     return light_color * attenuation * diffuse_specular;
 }
 
-// camera_distance is the distance of the position from the camera (not its
-// view depth): the cascades are split by distance, see
-// GEVulkanShadowFBO::prepare
+// The sun cascades are split by view depth near and by distance far, see
+// GEVulkanShadowFBO::prepare: a cascade starts at the depth where the far
+// sphere of the previous one still covers the whole screen and ends at its
+// far distance. camera_distance is the distance of the position from the
+// camera, view_depth its depth along the view direction
 float getShadowFactor(sampler2DArrayShadow map, vec3 world_position,
-                      float camera_distance, float NdotL, vec3 normal,
-                      vec3 lightdir)
+                      float camera_distance, float view_depth, float NdotL,
+                      vec3 normal, vec3 lightdir)
 {
-    float end_factor = smoothstep(130., 150., camera_distance);
-    if (camera_distance >= 150. || NdotL <= 0.001)
+    float end_factor = smoothstep(180., 200., camera_distance);
+    if (camera_distance >= 200. || NdotL <= 0.001)
     {
         return end_factor;
     }
 
-    float shadow = 1.0;
-    float factor = smoothstep(9.0, 10.0, camera_distance) +
-        smoothstep(40.0, 45.0, camera_distance);
-    int level = int(factor);
-
     vec2 base_normal_bias = (u_global_light.m_shadow_view_matrix * vec4(normal, 0.)).xy;
     base_normal_bias *= (1.0 - max(0.0, dot(-normal, lightdir))) / float(u_shadow_size);
+
+    // Near depth of each cascade (xyz) and the cosine of the largest angle
+    // between the view direction and a frustum ray (w)
+    vec3 split_near = u_global_light.m_shadow_split.xyz;
+    float min_ray_cos = u_global_light.m_shadow_split.w;
+
+    int level = view_depth >= split_near.y ?
+        (view_depth >= split_near.z ? 2 : 1) : 0;
 
     vec4 light_view_position = u_global_light.m_shadow_projection_view_matrix[level] * vec4(world_position, 1.0);
     light_view_position.xyz /= light_view_position.w;
     light_view_position.xy = light_view_position.xy * 0.5 + 0.5 + base_normal_bias;
 
-    shadow = mix(getShadowPCF(map, light_view_position.xy, level, light_view_position.z), 1.0, end_factor);
+    float shadow = getShadowPCF(map, light_view_position.xy, level, light_view_position.z);
 
-    if (factor == float(level))
+    if (level > 0)
     {
-        return shadow;
+        // The previous cascade covers this pixel until the distance along
+        // its ray reaches its far distance, at the view depth
+        // near_depth / min_ray_cos * view_depth / camera_distance. Fade it
+        // out over that overlap: at the corners of the screen it ends right
+        // at the near depth, at the center it's the whole far radius of the
+        // previous cascade
+        float near_depth = level == 1 ? split_near.y : split_near.z;
+        float prev_far_depth = near_depth / min_ray_cos *
+            view_depth / camera_distance;
+        float blend = clamp((view_depth - near_depth) /
+            max(prev_far_depth - near_depth, 0.0001), 0.0, 1.0);
+
+        vec4 prev_light_view_position = u_global_light.m_shadow_projection_view_matrix[level - 1] * vec4(world_position, 1.0);
+        prev_light_view_position.xyz /= prev_light_view_position.w;
+        prev_light_view_position.xy = prev_light_view_position.xy * 0.5 + 0.5 + base_normal_bias;
+
+        shadow = mix(getShadowPCF(map, prev_light_view_position.xy, level - 1, prev_light_view_position.z), shadow, blend);
     }
 
-    // Blend with next cascade by factor
-    light_view_position = u_global_light.m_shadow_projection_view_matrix[level + 1] * vec4(world_position, 1.0);
+    return mix(shadow, 1.0, end_factor);
+}
+
+// The same cascades and normal bias as getShadowFactor, but a single sample of
+// the map (no PCF) and no blend of the cascades: the GI injects the sun into
+// every ray which it traces, so it shares the shadows of the lighting pass
+// with one tap instead of the 16 of a pixel. A position outside of the
+// cascades is lit (the map is clamped to its edge, which is not its shadow)
+float getShadowFactorSingleSample(sampler2DArrayShadow map,
+                                  vec3 world_position, float camera_distance,
+                                  float view_depth, float NdotL, vec3 normal,
+                                  vec3 lightdir)
+{
+    float end_factor = smoothstep(180., 200., camera_distance);
+    if (camera_distance >= 200. || NdotL <= 0.001)
+        return end_factor;
+
+    vec2 base_normal_bias = (u_global_light.m_shadow_view_matrix * vec4(normal, 0.)).xy;
+    base_normal_bias *= (1.0 - max(0.0, dot(-normal, lightdir))) / float(u_shadow_size);
+
+    vec3 split_near = u_global_light.m_shadow_split.xyz;
+    int level = view_depth >= split_near.y ?
+        (view_depth >= split_near.z ? 2 : 1) : 0;
+
+    vec4 light_view_position = u_global_light.m_shadow_projection_view_matrix[level] * vec4(world_position, 1.0);
     light_view_position.xyz /= light_view_position.w;
     light_view_position.xy = light_view_position.xy * 0.5 + 0.5 + base_normal_bias;
+    if (light_view_position.x < 0.0 || light_view_position.x > 1.0 ||
+        light_view_position.y < 0.0 || light_view_position.y > 1.0)
+        return 1.0;
 
-    shadow = mix(shadow, getShadowPCF(map, light_view_position.xy, level + 1, light_view_position.z), factor - float(level));
+    float shadow = texture(map, vec4(light_view_position.xy, float(level),
+        light_view_position.z));
 
-    return shadow;
+    return mix(shadow, 1.0, end_factor);
 }

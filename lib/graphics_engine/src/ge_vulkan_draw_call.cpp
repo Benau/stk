@@ -1297,8 +1297,13 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = settings.m_material->m_backface_culling ?
-        VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE;
+    if (!settings.m_material->m_backface_culling)
+        rasterizer.cullMode = VK_CULL_MODE_NONE;
+    else
+        // Culling front faces in the shadow pass records the back faces,
+        // whose depth is farther from the light, reducing self-shadowing
+        rasterizer.cullMode = isShadow() ? VK_CULL_MODE_FRONT_BIT :
+            VK_CULL_MODE_BACK_BIT;
     rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
     if (isShadow())
     {

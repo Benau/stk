@@ -88,7 +88,7 @@ const float RT_RAY_MIN = 0.02;
 // (5500 in the tracks) and a ray has to find its surface at any distance
 const float RT_RAY_MAX = 20000.0;
 // Longest distance of a shadow ray, the shadow map of the sun has a range too
-const float RT_SHADOW_MAX = 150.0;
+const float RT_SHADOW_MAX = 200.0;
 
 uint getRTIndex(RTGeometry geometry, uint i)
 {
@@ -223,9 +223,9 @@ bool passesAlphaTest(uint geometry_index, uint primitive, vec2 b,
     }
 
 // Same range as the shadow map of the sun (getShadowFactor of pbr_light.glsl):
-// faded to lit from the distance 130 and no ray at all after 150
-const float RT_SHADOW_FADE_START = 130.0;
-const float RT_SHADOW_FADE_END = 150.0;
+// faded to lit from the distance 180 and no ray at all after 200
+const float RT_SHADOW_FADE_START = 180.0;
+const float RT_SHADOW_FADE_END = 200.0;
 
 // Whether the sun is blocked at a world position (1 is lit), camera_distance
 // is the distance of the position from the camera (a ray query can't be a

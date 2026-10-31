@@ -30,7 +30,9 @@ class GEVulkanAttachmentTexture;
 // 4. surfel_gi_trace.comp: a few cosine weighted rays per surfel, traced in
 //    the scene of GEVulkanRTScene and shaded like the reflection of a solid
 //    material (utils/rt_reflection.glsl), a ray which hits nothing sees the
-//    skybox
+//    skybox. The first hit of a ray spawns a sleeping surfel there, the ones
+//    the field covers too, so the rays generate surfels along with the pixels
+//    of the generate pass
 // 5. surfel_gi_integrate.comp: one cooperative group per active surfel merges
 //    the samples with the multiscale mean estimator of Ray Tracing Gems
 //    chapter 25 (surfelMSME) and updates its irradiance and depth moments
@@ -38,7 +40,8 @@ class GEVulkanAttachmentTexture;
 //    updated depth moments, writing only the MSME mean
 // 7. surfel_gi_generate.comp: the irradiance of every 2x2 block of the
 //    viewport (the weighted mean of the surfels of its cell), and the spawn of
-//    the surfels of the pixels with the least coverage
+//    the surfels of the holes of the field (the blocks which no surfel covers,
+//    at once) and of the pixels with the least coverage of their group
 //
 // There is no screen space temporal filter of the irradiance: the mean of a
 // surfel is temporally stable (the multiscale mean estimator) and it only
@@ -57,16 +60,12 @@ public:
     {
         // Surfels of the pool
         MAX_SURFELS = 131072,
-        // Rays a surfel traces in a frame at most (the same as
-        // SURFEL_MAX_RAYS of utils/surfel_gi.glsl): the tracing is the mass
-        // of the pass, and 16 rays of the whole pool was too much of the
-        // frame
-        MAX_RAYS = 8,
-        // Rays a surfel which is warmed up traces in a frame at most (the
-        // same as SURFEL_WARMUP_RAYS of utils/surfel_gi.glsl): only the
-        // surfels of the areas which the camera moved into, so the pool is
-        // not young all at once
-        WARMUP_RAYS = 16,
+        // Rays a surfel traces in a frame (the same as SURFEL_MAX_RAYS of
+        // utils/surfel_gi.glsl): the count of the reference, 64
+        MAX_RAYS = 64,
+        // Rays a surfel which is warmed up traces in a frame (the same as
+        // SURFEL_WARMUP_RAYS of utils/surfel_gi.glsl): the same count
+        WARMUP_RAYS = 64,
         // Rays of all the surfels of a frame at most (the surfels which don't
         // get any keep their radiance, they're traced in the next frame) and
         // the size of the buffers of the rays
@@ -169,7 +168,7 @@ private:
     static_assert(sizeof(SurfelLight) == 64,
         "SurfelLight is 64 bytes in the shaders");
 
-    // Same layout as SurfelCounter of utils/surfel_gi.glsl (std430, 32 bytes)
+    // Same layout as SurfelCounter of utils/surfel_gi.glsl (std430, 36 bytes)
     struct SurfelCounter
     {
         int32_t m_alive;
@@ -181,9 +180,12 @@ private:
         uint32_t m_last_ray_requests;
         // Sleeping surfels the tracing of the frame spawned
         uint32_t m_sleeping_spawns;
+        // Spawns of the holes of the screen which the generate pass of the
+        // frame tried
+        uint32_t m_hole_spawns;
     };
-    static_assert(sizeof(SurfelCounter) == 32,
-        "SurfelCounter is 32 bytes in the shaders");
+    static_assert(sizeof(SurfelCounter) == 36,
+        "SurfelCounter is 36 bytes in the shaders");
 
     struct Buffer
     {

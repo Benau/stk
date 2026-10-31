@@ -10,7 +10,8 @@ layout(binding = 2) uniform sampler2D u_bloom_wide;
 // only used if u_bloom_blend
 layout(binding = 3) uniform sampler2D u_bloom_blend_tex;
 // Full size ambient occlusion of GEVulkanSSAO, only sampled by the debug view
-// (pc.m_ssao_debug and u_ssao), a transparent texture is bound if there is none
+// (pc.m_ssao_debug and u_ssao), a transparent texture is bound if there is
+// none
 layout(binding = 4) uniform sampler2D u_ssao_texture;
 // Half size irradiance of GEVulkanSurfelGI, only sampled by its debug view
 // (pc.m_gi_debug and u_surfel_gi), a transparent texture is bound if there is
@@ -170,7 +171,8 @@ void main()
     vec4 hdr = GE_LOAD_HDR(u_hdr);
 #ifdef SPLIT
     // The indirect light of the occlusion (bound to both its switch and the
-    // global illumination), before the bloom so the bright parts of it glow too
+    // global illumination), before the bloom so the bright parts of it glow
+    // too
     if (u_ssil)
         hdr.rgb += sampleSsil() * SSIL_INTENSITY;
     if (u_bloom)

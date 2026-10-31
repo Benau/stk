@@ -211,6 +211,10 @@ bool m_ssao_debug;
 // shows exactly what is added to the ambient light. The images are half size,
 // so every 2x2 block of pixels has the same value
 bool m_gi_debug;
+// Debug view of the sun shadow map of GEVulkanShadowFBO (the "Shadow viz" of
+// the debug menu, like the one of the OpenGL renderer): the GEVulkan2dRenderer
+// draws the depth of the cascades in a 2x2 grid instead of the scene
+bool m_shadow_debug;
 // See GEAntiAliasing, use isAntiAliasingEnabled() to know if it's used
 GEAntiAliasing m_anti_aliasing;
 // Depth of field of the final image (a stage of GEVulkanFinalChain which runs

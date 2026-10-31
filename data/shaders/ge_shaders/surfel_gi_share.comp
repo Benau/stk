@@ -10,12 +10,17 @@
 // The window of the merge follows the noise of the mean of the surfel
 // (surfelMeanNoise): SURFEL_SHARING_WINDOW_NOISY for a surfel which is not
 // converged, which falls to SURFEL_SHARING_WINDOW_CONVERGED when its mean
-// converges. The merge is after the multiscale mean estimator and it only
-// writes its mean: the variance, the short mean, the catch up and the count
-// are the ones of the rays of the surfel, so the sharing can't make the
-// estimator trust a value which is not from its own rays (the sharing of the
-// reference is before the estimator, which is what made it change the noise of
-// the mean of the surfels which were already converged).
+// converges. The surfels of a moving object accept the light of their
+// surroundings much faster (SURFEL_SHARING_WINDOW_DYNAMIC_*, see
+// SURFEL_PAD_DYNAMIC): the surface of a kart moves through the scene, so the
+// light around it is the light of the area it is in now and its own rays
+// follow it with the lag of the estimator. The merge is after the multiscale
+// mean estimator and it only writes its mean: the variance, the short mean,
+// the catch up and the count are the ones of the rays of the surfel, so the
+// sharing can't make the estimator trust a value which is not from its own
+// rays (the sharing of the reference is before the estimator, which is what
+// made it change the noise of the mean of the surfels which were already
+// converged).
 //
 // The radiance of the neighbours is SurfelLight.m_radiance, which
 // surfel_gi_update.comp wrote at the start of the frame: this pass doesn't
@@ -54,7 +59,8 @@ void main()
     const CellInfo cell_info = u_cells[surfelCellIndex(cell)];
     if (cell_info.m_offset >= SURFEL_CELL_SURFEL_COUNT)
         return;
-    const uint count = min(cell_info.m_count, SURFEL_CELL_LIST_MAX);
+    const uint count = min(surfelCellCount(cell_info.m_count),
+        SURFEL_CELL_LIST_MAX);
     if (count == 0u)
         return;
 
@@ -121,11 +127,19 @@ void main()
 
     // The window of the merge falls with the noise of the mean of the surfel:
     // a surfel which is not converged takes the light of its neighbours
-    // quickly, and a converged one only smooths its mean with the small window
+    // quickly, and a converged one only smooths its mean with the small window.
+    // A surfel of a moving object accepts the light around it much faster
+    // (see SURFEL_SHARING_WINDOW_DYNAMIC_*): its surface moves with the
+    // object, so its surroundings are the light of the area it is in now
     const float noise = surfelMeanNoise(surfel.m_msme);
-    const float window_ = mix(SURFEL_SHARING_WINDOW_CONVERGED,
-        SURFEL_SHARING_WINDOW_NOISY, clamp((noise - SURFEL_NOISE_LOW) /
-        (SURFEL_NOISE_HIGH - SURFEL_NOISE_LOW), 0.0, 1.0));
+    const float noise_blend = clamp((noise - SURFEL_NOISE_LOW) /
+        (SURFEL_NOISE_HIGH - SURFEL_NOISE_LOW), 0.0, 1.0);
+    const bool dynamic_object = surfel.m_pad == SURFEL_PAD_DYNAMIC;
+    const float window_ = dynamic_object ?
+        mix(SURFEL_SHARING_WINDOW_DYNAMIC_CONVERGED,
+            SURFEL_SHARING_WINDOW_DYNAMIC_NOISY, noise_blend) :
+        mix(SURFEL_SHARING_WINDOW_CONVERGED, SURFEL_SHARING_WINDOW_NOISY,
+            noise_blend);
     u_surfels[index].m_msme.m_mean = mix(surfel.m_msme.m_mean,
         sum.xyz / sum.w, window_);
 }

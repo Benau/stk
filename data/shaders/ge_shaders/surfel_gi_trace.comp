@@ -16,18 +16,20 @@
 // traces 2 rays, and the quasi random ones fill its hemisphere evenly while the
 // guided ones find the bright directions of its surroundings.
 //
-// A hit which no surfel covers spawns a sleeping surfel there (W298 SurfelGI),
-// so the field grows where the rays go and not only where the camera looks: the
-// surfaces a bit outside of the view, the corners of a kart, and the surfaces
-// which the camera sees at a grazing angle first have surfels already. A
-// sleeping surfel is traced like the others (it's in the cells and its light is
-// the field of the hits), and it only has a short life until a pixel of the
-// camera uses it.
+// Every first hit of the rays spawns a sleeping surfel there (W298 SurfelGI),
+// whether the field covers the hit or not, so the field grows where the rays go
+// and not only where the camera looks: the surfaces a bit outside of the view,
+// the corners of a kart, and the surfaces which the camera sees at a grazing
+// angle first have surfels already, and the surfaces in the view keep the
+// density of the samples which reach them. A sleeping surfel is in the cells
+// and its light is the field of the hits, and it only has a short life until a
+// pixel of the camera uses it.
 //
-// The first ray of the surfels of the frame traces their visibility of the sun
+// The first ray of the surfels of the frame samples their visibility of the sun
 // (m_sun, which the hits the field covers take instead of tracing a shadow ray:
-// the direct light cache of the reference article): a shadow ray from the
-// position of the surfel toward the sun.
+// the direct light cache of the reference article): a single sample of the sun
+// shadow map of the lighting pass, so the GI injects the sun with the shadows
+// of the screen (see giSunShadow).
 //
 // Set 0 is the one of GEVulkanRTScene, set 1 the camera and the global light,
 // set 2 the pool of the surfels, set 3 the mesh textures (only to share the
@@ -44,7 +46,8 @@ layout(set = 4, binding = 0) uniform samplerCube u_diffuse;
 layout(set = 4, binding = 1) uniform samplerCube u_specular;
 // The radiance of the sky, what a ray which hits nothing sees
 layout(set = 4, binding = 2) uniform samplerCube u_skybox;
-// Only to share utils/pbr_light.glsl, the shadow of a hit is a ray
+// The sun shadow map of the lighting pass: the sun which a surfel injects is
+// shadowed by a single sample of it (see giSunShadow)
 layout(set = 4, binding = 3) uniform sampler2DArrayShadow u_shadow_map;
 
 #include "utils/camera.glsl"
@@ -62,11 +65,6 @@ layout(set = 4, binding = 3) uniform sampler2DArrayShadow u_shadow_map;
 // The origin of a ray is moved along the normal of its hit by it (the reference
 // moves the first ray of a surfel by 0.05)
 const float RAY_OFFSET = 0.05;
-// Chance that the first segment of a ray spawns a sleeping surfel at a hit
-// which no surfel covers: the pool of the tracing is filled with the surfaces
-// which the rays reach in a few frames, and not with a hit of every ray of the
-// frame
-const float SURFEL_SLEEPING_SPAWN_CHANCE = 1.0 / 64.0;
 
 // Whether a point light or a spot light reaches a position (the same tests as
 // rtShadowLightReaches of utils/rt_shadow_layer.glsl and accumulateLights of
@@ -100,6 +98,26 @@ bool giLightReaches(int light, vec3 position, vec3 normal)
             return false;
     }
     return true;
+}
+
+// The visibility of the sun at a surface of the scene, for the direct light
+// which the surfels inject into their radiance: a single sample of the sun
+// shadow map of the lighting pass (the same cascades as the pixels, so the GI
+// has the shadows of the screen and a hit costs no shadow ray), or a shadow
+// ray where the lighting pass has no shadow map
+float giSunShadow(vec3 position, vec3 normal, vec3 sun_direction)
+{
+    const float camera_distance = distance(position,
+        u_camera.m_inverse_view_matrix[3].xyz);
+    if ((u_shadow_type & GST_SUN) != 0u && u_shadow_size != 0u)
+    {
+        const float view_depth =
+            (u_camera.m_view_matrix * vec4(position, 1.0)).z;
+        return getShadowFactorSingleSample(u_shadow_map, position,
+            camera_distance, view_depth, dot(normal, sun_direction), normal,
+            sun_direction);
+    }
+    return getSunShadow(position, normal, sun_direction, camera_distance);
 }
 
 // The light of a point light or a spot light at a position (the BRDF of the
@@ -144,17 +162,25 @@ vec3 surfelSleepingSeed(vec3 normal)
         u_global_light.m_ambient_color * 0.25;
 }
 
-// A sleeping surfel at the hit of a ray which the field doesn't cover (see
-// SURFEL_SLEEPING_SPAWN_CHANCE): it's attached to the triangle of the hit like
-// the surfels of the generate pass, so it follows it, and the frames trace it
-// from now on
+// A sleeping surfel at the first hit of a ray (see the spawn in main): it's
+// attached to the triangle of the hit like the surfels of the generate pass, so
+// it follows it, and the frames trace it from now on. seed is the light of the
+// field at the hit when the field covers it, and the environment where it
+// doesn't (see surfelSleepingSeed)
 void surfelSpawnSleeping(vec3 position, vec3 normal, uint node_key,
-                         uint geometry, uint primitive, uint bary)
+                         uint geometry, uint primitive, uint bary,
+                         bool dynamic_object, vec3 seed, uint evict_seed)
 {
-    // The pool belongs to the surfels of the view when it's nearly full (the
-    // update pass recycles the sleeping surfels)
-    if (u_counter.m_free <= int(SURFEL_MAX_COUNT / 8) ||
-        !surfelCellValid(surfelCell(position)))
+    const ivec4 cell = surfelCell(position);
+    if (!surfelCellValid(cell))
+        return;
+    // The cell has enough surfels of the kind of the surface, see
+    // SURFEL_CELL_SPAWN_LIMIT and SURFEL_CELL_DYNAMIC_LIMIT (the sleeping ones
+    // are in the list of the cell of the next frame too)
+    const uint cell_count = u_cells[surfelCellIndex(cell)].m_count;
+    const uint dynamic_count = surfelCellDynamicCount(cell_count);
+    if (dynamic_object ? dynamic_count >= SURFEL_CELL_DYNAMIC_LIMIT :
+        surfelCellCount(cell_count) - dynamic_count >= SURFEL_CELL_SPAWN_LIMIT)
         return;
     // The spawns of a frame are bounded (a cheap read first, the tracing of a
     // frame spawns a few hundreds of them)
@@ -162,12 +188,17 @@ void surfelSpawnSleeping(vec3 position, vec3 normal, uint node_key,
         return;
     if (atomicAdd(u_counter.m_sleeping_spawns, 1u) >= SURFEL_SLEEPING_SPAWNS)
         return;
-    const uint new_index = surfelAllocate();
+    // A full pool takes the slot of the oldest surfel which no ray of the
+    // frame uses (see surfelEvict) instead of failing the spawn: the surfaces
+    // the rays reach outside of the view are the light of the hits, so they
+    // must keep being created when the pool is used by the view
+    uint new_index = surfelAllocate();
+    if (new_index >= SURFEL_MAX_COUNT)
+        new_index = surfelEvict(evict_seed);
     if (new_index >= SURFEL_MAX_COUNT)
         return;
     const float camera_distance = distance(position, pc.m_origin.xyz);
     const float max_radius = surfelMaxRadius(camera_distance);
-    const vec3 seed = surfelSleepingSeed(normal);
     Surfel surfel;
     surfel.m_position = position;
     surfel.m_radius = clamp(surfelCoverRadius(camera_distance),
@@ -195,7 +226,7 @@ void surfelSpawnSleeping(vec3 position, vec3 normal, uint node_key,
     surfel.m_irradiance = 0u;
     surfel.m_sun = -1.0;
     surfel.m_ray_index = 0u;
-    surfel.m_pad = 0u;
+    surfel.m_pad = dynamic_object ? SURFEL_PAD_DYNAMIC : 0u;
     u_surfels[new_index] = surfel;
     SurfelLight light;
     light.m_position_radius = vec4(position, surfel.m_radius);
@@ -319,11 +350,11 @@ void main()
         radiance += throughput * pbr.z * albedo * 4.0;
 
         // The sun of the hit: the shadow of the field if it covers the hit,
-        // otherwise a shadow ray
+        // otherwise a single sample of the shadow map
         if (dot(hit_normal, sun_direction) > 0.0)
         {
-            const float shadow = sun >= 0.0 ? sun : getSunShadow(hit_position,
-                hit_normal, sun_direction, camera_distance);
+            const float shadow = sun >= 0.0 ? sun : giSunShadow(hit_position,
+                hit_normal, sun_direction);
             radiance += throughput * PBRLight(hit_normal, hit_eyedir,
                 sun_direction, albedo, 1.0 - pbr.x, pbr.y) *
                 u_global_light.m_sun_color * shadow;
@@ -354,32 +385,32 @@ void main()
             }
         }
 
-        // The field covers the hit: it's the light of the rest of the path, so
-        // the path ends
-        if (covered)
-        {
-            radiance += throughput * indirect * diffuse_albedo;
-            break;
-        }
-
-        // The field has no value there (a far surface, or the start of the
-        // scene): one ray of 64 spawns a sleeping surfel at the hit, so the
-        // field grows where the light of the surfaces comes from
-        if (segment == 0u && surfelRand(index, pc.m_frame + 13u) <
-            SURFEL_SLEEPING_SPAWN_CHANCE)
+        // Every first hit of a ray spawns a sleeping surfel there, the ones the
+        // field already covers too: the pixels of the camera and the rays of
+        // the surfels both generate surfels (see surfel_gi_generate.comp), so
+        // the surfaces in the view keep the density of the samples which reach
+        // them and the light of every area the rays look at stays in the
+        // field. The cell and the frame bound the spawns (see
+        // SURFEL_CELL_SPAWN_LIMIT and SURFEL_SLEEPING_SPAWNS). A surfel of a
+        // covered hit is seeded with the light of the field there, so it
+        // continues the light of its neighbours; one of an uncovered hit takes
+        // the environment
+        if (segment == 0u)
         {
             const uint node_key =
                 rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(
                 query, true);
-            uint geometry =
+            const uint instance_custom = uint(
+                rayQueryGetIntersectionInstanceCustomIndexEXT(query, true));
+            const uint hit_geometry =
                 uint(rayQueryGetIntersectionGeometryIndexEXT(query, true));
-            if (node_key == 0u)
-            {
-                // The static geometry: the index of the geometry is the custom
-                // index of its instance plus the one of the hit
-                geometry = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(
-                    query, true)) + geometry;
-            }
+            const bool dynamic_object = node_key != 0u &&
+                u_rt_geometries[instance_custom + hit_geometry].m_shading_type
+                != RT_SHADING_GRASS;
+            const uint geometry = node_key == 0u ?
+                // The static geometry: the index of the geometry is the
+                // custom index of its instance plus the one of the hit
+                instance_custom + hit_geometry : hit_geometry;
             const vec2 barycentrics =
                 rayQueryGetIntersectionBarycentricsEXT(query, true);
             const uint bary = uint(round(clamp(barycentrics.x, 0.0, 1.0) *
@@ -387,7 +418,16 @@ void main()
                 65535.0)) << 16u);
             surfelSpawnSleeping(hit_position, hit_normal, node_key, geometry,
                 uint(rayQueryGetIntersectionPrimitiveIndexEXT(query, true)),
-                bary);
+                bary, dynamic_object, covered ? indirect : surfelSleepingSeed(
+                hit_normal), index);
+        }
+
+        // The field covers the hit: it's the light of the rest of the path, so
+        // the path ends (the hit already spawned its surfel above)
+        if (covered)
+        {
+            radiance += throughput * indirect * diffuse_albedo;
+            break;
         }
 
         // The path continues from the hit: the environment is the light of the
@@ -411,16 +451,13 @@ void main()
         normal = hit_normal;
     }
 
-    // The visibility of the sun of the surfel is traced by its first ray of the
-    // frame (the cache of the shadows of the hits which the field covers)
+    // The visibility of the sun of the surfel is sampled by its first ray of
+    // the frame (the cache of the shadows of the hits which the field covers)
     if (index == surfel.m_ray_offset)
     {
         float sun = -1.0;
         if (dot(surfel_normal, sun_direction) > 0.0)
-        {
-            sun = getSunShadow(surfel.m_position, surfel_normal,
-                sun_direction, distance(surfel.m_position, pc.m_origin.xyz));
-        }
+            sun = giSunShadow(surfel.m_position, surfel_normal, sun_direction);
         u_surfels[surfel_index].m_sun = sun;
     }
 

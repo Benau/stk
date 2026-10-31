@@ -94,6 +94,12 @@ public:
     void setShadowMatrices(GEVulkanCameraUBO* ubo,
                            GEVulkanShadowCameraCascade cc);
     // ------------------------------------------------------------------------
+    // View depth where each sun cascade starts and the cosine of the largest
+    // angle between the view direction and a frustum ray, see
+    // GEVulkanShadowFBO::prepare
+    void setShadowSplit(const irr::core::vector3df& near_depths,
+                        float min_ray_cos);
+    // ------------------------------------------------------------------------
     void setLightShadowMatrices(GEVulkanCameraUBO* ubo, unsigned light,
                                 unsigned face);
     // ------------------------------------------------------------------------

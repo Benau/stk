@@ -2602,6 +2602,17 @@ void IrrDriver::toggleGIDebug()
 }   // toggleGIDebug
 
 // --------------------------------------------------------------------------------------------
+void IrrDriver::toggleShadowViz()
+{
+    m_shadowviz = !m_shadowviz;
+#ifndef SERVER_ONLY
+    // The Vulkan renderer shows the depth of the sun cascades in its 2D
+    // renderer, the OpenGL one renders them in shadow_matrices.cpp
+    GE::getGEConfig()->m_shadow_debug = m_shadowviz;
+#endif
+}   // toggleShadowViz
+
+// --------------------------------------------------------------------------------------------
 void IrrDriver::resetDebugModes()
 {
     m_ssaoviz = false;
@@ -2612,6 +2623,7 @@ void IrrDriver::resetDebugModes()
 #ifndef SERVER_ONLY
     GE::getGEConfig()->m_ssao_debug = false;
     GE::getGEConfig()->m_gi_debug = false;
+    GE::getGEConfig()->m_shadow_debug = false;
     SP::sp_debug_view = false;
 #endif
 }

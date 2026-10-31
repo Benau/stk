@@ -14,6 +14,110 @@
 #include <cmath>
 #include <stdexcept>
 
+namespace
+{
+// ----------------------------------------------------------------------------
+// The direction of the frustum cone with the largest dot product to the axis.
+// The maximum is at the axis itself when it is inside the cone, otherwise at
+// an edge of the cone where the axis projected onto the edge plane is still
+// inside the cone, or at a corner of the cone.
+irr::core::vector3df getConeExtremeDirection(const irr::core::vector3df& axis,
+    const irr::core::vector3df* plane_normals,
+    const irr::core::vector3df* cone_corners)
+{
+    bool inside = true;
+    for (unsigned i = 0; i < 4; i++)
+    {
+        if (plane_normals[i].dotProduct(axis) < -1e-5f)
+        {
+            inside = false;
+            break;
+        }
+    }
+    if (inside)
+        return axis;
+
+    float best_dot = -2.0f;
+    irr::core::vector3df best = cone_corners[0];
+    for (unsigned i = 0; i < 4; i++)
+    {
+        irr::core::vector3df dir = axis - plane_normals[i] *
+            axis.dotProduct(plane_normals[i]);
+        if (dir.getLengthSQ() < 1e-8f)
+            continue;
+        dir.normalize();
+        bool in_cone = true;
+        for (unsigned j = 0; j < 4; j++)
+        {
+            if (plane_normals[j].dotProduct(dir) < -1e-5f)
+            {
+                in_cone = false;
+                break;
+            }
+        }
+        if (!in_cone)
+            continue;
+        float dot = axis.dotProduct(dir);
+        if (dot > best_dot)
+        {
+            best_dot = dot;
+            best = dir;
+        }
+    }
+    for (unsigned i = 0; i < 4; i++)
+    {
+        float dot = axis.dotProduct(cone_corners[i]);
+        if (dot > best_dot)
+        {
+            best_dot = dot;
+            best = cone_corners[i];
+        }
+    }
+    return best;
+}   // getConeExtremeDirection
+
+// ----------------------------------------------------------------------------
+// The maximum of axis.dir over the unit directions of the cone patch.
+float getConeSupport(const irr::core::vector3df& axis,
+    const irr::core::vector3df* plane_normals,
+    const irr::core::vector3df* cone_corners)
+{
+    float len = axis.getLength();
+    if (len < 1e-12f)
+        return 0.0f;
+    irr::core::vector3df dir = axis / len;
+    irr::core::vector3df extreme = getConeExtremeDirection(dir,
+        plane_normals, cone_corners);
+    return len * dir.dotProduct(extreme);
+}   // getConeSupport
+
+// ----------------------------------------------------------------------------
+// The maximum of x/(y+c) over the far spherical patch of the cascade body,
+// where x = sfar*(a.dir) and y = sfar*(b.dir) (a and b are light space axes
+// rotated to view space). The level sets of x/(y+c) are planes through the
+// light space line x = 0, y = -c, so the maximum is the largest t where the
+// plane x = t*(y+c) still touches the patch: it is the root of
+// F(t) = max((a - t*b).dir) - t*k with k = c/sfar. F is strictly decreasing
+// because y + c is positive on the body, so a bisection finds it.
+float getPatchWarpedSup(const irr::core::vector3df& a,
+    const irr::core::vector3df& b, float k, float bound,
+    const irr::core::vector3df* plane_normals,
+    const irr::core::vector3df* cone_corners)
+{
+    float lo = -bound, hi = bound;
+    for (unsigned it = 0; it < 40; it++)
+    {
+        float mid = (lo + hi) * 0.5f;
+        if (getConeSupport(a - b * mid, plane_normals, cone_corners) -
+            mid * k >= 0.0f)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    return (lo + hi) * 0.5f;
+}   // getPatchWarpedSup
+}
+
 namespace GE
 {
 // ----------------------------------------------------------------------------
@@ -270,84 +374,164 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
     irr::core::matrix4 inv_cam_view;
     cam->getViewMatrix().getInverse(inv_cam_view);
 
+    const irr::scene::SViewFrustum *frust = cam->getViewFrustum();
+    irr::core::vector3df corners[4] =
+    {
+        frust->getFarLeftDown(), frust->getFarRightDown(),
+        frust->getFarLeftUp(), frust->getFarRightUp()
+    };
+    for (unsigned j = 0; j < 4; j++)
+        cam->getViewMatrix().transformVect(corners[j]);
+    // Tangent of the frustum edges in camera view space
+    const float left = corners[0].X / corners[0].Z;
+    const float right = corners[1].X / corners[1].Z;
+    const float bottom = corners[0].Y / corners[0].Z;
+    const float top = corners[2].Y / corners[2].Z;
+    // At a view depth z the rays of the frustum reach the distance z /
+    // min_ray_cos at most. The pbr shaders calculate the same near depths of
+    // the cascades from it (see getShadowFactor of utils/pbr_light.glsl)
+    float min_ray_cos = 1.0f;
+    for (unsigned j = 0; j < 4; j++)
+    {
+        min_ray_cos = std::min(min_ray_cos,
+            corners[j].Z / corners[j].getLength());
+    }
+
+    // The frustum is the cone from the camera through its far rectangle. The
+    // side planes of the cone and its corner directions are used to find the
+    // exact bounds of the spherical far patch of the cascade bodies.
+    irr::core::vector3df cone_normals[4] =
+    {
+        irr::core::vector3df(1.0f, 0.0f, -left).normalize(),
+        irr::core::vector3df(-1.0f, 0.0f, right).normalize(),
+        irr::core::vector3df(0.0f, 1.0f, -bottom).normalize(),
+        irr::core::vector3df(0.0f, -1.0f, top).normalize()
+    };
+    irr::core::vector3df cone_corners[4] =
+    {
+        irr::core::vector3df(left, bottom, 1.0f).normalize(),
+        irr::core::vector3df(right, bottom, 1.0f).normalize(),
+        irr::core::vector3df(right, top, 1.0f).normalize(),
+        irr::core::vector3df(left, top, 1.0f).normalize()
+    };
+    irr::core::vector3df light_axes[6] =
+    {
+        lsleft, -lsleft, lsup, -lsup, lightdir, -lightdir
+    };
+
+    float split_near[GVSCC_COUNT];
     for (unsigned i = 0; i < GVSCC_COUNT; i++)
     {
-        std::vector<irr::core::vector3df> points;
         irr::core::aabbox3df lsbody;
         irr::core::matrix4 lslightproj;
 
-        // The cascade boundaries are distances from the camera, so the slice
-        // is the part of the frustum between the two spheres of radius snear
-        // and sfar. Interpolating between the near and far planes instead
-        // would split by view depth, whose range depends on the field of
-        // view (the screen corners are farther away than their depth). The
-        // spheres make the covered body curved, so it is sampled over the
-        // whole frustum instead of only at the corners.
-        float snear = std::max(getSplitNear(GEVulkanShadowCameraCascade(i)),
-                               cam->getNearValue());
+        // The cascades are split by distance and by view depth: the far
+        // boundary of a cascade is the sphere of radius sfar, the near one is
+        // the plane at depth snear. The near depth is the largest one where
+        // the far sphere of the previous cascade still covers the whole
+        // screen (its radius is split_far * min_ray_cos), so the bodies of
+        // the two cascades don't leave any gap at the screen corners, where
+        // the distance of a pixel is much larger than its depth.
+        float snear = std::max(getSplitNear(
+            (GEVulkanShadowCameraCascade)i, cam->getNearValue(), min_ray_cos),
+            cam->getNearValue());
         float sfar = std::min(getSplitFar(GEVulkanShadowCameraCascade(i)),
                               cam->getFarValue());
         sfar = std::max(sfar, snear);
+        split_near[i] = snear;
 
-        const irr::scene::SViewFrustum *frust = cam->getViewFrustum();
-        irr::core::vector3df corners[4] =
-        {
-            frust->getFarLeftDown(), frust->getFarRightDown(),
-            frust->getFarLeftUp(), frust->getFarRightUp()
-        };
+        // The body is the convex hull of the near plane rectangle and the far
+        // spherical patch. Every face of its light space bound is supported
+        // either by a corner of the rectangle or by a point of the patch where
+        // the face touches the distance sphere, so the bound is tight: the 4
+        // corners and the extreme point of the patch along each of the 6 light
+        // space axis directions give all the supports. No interpolated convex
+        // hull is needed (the patch is curved and the hull of sampled points
+        // would underestimate it).
+        irr::core::vector3df body_points[4 + 6];
         for (unsigned j = 0; j < 4; j++)
-            cam->getViewMatrix().transformVect(corners[j]);
-        // Tangent of the frustum edges in camera view space
-        const float left = corners[0].X / corners[0].Z;
-        const float right = corners[1].X / corners[1].Z;
-        const float bottom = corners[0].Y / corners[0].Z;
-        const float top = corners[2].Y / corners[2].Z;
-        const float radii[2] = { snear, sfar };
-        for (unsigned a = 0; a < 5; a++)
         {
-            for (unsigned b = 0; b < 5; b++)
+            // The near rectangle point along the direction of a cone corner,
+            // scaled to the view depth of the near plane
+            irr::core::vector3df near_point = cone_corners[j] *
+                (snear / cone_corners[j].Z);
+            inv_cam_view.transformVect(body_points[j], near_point);
+        }
+        for (unsigned j = 0; j < 6; j++)
+        {
+            irr::core::vector3df axis;
+            cam->getViewMatrix().rotateVect(axis, light_axes[j]);
+            axis.normalize();
+            irr::core::vector3df dir = getConeExtremeDirection(axis,
+                cone_normals, cone_corners);
+            inv_cam_view.transformVect(body_points[4 + j], dir * sfar);
+        }
+
+        // lsbody as PSR (Potential Shadow Receiver) in light view space
+        irr::core::vector3df near_points_ls[4];
+        for (unsigned j = 0; j < 4 + 6; j++)
+        {
+            irr::core::vector3df point = body_points[j];
+            m_shadow_view_matrix.transformVect(point);
+            if (j < 4)
+                near_points_ls[j] = point;
+            if (j == 0) lsbody.reset(point);
+            else lsbody.addInternalPoint(point);
+        }
+
+        // Only the far cascade is shrunk to the scene. The near cascades keep
+        // their fixed body, the near boundary of the next cascade relies on
+        // the far distance of the previous one. The parts of the far body
+        // outside of the bounding box of the scene can't contain any shadow
+        // receiver, so they are removed by clipping the body by the light
+        // space bounding box of the scene.
+        bool clip_xy = false;
+        if (i == GVSCC_FAR && m_scene_bbox_valid)
+        {
+            irr::core::vector3df scene_edges[8];
+            m_scene_bbox.getEdges(scene_edges);
+            irr::core::aabbox3df scene_body;
+            for (unsigned j = 0; j < 8; j++)
             {
-                irr::core::vector3df dir(left + (right - left) * (a / 4.0f),
-                                         bottom + (top - bottom) * (b / 4.0f),
-                                         1.0f);
-                dir.normalize();
-                for (unsigned r = 0; r < 2; r++)
+                m_shadow_view_matrix.transformVect(scene_edges[j]);
+                if (j == 0) scene_body.reset(scene_edges[j]);
+                else scene_body.addInternalPoint(scene_edges[j]);
+            }
+            if (lsbody.intersectsWithBox(scene_body))
+            {
+                irr::core::aabbox3df clipped = lsbody.intersect(scene_body);
+                irr::core::vector3df extent = clipped.getExtent();
+                // A degenerate body would break the projection matrices
+                if (extent.X > 1e-3f && extent.Y > 1e-3f && extent.Z > 1e-3f)
                 {
-                    irr::core::vector3df point;
-                    inv_cam_view.transformVect(point, dir * radii[r]);
-                    points.push_back(point);
+                    // Only a narrowing of X or Y changes the fit, a clip of Z
+                    // alone keeps the X/Y bounds of the body
+                    clip_xy = clipped.MinEdge.X != lsbody.MinEdge.X ||
+                        clipped.MaxEdge.X != lsbody.MaxEdge.X ||
+                        clipped.MinEdge.Y != lsbody.MinEdge.Y ||
+                        clipped.MaxEdge.Y != lsbody.MaxEdge.Y;
+                    lsbody = clipped;
                 }
             }
         }
 
-        // lsbody as PSR (Potential Shadow Receiver) in camera view space
-        for (unsigned j = 0; j < points.size(); j++)
-        {
-            irr::core::vector3df point = points[j];
-            cam->getViewMatrix().transformVect(point);
-            if (j == 0) lsbody.reset(point);
-            else lsbody.addInternalPoint(point);
-        }
+        // The 8 corners of the (clipped) body in light view space
+        irr::core::vector3df ls_points[8];
+        lsbody.getEdges(ls_points);
 
-        float znear = std::max(cam->getNearValue(), lsbody.MinEdge.Z);
-        float zfar = std::min(cam->getFarValue(), lsbody.MaxEdge.Z);
-
-        // lsbody as PSR (Potential Shadow Receiver) in light view space
-        for (unsigned j = 0; j < points.size(); j++)
-        {
-            m_shadow_view_matrix.transformVect(points[j]);
-            irr::core::vector3df point = points[j];
-            if (j == 0) lsbody.reset(point);
-            else lsbody.addInternalPoint(point);
-        }
+        // The view depth range of the body is fixed by the split distances:
+        // the far cascade is still built with its full 200 distance and is
+        // only clipped inside the scene bounding box
+        float znear = snear;
+        float zfar = sfar;
 
         lslightproj(2, 2) = 1.0 / lsbody.getExtent().Z;
         lslightproj(3, 2) = -lsbody.MinEdge.Z / lsbody.getExtent().Z;
 
-        for (unsigned j = 0; j < points.size(); j++)
+        for (unsigned j = 0; j < 8; j++)
         {
             float vec[4];
-            irr::core::vector3df point = points[j];
+            irr::core::vector3df point = ls_points[j];
             lslightproj.transformVect(vec, point);
             point.X = vec[0] / vec[3];
             point.Y = vec[1] / vec[3];
@@ -363,6 +547,10 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
         // View depth extent of the body, used to calculate the optimal n
         float zdepth = zfar - znear;
 
+        // Exact warped X bounds of the body, calculated in the LISPSM branch
+        float exact_fit_min_x = 0.0f, exact_fit_max_x = 0.0f;
+        bool has_exact_fit_x = false;
+
         if (singamma > 0.02f && d > 0.0f && zdepth > 0.0f)
         {
             // Wimmer et al. 2004, section 4.5: when the view is tilted
@@ -374,6 +562,39 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
             n = std::max(n, 0.001f);
 
             float f = n + d;
+
+            // The warped X' = n*x/(y+c) of the body, c = n - MinY (the
+            // denominator y + c is positive on the body). It is bounded
+            // exactly by the near rectangle corners (a linear fractional
+            // function is extreme at the corners of the rectangle) and by the
+            // spherical patch, but the warped corners of the box pair the
+            // largest X with the smallest Y and overstate X', which leaves a
+            // wide unused margin in the map. The warped box corners are only
+            // used when the scene clip narrowed the X/Y bounds, because the
+            // clipped body shape is not tracked.
+            if (!clip_xy)
+            {
+                float c = n - lsbody.MinEdge.Y;
+                irr::core::vector3df lsleft_view, lsup_view;
+                cam->getViewMatrix().rotateVect(lsleft_view, lsleft);
+                cam->getViewMatrix().rotateVect(lsup_view, lsup);
+                float k = c / sfar;
+                float bound = sfar / n;
+                float hmax = getPatchWarpedSup(lsleft_view, lsup_view, k,
+                    bound, cone_normals, cone_corners);
+                float hmin = -getPatchWarpedSup(-lsleft_view, lsup_view, k,
+                    bound, cone_normals, cone_corners);
+                for (unsigned j = 0; j < 4; j++)
+                {
+                    float h = near_points_ls[j].X /
+                        (near_points_ls[j].Y + c);
+                    hmin = std::min(hmin, h);
+                    hmax = std::max(hmax, h);
+                }
+                exact_fit_min_x = n * hmin;
+                exact_fit_max_x = n * hmax;
+                has_exact_fit_x = exact_fit_max_x > exact_fit_min_x + 1e-6f;
+            }
 
             irr::core::matrix4 lispsmproj;
             lispsmproj(0, 0) = n;
@@ -398,9 +619,9 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
 
             lslightproj = lispsmproj * correct * lslightproj;
 
-            for (unsigned j = 0; j < points.size(); j++)
+            for (unsigned j = 0; j < 8; j++)
             {
-                irr::core::vector3df point = points[j];
+                irr::core::vector3df point = ls_points[j];
                 float vec[4];
                 lslightproj.transformVect(vec, point);
                 point.X = vec[0] / vec[3];
@@ -411,15 +632,31 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
             }
         }
 
+        // Fit the warped body to the unit cube. The warp is monotone in Y, so
+        // the warped corners give the exact Y bounds. For X the exact bounds
+        // of the body are used when known, the corners of the box alone are
+        // too loose.
+        float fit_min_x = lsbody.MinEdge.X;
+        float fit_max_x = lsbody.MaxEdge.X;
+        if (has_exact_fit_x)
+        {
+            fit_min_x = exact_fit_min_x;
+            fit_max_x = exact_fit_max_x;
+        }
         irr::core::matrix4 fittounitcube;
-        fittounitcube(0, 0) = 2.0f / lsbody.getExtent().X;
+        fittounitcube(0, 0) = 2.0f / (fit_max_x - fit_min_x);
         fittounitcube(1, 1) = 2.0f / lsbody.getExtent().Y;
-        fittounitcube(3, 0) = -(lsbody.MinEdge.X + lsbody.MaxEdge.X) / lsbody.getExtent().X;
+        fittounitcube(3, 0) = -(fit_min_x + fit_max_x) / (fit_max_x - fit_min_x);
         fittounitcube(3, 1) = -(lsbody.MinEdge.Y + lsbody.MaxEdge.Y) / lsbody.getExtent().Y;
         lslightproj = fittounitcube * lslightproj;
 
         m_shadow_projection_matrices[i] = lslightproj;
     }
+
+    // The pbr shaders select the cascades with these near depths and blend
+    // them with min_ray_cos, they have to match the bodies calculated here
+    lh->setShadowSplit(irr::core::vector3df(split_near[0], split_near[1],
+        split_near[2]), min_ray_cos);
 
     // Build shadow camera UBOs
     for (unsigned i = 0; i < GVSCC_COUNT; i++)
@@ -438,6 +675,14 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
 // ----------------------------------------------------------------------------
 void GEVulkanShadowFBO::addNode(irr::scene::ISceneNode* node)
 {
+    irr::core::aabbox3df bb = node->getTransformedBoundingBox();
+    if (m_scene_bbox_valid)
+        m_scene_bbox.addInternalBox(bb);
+    else
+    {
+        m_scene_bbox = bb;
+        m_scene_bbox_valid = true;
+    }
     for (unsigned i = 0; i < GVSCC_COUNT; i++)
         m_shadow_draw_calls[i]->addNode(node);
 }   // addNode

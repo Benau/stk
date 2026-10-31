@@ -24,5 +24,9 @@ layout(std140, set = 1, binding = 3) uniform GlobalLightBuffer
     int   m_light_count;
     // x: start, y: end (linear fog of transparent materials)
     vec4  m_fog_range;
+    // xyz: view depth where each sun cascade starts, w: cosine of the largest
+    // angle between the view direction and a frustum ray (see
+    // GEVulkanShadowFBO::prepare)
+    vec4  m_shadow_split;
     LightData m_lights[MAX_RENDERING_LIGHT];
 } u_global_light;

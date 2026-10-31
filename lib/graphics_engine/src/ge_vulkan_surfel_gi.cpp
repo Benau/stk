@@ -29,7 +29,9 @@ namespace GE
 // the pool needs fewer of them and the spawn probabilities are lower (see
 // surfel_gi_generate.comp) while the amount of light a pixel receives stays
 // the same: surfels are also larger (SURFEL_SIZE is the area of a surfel in
-// pixels at the near field)
+// pixels at the near field). The shader scales this area by SURFEL_SIZE_SCALE
+// of utils/surfel_gi.glsl: the surfels are 16 pixels there, 4 times the area
+// and twice the radius of the reference tuning, a quarter of the density
 const float GEVulkanSurfelGI::CELL_DELTA = 3.0f;
 const float GEVulkanSurfelGI::CELL_HALF_DELTA = 96.0f;
 const float GEVulkanSurfelGI::SURFEL_SIZE = 4.0f;

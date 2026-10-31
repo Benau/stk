@@ -19,7 +19,11 @@
 // the node of the two of them is the model to world matrix. A node which is
 // gone (or hidden) leaves its slot with the static instance and the key 0, and
 // a slot reused by another node has a new key, so the check fails and the
-// surfel is recycled.
+// surfel keeps its last position: surfel_gi_update.comp recycles it over the
+// next frames (the lost surfels which the camera uses fade out, the others go
+// at once), not on the check itself (a key which changes under a surfel whose
+// surface is still there, the skinned set of the karts, must not free every
+// surfel of the karts in one frame)
 //
 // The shader which includes this file must have, before it, the include of
 // utils/surfel_gi.glsl, utils/camera.glsl and the ones which
@@ -108,13 +112,19 @@ bool surfelFollow(Surfel surfel, out vec3 position, out vec3 normal)
 // position, the geometry and the triangle of the hit are returned so a surfel
 // can be attached to it (surfelFollow). Returns false if there is no hit near
 // the position (the surface is not in the ray traced scene)
+// dynamic_object is true for the surface of a moving object (a kart, an item,
+// a wheel) and not for the grass, whose blades are dynamic too but are a thin
+// surface everywhere which the field of their cells already lights: the surfel
+// of an object spawns from the budget of the dynamic surfaces of its cell, the
+// one of the grass from the static budget (see SURFEL_CELL_DYNAMIC_LIMIT)
 bool surfelAttach(vec3 world_position, out uint node_key, out uint geometry,
-                  out uint primitive, out uint bary)
+                  out uint primitive, out uint bary, out bool dynamic_object)
 {
     node_key = 0u;
     geometry = 0u;
     primitive = 0u;
     bary = 0u;
+    dynamic_object = false;
     const vec3 camera_position = u_camera.m_inverse_view_matrix[3].xyz;
     const vec3 to_position = world_position - camera_position;
     const float distance_to_position = length(to_position);
@@ -143,17 +153,30 @@ bool surfelAttach(vec3 world_position, out uint node_key, out uint geometry,
     // instance), see rt_scene.glsl
     node_key = rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(
         query, true);
-    geometry = uint(rayQueryGetIntersectionGeometryIndexEXT(query, true));
+    const uint instance_custom = uint(
+        rayQueryGetIntersectionInstanceCustomIndexEXT(query, true));
+    const uint hit_geometry =
+        uint(rayQueryGetIntersectionGeometryIndexEXT(query, true));
+    geometry = hit_geometry;
     primitive = uint(rayQueryGetIntersectionPrimitiveIndexEXT(query, true));
-    const vec2 barycentrics =
-        rayQueryGetIntersectionBarycentricsEXT(query, true);
     if (node_key == 0u)
     {
         // The static geometry: the hit is in the one BLAS of the scene, so the
-        // index of the geometry is the custom index of its instance
-        geometry = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(query,
-            true)) + geometry;
+        // index of the geometry is the custom index of its instance plus the
+        // one of the hit
+        geometry = instance_custom + hit_geometry;
     }
+    else
+    {
+        // The grass is dynamic too, but it's a thin surface everywhere, which
+        // the field of its cells already lights: only the surface of an object
+        // (a kart, an item, a wheel) spawns from the dynamic budget of its
+        // cell (see SURFEL_CELL_DYNAMIC_LIMIT)
+        dynamic_object = u_rt_geometries[instance_custom + hit_geometry].
+            m_shading_type != RT_SHADING_GRASS;
+    }
+    const vec2 barycentrics =
+        rayQueryGetIntersectionBarycentricsEXT(query, true);
     bary = uint(round(clamp(barycentrics.x, 0.0, 1.0) * 65535.0)) |
         (uint(round(clamp(barycentrics.y, 0.0, 1.0) * 65535.0)) << 16u);
     return true;
