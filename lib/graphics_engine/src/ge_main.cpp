@@ -45,9 +45,12 @@ GEConfig g_config =
     GST_NONE,
     8,
     32,
-    0.5f,
+    3.0f,
     3.0f,
     1.0f,
+    // The debug views are off until the debug menu turns one on
+    false,
+    false,
     GAA_NONE,
     false,
     72.0f,
@@ -392,6 +395,12 @@ bool isSolidRayTracing()
 bool isDisplaceRayTracing()
 {
     return g_config.m_pbr && g_config.m_ray_tracing.m_displace_reflection &&
+        isRayTracing();
+}
+
+bool isSurfelGIEnabled()
+{
+    return g_config.m_pbr && g_config.m_ray_tracing.m_surfel_gi &&
         isRayTracing();
 }
 

@@ -1,0 +1,179 @@
+// Screen space indirect light of GEVulkanSSAO (SSIL, the extension of VBAO to
+// indirect light by the same paper), at half the size of the g-buffer: one
+// thread for every 2x2 block, evaluated at the first pixel of it, the same as
+// ssao.comp. The result is the diffuse indirect light of the frame, which
+// ssil_blur.comp blurs and deferred_convert_color.frag multiplies by the albedo
+// of the g-buffer and adds to hdr.
+//
+// It runs after the lighting pass, which is its light source (the hdr image
+// has the direct light of the frame), so it's renderIndirect() and not
+// render() of GEVulkanSSAO. Every sample of a slice is the surface of an
+// object (with the same thickness as the one of ssao.comp) which reflects the
+// light of its pixel towards the receiver: the part of the hemisphere of the
+// receiver which it covers is the bitmask of utils/vbao.glsl, and the light
+// comes through the sectors which the samples closer to the receiver don't
+// cover yet (an object behind a thin one is lit, and several objects of the
+// same slice add up). This is Algorithm 1 of the paper.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+#include "utils/ssao_common.glsl"
+
+layout(set = 0, binding = 0) uniform sampler2D u_depth;
+layout(set = 0, binding = 1) uniform sampler2D u_normal;
+// Direct light of the frame, written by the lighting pass
+layout(set = 0, binding = 4) uniform sampler2D u_light;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D u_out;
+
+#include "../utils/decodeNormal.frag"
+#include "utils/vbao.glsl"
+
+// The samples of a slice are spread uniformly along the ray, from this part of
+// the radius (a sample at the pixel itself has no direction and is skipped)
+const float SAMPLE_OFFSET = 0.01;
+
+// View space normal of the sample at the pixel, same as solid_ssr.frag
+vec3 fetchNormal(ivec2 pixel)
+{
+    const vec4 data = texelFetch(u_normal,
+        clamp(pixel, pc.m_rect.xy, pc.m_rect.zw - 1), 0);
+    return normalize((u_camera.m_view_matrix *
+        vec4(DecodeNormal(data.xy), 0.0)).xyz);
+}
+
+// Direct light of the pixel (hdr): the sky is the color of the skybox, and it
+// has no position so it's never a sample
+vec3 fetchLight(ivec2 pixel)
+{
+    return texelFetch(u_light,
+        clamp(pixel, pc.m_rect.xy, pc.m_rect.zw - 1), 0).rgb;
+}
+
+// Adds the light which the sample at sample_pixel reflects towards the
+// receiver, if it's visible through the samples which are closer to it
+void addSample(vec3 pos, vec3 normal, vec3 view, float n,
+               float sampling_direction, float thickness, float normal_bias,
+               float samples_per_slice, ivec2 sample_pixel, int mip,
+               inout uint bitmask, inout vec3 lighting)
+{
+    float z;
+    const vec3 sample_pos = fetchSamplePosition(sample_pixel, mip, z);
+    // The sky is not a surface of the scene, it doesn't reflect anything
+    if (z >= 0.5 * SSAO_SKY_Z)
+        return;
+    const vec3 delta = sample_pos - pos;
+    if (!isOccluder(delta, normal, normal_bias))
+        return;
+    uint sample_mask = 0u;
+    processSample(delta, view, thickness, sampling_direction, n,
+        samples_per_slice, sample_mask);
+    if (sample_mask == 0u)
+        return;
+    // The sectors of the sample which the ones closer to the receiver don't
+    // cover yet: it's its part of the hemisphere (the same bitmask as the
+    // occlusion of ssao.comp), so a farther sample covers fewer of them, which
+    // is the falloff of its light
+    const float visible = float(bitCount(sample_mask & ~bitmask)) /
+        samples_per_slice;
+    bitmask |= sample_mask;
+    if (visible <= 0.0)
+        return;
+
+    // Direction of the light, from the sample to the receiver
+    const vec3 l = normalize(delta);
+    const float receiver_cos = max(dot(normal, l), 0.0);
+    // Light only leaves the sample from its front face
+    const float sample_cos = max(dot(fetchNormal(sample_pixel), -l), 0.0);
+    if (receiver_cos <= 0.0 || sample_cos <= 0.0)
+        return;
+    lighting += visible * (receiver_cos * sample_cos) *
+        fetchLight(sample_pixel);
+}
+
+// The estimator. Inputs: the pixel (full size coordinates, inside the rect of
+// the viewport), its view space position and normal, the depth chain, the
+// normal of the g-buffer and the light for the others. Output: the indirect
+// light, in the same units as the light (hdr)
+vec3 estimateIndirectLight(ivec2 pixel, vec3 pos, vec3 normal)
+{
+    const float radius = pc.m_params.x;
+    const float radius_px = radiusInPixels(radius, abs(pos.z));
+    if (radius_px < 1.0)
+        return vec3(0.0);
+
+    // The view vector, from the point to the camera
+    const vec3 view = normalize(-pos);
+    // Thickness of the object which a sample is assumed to belong to
+    const float thickness = THICKNESS_RATIO * radius;
+    const float normal_bias = NORMAL_BIAS_RATIO * radius;
+    const float slice_count = float(SLICE_COUNT);
+    const float samples_per_slice_side = float(SAMPLES_PER_SLICE_SIDE);
+    const float samples_per_slice = float(SECTOR_COUNT);
+    // The noise is designed for consecutive coordinates in the half size
+    // image, it rotates the slices and offsets the samples of every block
+    const vec2 noise = loadNoise(pixel >> 1);
+
+    vec3 lighting = vec3(0.0);
+    for (int slice = 0; slice < SLICE_COUNT; slice++)
+    {
+        const float slice_t = float(slice);
+        // The slices cover the half circle around the view direction
+        const float phi = (PI / slice_count) * (slice_t + noise.x);
+        const vec2 omega = vec2(cos(phi), sin(phi));
+        float n;
+        if (!vbaoSampleDirection(view, normal, omega, n))
+            continue;
+
+        uint bitmask = 0u;
+        for (int sample_i = 0; sample_i < SAMPLES_PER_SLICE_SIDE; sample_i++)
+        {
+            const float sample_t = float(sample_i);
+            // Every sample of the slice has its own offset, from the golden
+            // ratio sequence (the same as ssao.comp)
+            const float sample_noise = fract(noise.y + (slice_t +
+                sample_t * samples_per_slice_side) * 0.6180339887498948482);
+            // The step is uniform: the samples of a slice are spread all
+            // along its part of the radius, the same as the paper (the AO uses
+            // them closer to the pixel to sample the small details)
+            const float s = (sample_t + sample_noise) / samples_per_slice_side
+                + SAMPLE_OFFSET;
+            const float offset_px = s * radius_px;
+            // Farther samples fetch the next levels of the depth chain, so the
+            // distance between the texels which are fetched is about the same
+            const int mip = clamp(int(round(log2(max(offset_px, 1.0)) -
+                MIP_BIAS)), 0, MAX_MIP);
+            const ivec2 offset = ivec2(round(omega * offset_px));
+
+            // Both sides of the view vector, like the AO
+            addSample(pos, normal, view, n, -1.0, thickness, normal_bias,
+                samples_per_slice, pixel + offset, mip, bitmask, lighting);
+            addSample(pos, normal, view, n, 1.0, thickness, normal_bias,
+                samples_per_slice, pixel - offset, mip, bitmask, lighting);
+        }
+    }
+
+    // Only the slices divide it (Algorithm 1), the number of samples is
+    // compensated by their step size
+    return lighting / slice_count;
+}
+
+void main()
+{
+    const ivec4 half_rect = ssaoHalfRect(pc.m_rect);
+    const ivec2 block = half_rect.xy + ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(block, half_rect.zw)))
+        return;
+
+    ivec2 pixel = clamp(block * 2, pc.m_rect.xy, pc.m_rect.zw - 1);
+    vec3 lighting = vec3(0.0);
+    float z = texelFetch(u_depth, pixel, 0).x;
+    if (z < 0.5 * SSAO_SKY_Z)
+    {
+        initRays();
+        vec3 pos = viewRay(vec2(pixel) + 0.5) * z;
+        vec4 normal_data = texelFetch(u_normal, pixel, 0);
+        vec3 normal = normalize((u_camera.m_view_matrix *
+            vec4(DecodeNormal(normal_data.xy), 0.0)).xyz);
+        lighting = estimateIndirectLight(pixel, pos, normal);
+    }
+    imageStore(u_out, block, vec4(lighting, 1.0));
+}

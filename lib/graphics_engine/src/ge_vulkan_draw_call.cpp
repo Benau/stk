@@ -1453,6 +1453,8 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         uint32_t m_rt_shadow_type;
         float m_rt_shadow_scale;
         VkBool32 m_god_rays;
+        VkBool32 m_surfel_gi;
+        VkBool32 m_ssil;
     };
     Constants constants = {};
     constants.m_rt_shadow_scale = 1.0f;
@@ -1476,6 +1478,8 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
             constants.m_ssao = split->hasSSAO();
             constants.m_rt_shadow_scale = split->getRTShadowScale();
             constants.m_god_rays = split->hasGodRays();
+            constants.m_surfel_gi = split->hasSurfelGI();
+            constants.m_ssil = split->hasSSIL();
         }
     }
     constants.m_solid_reflection = getSolidReflection();
@@ -1503,7 +1507,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         constants.m_point_shadow_limit = getGEConfig()->m_point_shadow_limit;
     // The shadows which have no shadow map
     constants.m_rt_shadow_type = getRTShadowType();
-    std::array<VkSpecializationMapEntry, 16> specialization_entries = {};
+    std::array<VkSpecializationMapEntry, 18> specialization_entries = {};
     specialization_entries[0].constantID = 0;
     specialization_entries[0].offset = offsetof(Constants, m_ibl);
     specialization_entries[0].size = sizeof(VkBool32);
@@ -1554,6 +1558,12 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     specialization_entries[15].constantID = 15;
     specialization_entries[15].offset = offsetof(Constants, m_god_rays);
     specialization_entries[15].size = sizeof(VkBool32);
+    specialization_entries[16].constantID = 16;
+    specialization_entries[16].offset = offsetof(Constants, m_surfel_gi);
+    specialization_entries[16].size = sizeof(VkBool32);
+    specialization_entries[17].constantID = 17;
+    specialization_entries[17].offset = offsetof(Constants, m_ssil);
+    specialization_entries[17].size = sizeof(VkBool32);
     VkSpecializationInfo specialization_info = {};
     specialization_info.mapEntryCount = specialization_entries.size();
     specialization_info.pMapEntries = specialization_entries.data();
@@ -2646,17 +2656,26 @@ void GEVulkanDrawCall::renderDeferredConvertColor(GEVulkanDriver* vk,
         m_deferred_layouts[GVDFP_CONVERT_COLOR], 0, 1,
         vk->getRTTTexture()->getDescriptorSet(GVDFP_CONVERT_COLOR), 0, NULL);
     GEVulkanFBOTexture* rtt = vk->getRTTTexture();
-    if (rtt->isSplit() &&
-        static_cast<GEVulkanDeferredFBOSplit*>(rtt)->hasBloom())
+    // The push constants of deferred_convert_color.frag, the rects of this
+    // draw call (empty if it has no valid bloom) and the debug views which are
+    // read every frame (so the settings can be changed any time)
+    struct ConvertColorConstants
     {
-        // Empty if this draw call has no valid bloom (see
-        // deferred_convert_color.frag)
-        GEVulkanBloomRects rects = {};
-        if (bloom_rects)
-            rects = *bloom_rects;
-        vkCmdPushConstants(cmd, m_deferred_layouts[GVDFP_CONVERT_COLOR],
-            VK_SHADER_STAGE_ALL_GRAPHICS, 0, sizeof(rects), &rects);
+        GEVulkanBloomRects m_rects;
+        // Not VkBool32 as the one of the specialization constants: it's not
+        // padded after the rects, like the ints of the shader
+        int32_t m_ssao_debug;
+        int32_t m_gi_debug;
+    } constants = {};
+    if (rtt->isSplit() &&
+        static_cast<GEVulkanDeferredFBOSplit*>(rtt)->hasBloom() && bloom_rects)
+    {
+        constants.m_rects = *bloom_rects;
     }
+    constants.m_ssao_debug = getGEConfig()->m_ssao_debug ? 1 : 0;
+    constants.m_gi_debug = getGEConfig()->m_gi_debug ? 1 : 0;
+    vkCmdPushConstants(cmd, m_deferred_layouts[GVDFP_CONVERT_COLOR],
+        VK_SHADER_STAGE_ALL_GRAPHICS, 0, sizeof(constants), &constants);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }   // renderDeferredConvertColor
 

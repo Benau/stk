@@ -214,6 +214,7 @@ IrrDriver::IrrDriver()
     m_renderer            = NULL;
     m_wind                = new Wind();
     m_ssaoviz = false;
+    m_giviz = false;
     m_shadowviz = false;
     m_boundingboxesviz = false;
     m_last_light_bucket_distance = 0;
@@ -2579,13 +2580,38 @@ GLuint IrrDriver::getDepthStencilTexture()
 }   // getDepthStencilTexture
 
 // --------------------------------------------------------------------------------------------
+void IrrDriver::toggleSSAOViz()
+{
+    m_ssaoviz = !m_ssaoviz;
+#ifndef SERVER_ONLY
+    // The Vulkan renderer shows it in its deferred convert color pass, the
+    // OpenGL one copies the half size image to the screen
+    GE::getGEConfig()->m_ssao_debug = m_ssaoviz;
+#endif
+}   // toggleSSAOViz
+
+// --------------------------------------------------------------------------------------------
+void IrrDriver::toggleGIDebug()
+{
+    m_giviz = !m_giviz;
+#ifndef SERVER_ONLY
+    // Only the Vulkan renderer has the surfel global illumination, the debug
+    // view of the tonemap pass shows its image
+    GE::getGEConfig()->m_gi_debug = m_giviz;
+#endif
+}   // toggleGIDebug
+
+// --------------------------------------------------------------------------------------------
 void IrrDriver::resetDebugModes()
 {
     m_ssaoviz = false;
+    m_giviz = false;
     m_shadowviz = false;
     m_lightviz = false;
     m_boundingboxesviz = false;
 #ifndef SERVER_ONLY
+    GE::getGEConfig()->m_ssao_debug = false;
+    GE::getGEConfig()->m_gi_debug = false;
     SP::sp_debug_view = false;
 #endif
 }

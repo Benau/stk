@@ -83,7 +83,7 @@ void main()
         vec3 world_position = (u_camera.m_inverse_view_matrix *
             vec4(xpos, 1.0)).xyz;
         visibility = rtShadowLayerVisibility(layer, world_position,
-            world_normal, xpos.z);
+            world_normal, length(xpos));
     }
     // Every layer has the depth, so a tap of the filter of the lighting pass
     // is one fetch

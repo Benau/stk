@@ -96,6 +96,7 @@ enum DebugMenuCommand
     DEBUG_GRAPHICS_RELOAD_TEXTURES,
     DEBUG_GRAPHICS_RESET,
     DEBUG_GRAPHICS_SSAO_VIZ,
+    DEBUG_GRAPHICS_GI_VIZ,
     DEBUG_GRAPHICS_SHADOW_VIZ,
     DEBUG_GRAPHICS_BOUNDING_BOXES_VIZ,
     DEBUG_GRAPHICS_BULLET_1,
@@ -361,6 +362,13 @@ bool handleContextMenuAction(s32 cmd_id)
 
         irr_driver->resetDebugModes();
         irr_driver->toggleSSAOViz();
+        break;
+    case DEBUG_GRAPHICS_GI_VIZ:
+        if (physics)
+            physics->setDebugMode(IrrDebugDrawer::DM_NONE);
+
+        irr_driver->resetDebugModes();
+        irr_driver->toggleGIDebug();
         break;
     case DEBUG_GRAPHICS_SHADOW_VIZ:
         if (physics)
@@ -1292,6 +1300,7 @@ bool onEvent(const SEvent &event)
             sub->addItem(L"Reload textures", DEBUG_GRAPHICS_RELOAD_TEXTURES);
             sub->addSeparator();
             sub->addItem(L"SSAO viz", DEBUG_GRAPHICS_SSAO_VIZ);
+            sub->addItem(L"GI viz", DEBUG_GRAPHICS_GI_VIZ);
             sub->addItem(L"Shadow viz", DEBUG_GRAPHICS_SHADOW_VIZ);
             sub->addItem(L"Bounding Boxes viz", DEBUG_GRAPHICS_BOUNDING_BOXES_VIZ);
             sub->addItem(L"Physics debug", DEBUG_GRAPHICS_BULLET_1);

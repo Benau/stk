@@ -59,10 +59,10 @@ bool rtShadowLightReaches(int light, vec3 world_position, vec3 world_normal,
     return true;
 }
 
-// view_depth is the one of the position in view space. Layers which are not
-// active are never asked
+// camera_distance is the distance of the position from the camera. Layers
+// which are not active are never asked
 float rtShadowLayerVisibility(int layer, vec3 world_position,
-                              vec3 world_normal, float view_depth)
+                              vec3 world_normal, float camera_distance)
 {
     if (layer == 0)
     {
@@ -71,12 +71,12 @@ float rtShadowLayerVisibility(int layer, vec3 world_position,
         if (dot(world_normal, sun_direction) <= 0.0)
             return 1.0;
         return getSunShadow(world_position, world_normal, sun_direction,
-            view_depth);
+            camera_distance);
     }
     vec3 light_position;
     if (!rtShadowLightReaches(layer - 1, world_position, world_normal,
         light_position))
         return 1.0;
     return getLightShadow(world_position, world_normal, light_position,
-        view_depth);
+        camera_distance);
 }

@@ -154,11 +154,24 @@ void getHitMaterial(RTGeometry geometry, int base, vec2 uv, vec2 uv_two,
     }
 }
 
-// The lit (hdr) color of the closest hit, the values of the hit are
-// parameters because a ray query can't be one
-vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
-              mat3 world_to_object, mat3 object_to_world, vec3 ray_origin,
-              vec3 ray_direction)
+// The material and the geometry of the closest hit, without its lighting: the
+// shading of the reflection (shadeHit) and the path of the surfels
+// (surfel_gi_trace.comp) need them, the values of the hit are parameters
+// because a ray query can't be one
+struct RTHitShading
+{
+    // Albedo (hue, vertex color and the texture), x: gloss, y: metallic, z:
+    // emissive of pbr
+    vec3 m_diffuse_color;
+    vec3 m_pbr;
+    vec3 m_normal;
+    vec3 m_position;
+};
+
+RTHitShading getHitShading(uint geometry_index, uint primitive, vec2 b,
+                           float hit_distance, mat3 world_to_object,
+                           mat3 object_to_world, vec3 ray_origin,
+                           vec3 ray_direction)
 {
     vec3 bary = vec3(1.0 - b.x - b.y, b.x, b.y);
 
@@ -205,9 +218,25 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
     // Two sided
     if (dot(normal, eyedir) < 0.0)
         normal = -normal;
-    float perceptual_roughness = 1.0 - pbr.x;
 
-    vec3 world_position = ray_origin + ray_direction * hit_distance;
+    RTHitShading shading;
+    shading.m_diffuse_color = diffuse_color;
+    shading.m_pbr = pbr;
+    shading.m_normal = normal;
+    shading.m_position = ray_origin + ray_direction * hit_distance;
+    return shading;
+}
+
+// The lit (hdr) color of the closest hit, ray_direction is the direction of the
+// ray which hit it
+vec3 shadeHit(RTHitShading shading, vec3 ray_direction)
+{
+    vec3 normal = shading.m_normal;
+    vec3 diffuse_color = shading.m_diffuse_color;
+    vec3 pbr = shading.m_pbr;
+    float perceptual_roughness = 1.0 - pbr.x;
+    vec3 eyedir = -ray_direction;
+    vec3 world_position = shading.m_position;
     vec3 sun_direction = normalize(u_global_light.m_sun_direction);
     float shadow = 1.0;
     // Same as the lighting pass: the sun has a shadow if it has a shadow map or
@@ -217,10 +246,10 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
         (u_rt_shadow_type & GST_SUN) != 0;
     if (sun_shadow && dot(normal, sun_direction) > 0.0)
     {
-        float view_depth =
-            (u_camera.m_view_matrix * vec4(world_position, 1.0)).z;
+        float camera_distance =
+            length((u_camera.m_view_matrix * vec4(world_position, 1.0)).xyz);
         shadow = getSunShadow(world_position, normal, sun_direction,
-            view_depth);
+            camera_distance);
     }
 
     // Same as handlePBRDeferred, in world space (no sun disk, no ssao)
@@ -243,11 +272,16 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
     return hdr;
 }
 
-// Traces a reflected ray, returns false if it has no hit (the caller decides
-// what a miss is, the environment or the lit color which is already there),
-// hdr is the lit color of the closest hit otherwise. direction is normalized
-bool traceReflection(vec3 origin, vec3 direction, out vec3 hdr)
+// Traces a ray and returns the material of its closest hit (getHitShading),
+// without the lighting of it: the path of the surfels needs the albedo, the pbr
+// normal of every bounce (surfel_gi_trace.comp). Returns false if the ray hits
+// nothing, shading is not valid then. direction is normalized
+bool traceHitShading(vec3 origin, vec3 direction, out RTHitShading shading)
 {
+    shading.m_diffuse_color = vec3(0.0);
+    shading.m_pbr = vec3(0.0);
+    shading.m_normal = vec3(0.0, 1.0, 0.0);
+    shading.m_position = origin;
     rayQueryEXT ray_query;
     rayQueryInitializeEXT(ray_query, u_tlas,
         gl_RayFlagsCullBackFacingTrianglesEXT, 0xFF, origin, RT_RAY_MIN,
@@ -255,19 +289,30 @@ bool traceReflection(vec3 origin, vec3 direction, out vec3 hdr)
     RT_PROCEED(ray_query)
     if (rayQueryGetIntersectionTypeEXT(ray_query, true) ==
         gl_RayQueryCommittedIntersectionNoneEXT)
-    {
-        hdr = vec3(0.0);
         return false;
-    }
-    uint geometry_index =
+    shading = getHitShading(
         uint(rayQueryGetIntersectionInstanceCustomIndexEXT(ray_query, true)) +
-        uint(rayQueryGetIntersectionGeometryIndexEXT(ray_query, true));
-    hdr = shadeHit(geometry_index,
+        uint(rayQueryGetIntersectionGeometryIndexEXT(ray_query, true)),
         uint(rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true)),
         rayQueryGetIntersectionBarycentricsEXT(ray_query, true),
         rayQueryGetIntersectionTEXT(ray_query, true),
         mat3(rayQueryGetIntersectionWorldToObjectEXT(ray_query, true)),
         mat3(rayQueryGetIntersectionObjectToWorldEXT(ray_query, true)),
         origin, direction);
+    return true;
+}
+
+// Traces a reflected ray, returns false if it has no hit (the caller decides
+// what a miss is, the environment or the lit color which is already there),
+// hdr is the lit color of the closest hit otherwise. direction is normalized
+bool traceReflection(vec3 origin, vec3 direction, out vec3 hdr)
+{
+    RTHitShading shading;
+    if (!traceHitShading(origin, direction, shading))
+    {
+        hdr = vec3(0.0);
+        return false;
+    }
+    hdr = shadeHit(shading, direction);
     return true;
 }

@@ -1,0 +1,131 @@
+// The irradiance sharing of GEVulkanSurfelGI (the irradiance sharing of GIBS,
+// which SurfelPlus and W298 SurfelGI both keep): the mean of a surfel is
+// merged with the weighted mean of the radiance of the surfels around it, the
+// same weights as the field of the pixels and of the hits of the paths
+// (surfel_gi_generate.comp and surfelGatherIrradiance). A surfel whose rays
+// are few and noisy takes the light of its neighbours quickly, so the areas
+// the camera just moved into have the light of their surroundings at once
+// instead of averaging the noise of their own few rays for a second.
+//
+// The window of the merge follows the noise of the mean of the surfel
+// (surfelMeanNoise): SURFEL_SHARING_WINDOW_NOISY for a surfel which is not
+// converged, which falls to SURFEL_SHARING_WINDOW_CONVERGED when its mean
+// converges. The merge is after the multiscale mean estimator and it only
+// writes its mean: the variance, the short mean, the catch up and the count
+// are the ones of the rays of the surfel, so the sharing can't make the
+// estimator trust a value which is not from its own rays (the sharing of the
+// reference is before the estimator, which is what made it change the noise of
+// the mean of the surfels which were already converged).
+//
+// The radiance of the neighbours is SurfelLight.m_radiance, which
+// surfel_gi_update.comp wrote at the start of the frame: this pass doesn't
+// write it, so the merge of every surfel of a cell doesn't depend on the order
+// of the threads.
+//
+// The list of a cell near the camera holds hundreds of surfels while a few of
+// them reach the surfel (the radius of the sharing is twice their radius), so
+// the walk starts at a random entry and stops after SURFEL_SHARE_VALID
+// contributions: the neighbours of a surfel stay the same smooth field as the
+// one of the pixels, without the 32 visibility fetches of the whole list which
+// cost the mass of the pass. The depth moments of the neighbours are not
+// sampled: the window of the merge is small, and the surfels which are on the
+// backside of the surface are already rejected by the normals.
+//
+// One thread for every surfel which has rays of the frame (u_active): the
+// sleeping ones and the ones the budget of the rays left out keep their mean
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "utils/surfel_gi.glsl"
+#include "utils/constants_utils.glsl"
+
+void main()
+{
+    const uint slot = gl_WorkGroupID.x * gl_WorkGroupSize.x +
+        gl_LocalInvocationIndex;
+    if (slot >= u_counter.m_active)
+        return;
+    const uint index = u_active[slot];
+    if (index >= SURFEL_MAX_COUNT)
+        return;
+    const Surfel surfel = u_surfels[index];
+    const ivec4 cell = surfelCell(surfel.m_position);
+    if (!surfelCellValid(cell))
+        return;
+    const CellInfo cell_info = u_cells[surfelCellIndex(cell)];
+    if (cell_info.m_offset >= SURFEL_CELL_SURFEL_COUNT)
+        return;
+    const uint count = min(cell_info.m_count, SURFEL_CELL_LIST_MAX);
+    if (count == 0u)
+        return;
+
+    // The mean of the samples of this frame is already in m_msme (this pass is
+    // after surfel_gi_integrate.comp): the merge starts from it, so a surfel
+    // which has no neighbour which reaches it keeps its mean
+    vec4 sum = vec4(surfel.m_msme.m_mean, 1.0);
+    const uint walk = min(count, SURFEL_SHARE_WALK);
+    const uint start = min(uint(surfelRand(index, pc.m_frame) * float(count)),
+        count - 1u);
+    uint valid = 0u;
+    for (uint i = 0u; i < walk; i++)
+    {
+        const uint other_index =
+            u_cell_surfels[cell_info.m_offset + (start + i) % count];
+        if (other_index >= SURFEL_MAX_COUNT || other_index == index)
+            continue;
+        // The position and the radius first: most of the surfels of the cell
+        // don't reach the surfel, so the rest of the compact surfel is only
+        // read by the ones which do
+        const vec4 position_radius =
+            u_surfel_lights[other_index].m_position_radius;
+        const vec3 bias = position_radius.xyz - surfel.m_position;
+        const float dist = length(bias);
+        // The radius of the sharing is twice the radius of the neighbour: its
+        // light reaches the surfaces past the pixels it covers
+        const float reach = position_radius.w * 2.0;
+        if (dist >= reach)
+            continue;
+        const SurfelLight other = u_surfel_lights[other_index];
+        const vec3 other_normal = other.m_normal_frame.xyz;
+        // The surfels which are on the backside of the surface are not shared
+        const float cosine_theta = dot(bias, surfel.m_normal) / max(dist,
+            1.0e-9);
+        if (cosine_theta < -0.2 ||
+            dot(-bias, other_normal) / max(dist, 1.0e-9) < -0.2)
+            continue;
+        const float dot_n = dot(surfel.m_normal, other_normal);
+        float contribution;
+        if (dot_n > 0.0)
+        {
+            // The surfel is in front of the other one: the same weight as the
+            // field of the pixels (a new surfel is faded in)
+            contribution = clamp(dot_n, 0.0, 1.0) *
+                clamp(1.0 - dist / reach, 0.0, 1.0);
+            contribution = smoothstep(0.0, 1.0, contribution);
+        }
+        else
+        {
+            // It lights the surfel from the side
+            contribution = max(cosine_theta, 0.0) * pow(1.0 - dist / reach,
+                2.0);
+        }
+        contribution *= smoothstep(0.0, 10.0, other.m_normal_frame.w);
+        if (contribution > 0.0)
+        {
+            sum += vec4(other.m_radiance, 1.0) * contribution;
+            if (++valid >= SURFEL_SHARE_VALID)
+                break;
+        }
+    }
+    if (sum.w <= 1.0)
+        return;
+
+    // The window of the merge falls with the noise of the mean of the surfel:
+    // a surfel which is not converged takes the light of its neighbours
+    // quickly, and a converged one only smooths its mean with the small window
+    const float noise = surfelMeanNoise(surfel.m_msme);
+    const float window_ = mix(SURFEL_SHARING_WINDOW_CONVERGED,
+        SURFEL_SHARING_WINDOW_NOISY, clamp((noise - SURFEL_NOISE_LOW) /
+        (SURFEL_NOISE_HIGH - SURFEL_NOISE_LOW), 0.0, 1.0));
+    u_surfels[index].m_msme.m_mean = mix(surfel.m_msme.m_mean,
+        sum.xyz / sum.w, window_);
+}

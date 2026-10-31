@@ -1,0 +1,48 @@
+// The offsets of the lists of surfels of the cells of GEVulkanSurfelGI: the
+// counts of surfel_gi_update.comp are turned into ranges of the list, which
+// are the positions of the surfels of every cell of the frame. The counts are
+// cleared, so surfel_gi_cell_to_surfel.comp can count again inside the range.
+// The number of rays of the frame (which surfel_gi_update.comp counted) is
+// written as the groups of the indirect dispatch of the tracing too, and the
+// number of surfels which have rays as the groups of the cooperative
+// integration (one group of 32 threads per surfel, 256 per row)
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "utils/surfel_gi.glsl"
+
+void main()
+{
+    const uint index = gl_GlobalInvocationID.x;
+    // The tracing is dispatched with the number of rays of the frame: the whole
+    // budget is a million threads, of which only the ones below the number of
+    // rays have a ray (the others only read their id and return)
+    if (index == 0u)
+    {
+        u_dispatch[0] = max(1u,
+            (min(u_counter.m_rays, SURFEL_RAY_BUDGET) + 63u) / 64u);
+        u_dispatch[1] = 1u;
+        u_dispatch[2] = 1u;
+        // The integration is dispatched with its group for every surfel which
+        // has rays: the ID of a group is its x + y * 256, which is the index of
+        // the surfel in u_active
+        u_dispatch[3] = clamp(u_counter.m_active, 1u, 256u);
+        u_dispatch[4] = max(1u, (u_counter.m_active + 255u) / 256u);
+        u_dispatch[5] = 1u;
+        // The sharing is one thread for every surfel which has rays (the same
+        // u_active list)
+        u_dispatch[6] = max(1u, (u_counter.m_active + 63u) / 64u);
+        u_dispatch[7] = 1u;
+        u_dispatch[8] = 1u;
+    }
+    if (index >= SURFEL_CELL_COUNT)
+        return;
+    const uint count = u_cells[index].m_count;
+    if (count == 0u)
+        return;
+    const uint offset = atomicAdd(u_counter.m_cell_surfels, count);
+    // A cell which doesn't fit is not used (the list is large enough for every
+    // surfel to be in all the 27 cells)
+    u_cells[index].m_offset = offset + count <= SURFEL_CELL_SURFEL_COUNT ?
+        offset : SURFEL_CELL_SURFEL_COUNT;
+    u_cells[index].m_count = 0u;
+}

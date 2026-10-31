@@ -37,7 +37,9 @@ GEVulkanSkyBoxRenderer::GEVulkanSkyBoxRenderer()
     texture_layout_binding[0].descriptorCount = 1;
     texture_layout_binding[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     texture_layout_binding[0].pImmutableSamplers = NULL;
-    texture_layout_binding[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // The surfel GI traces the sky in a compute shader
+    texture_layout_binding[0].stageFlags =
+        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
     texture_layout_binding[1] = texture_layout_binding[0];
     texture_layout_binding[1].binding = 1;
     texture_layout_binding[2] = texture_layout_binding[0];

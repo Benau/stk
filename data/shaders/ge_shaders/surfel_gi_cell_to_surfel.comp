@@ -1,0 +1,31 @@
+// The ids of the surfels of every cell of GEVulkanSurfelGI: a surfel is in the
+// list of the 27 cells it intersects (see surfelIntersectsCell), so the
+// irradiance of a pixel can be gathered from the cell of its world position
+// alone. The offset of a cell was computed by surfel_gi_cell_info.comp, the
+// count is the position inside the range (it's cleared after the offsets are
+// computed)
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "utils/surfel_gi.glsl"
+
+void main()
+{
+    const uint index = gl_GlobalInvocationID.x;
+    if (index >= SURFEL_MAX_COUNT)
+        return;
+    const Surfel surfel = u_surfels[index];
+    if ((surfel.m_status & SURFEL_STATUS_ALIVE) == 0u)
+        return;
+    const ivec4 cell = surfelCell(surfel.m_position);
+    for (int i = 0; i < 27; i++)
+    {
+        const ivec4 neighbour = cell + ivec4(SURFEL_NEIGHBORS[i], 0);
+        if (!surfelIntersectsCell(surfel, neighbour))
+            continue;
+        const uint flat_index = surfelCellIndex(neighbour);
+        const uint offset = u_cells[flat_index].m_offset;
+        const uint at = offset + atomicAdd(u_cells[flat_index].m_count, 1u);
+        if (at < SURFEL_CELL_SURFEL_COUNT)
+            u_cell_surfels[at] = index;
+    }
+}

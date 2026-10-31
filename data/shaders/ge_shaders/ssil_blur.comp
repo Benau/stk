@@ -1,0 +1,59 @@
+// One direction (pc.m_misc.yz) of the blur of the half size indirect light of
+// GEVulkanSSAO (ssil.comp), the same as ssao_blur.comp: it doesn't blur over
+// the edges of the depth and never reads outside of the rect of the viewport.
+// u_depth is the depth chain, the depth of a pixel is the one of the first
+// pixel of its 2x2 block (where the light was evaluated).
+//
+// It's wider than the blur of the occlusion (the light of a pixel comes from
+// fewer samples than its occlusion), pc.m_params.w is the scale of the blur
+// relative to the reference height, like the other blurs
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+#include "utils/ssao_common.glsl"
+
+layout(set = 0, binding = 0) uniform sampler2D u_ssil;
+layout(set = 0, binding = 1) uniform sampler2D u_depth;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D u_out;
+
+// More taps would be a lot of fetches, the blur is a bit narrower than it
+// should be for a height of more than 3 times the reference
+const int MAX_TAP_RADIUS = 8;
+// Lower resolutions can't have less than this (a tap of 1 texel is needed)
+const float MIN_SIGMA = 0.5;
+// Wider than the sigma of ssao_blur.comp, which is pc.m_params.w * 1.75
+const float SIGMA_SCALE = 2.5;
+
+float blockDepth(ivec2 block)
+{
+    ivec2 pixel = clamp(block * 2, pc.m_rect.xy, pc.m_rect.zw - 1);
+    return texelFetch(u_depth, pixel, 0).x;
+}
+
+void main()
+{
+    const ivec4 half_rect = ssaoHalfRect(pc.m_rect);
+    const ivec2 block = half_rect.xy + ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(block, half_rect.zw)))
+        return;
+
+    // Scale the Gaussian sigma, then sample out to 2 sigma on each side (taps
+    // are spaced one half-resolution texel apart, so none are skipped)
+    const float sigma = max(pc.m_params.w * SIGMA_SCALE, MIN_SIGMA);
+    const int tap_radius = min(int(ceil(2.0 * sigma)), MAX_TAP_RADIUS);
+    const float exponent_scale = -0.5 / (sigma * sigma);
+    const ivec2 direction = pc.m_misc.yz;
+    float center_z = blockDepth(block);
+    vec3 sum = vec3(0.0);
+    float weight_sum = 0.0;
+    for (int i = -tap_radius; i <= tap_radius; i++)
+    {
+        ivec2 q = clamp(block + direction * i, half_rect.xy,
+            half_rect.zw - 1);
+        float w = exp(float(i * i) * exponent_scale) *
+            ssaoDepthWeight(center_z, blockDepth(q));
+        sum += w * texelFetch(u_ssil, q, 0).rgb;
+        weight_sum += w;
+    }
+    // The center always has weight
+    imageStore(u_out, block, vec4(sum / weight_sum, 1.0));
+}

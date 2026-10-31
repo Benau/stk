@@ -1,0 +1,226 @@
+// The integration of the rays of the surfels of GEVulkanSurfelGI into their
+// mean, into their 6x6 irradiance map (which guides their directions) and into
+// their 6x6 depth moments (their visibility, see surfelVisibility):
+//
+// One group of 32 threads for every surfel which has rays (the list of
+// surfel_gi_update.comp, one surfel per group). The group loads the samples of
+// the rays of the surfel (radiance * weight, the irradiance over PI of the ray,
+// clamped to the light of the sky, see surfelFireflyClamp) into its shared
+// memory, and the first thread merges them with the multiscale mean estimator
+// of Ray Tracing Gems chapter 25 (surfelMSME) in packets of 4: a packet is a
+// sample of the estimator, small enough to follow a change of the lighting and
+// large enough to damp the outliers. The mean doesn't flicker, it catches up
+// when the lighting of the surfel changes (the inconsistency of its short
+// mean), and its variance clamps a sample which is several standard deviations
+// away, so a firefly has no effect. A surfel whose surface turned under it in
+// this frame (the wheels of a kart, see surfel_gi_update.comp) merges the
+// packets with a large window, so its short mean is the light of the new
+// surface at once and the long mean catches up with it.
+//
+// The lanes update the map and the moments too, one ray per lane at a time:
+// every ray moves the luminance of its radiance a fifth of the way in the texel
+// of its direction, so the bright directions of the surroundings of the surfel
+// have a larger value and the rays of the next frame are guided to them (the
+// ray guiding of SurfelPlus), and it moves the distance of its first hit the
+// same way in the moments of the texel (the visibility of the surfel, DDGI and
+// W298 SurfelGI). The tile of a surfel which was never integrated (or which
+// turned) is cleared, and the values of its rays are written to it directly:
+// the map of the surfel which had its slot doesn't stay behind, and the first
+// frames of the map are not the noise of a blend of two surfels.
+//
+// The sums of the 6 rows of the map are stored in SurfelLight (the first level
+// of the walk of surfelSampleDirection), and the sum of the texels
+// (m_irradiance) tells if the map has a value, with 1 in its lowest bit when
+// every texel was hit: the rays are only guided by a map the rays filled
+// (surfel_gi_update.comp clears m_irradiance when the map is cleared). The
+// range of the depth moments is stored in SurfelLight too: the visibility of
+// the surfel clamps the distances of its points to it
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+#include "utils/surfel_gi.glsl"
+#include "utils/constants_utils.glsl"
+// The skytop color, for the clamp of the samples (surfelFireflyClamp)
+#include "utils/global_light_data.glsl"
+
+// The irradiance over PI of every ray: xyz its sample and w the texel of its
+// direction in the map
+shared vec4 g_samples[32];
+// The distance of the first hit of every ray (clamped to the range of the
+// moments)
+shared float g_depths[32];
+// The rays of the group, the blend of their short window, and the sums of the
+// rows of the map with 1 in the highest bit of the sum of the whole map when
+// every texel was hit
+shared uint g_count;
+shared float g_short_blend;
+shared uint g_row_sums[6];
+// 1 while every texel of the map was hit (see surfelSampleDirection), ANDed
+// with an atomic because the 6 lanes which read the rows write it
+shared uint g_full;
+
+void main()
+{
+    const uint group = gl_WorkGroupID.x + gl_WorkGroupID.y * 256u;
+    const uint lane = gl_LocalInvocationIndex;
+    // The surfel of the group (the groups are dispatched with the number of
+    // surfels which have rays, see surfel_gi_cell_info.comp): a group which has
+    // no surfel returns, but every early return of this shader is the same for
+    // the whole group, so the barriers are not divergent
+    if (group >= u_counter.m_active)
+        return;
+    const uint index = u_active[group];
+    if (index >= SURFEL_MAX_COUNT)
+        return;
+    const Surfel surfel = u_surfels[index];
+    if ((surfel.m_status & SURFEL_STATUS_ALIVE) == 0u ||
+        surfel.m_ray_count == 0u)
+        return;
+
+    // The sample of a ray, one lane per ray (a surfel has SURFEL_WARMUP_RAYS
+    // rays at most)
+    const float firefly_clamp =
+        surfelFireflyClamp(u_global_light.m_skytop_color);
+    if (lane < surfel.m_ray_count)
+    {
+        const vec4 result = u_ray_results[surfel.m_ray_offset + lane];
+        const vec2 data = u_ray_data[surfel.m_ray_offset + lane];
+        vec3 sample_value = result.xyz * data.x;
+        const float luminance = dot(sample_value, SURFEL_LUMINANCE);
+        if (luminance > firefly_clamp)
+            sample_value *= firefly_clamp / max(luminance, 1.0e-12);
+        const ivec2 texel = surfelSquareTexel(unpackHalf2x16(
+            floatBitsToUint(result.w)));
+        g_samples[lane] = vec4(sample_value, float(texel.x + texel.y * 6));
+        g_depths[lane] = min(data.y, SURFEL_DEPTH_RANGE * surfel.m_radius);
+    }
+    if (lane == 0u)
+    {
+        g_count = surfel.m_ray_count;
+        g_full = 1u;
+        // The surface turned under the surfel in this frame: its short mean is
+        // still the light of the old surface, so the samples of the frame move
+        // it a lot at once (the update pass widened the estimator, so the mean
+        // follows). A young surfel has no history worth keeping (its mean is
+        // the seed of the generate pass), so its samples use a larger window
+        // too
+        g_short_blend = (surfel.m_status & SURFEL_STATUS_TURNED) != 0u ? 0.5 :
+            (surfel.m_frame < SURFEL_WARMUP_FRAMES ? 0.25 : 0.08);
+    }
+    barrier();
+
+    // A surfel which was never integrated (the generate pass spawned it, or it
+    // didn't get rays since), or whose surface turned under it, has the map of
+    // the surfel which had its slot, or the map of the old surface: it's
+    // cleared, so its map can't guide the rays of the next frame, and the
+    // directions which its rays don't hit stay 0 until they're hit (a map
+    // which is not full doesn't guide, see surfelSampleDirection)
+    const bool new_surfel =
+        uintBitsToFloat(surfel.m_irradiance) <= 0.0 ||
+        (surfel.m_status & SURFEL_STATUS_TURNED) != 0u;
+    const ivec2 map_base = surfelIrradianceBase(index);
+    if (new_surfel && lane < 6u)
+    {
+        // The 6x6 tile of the surfel, a row per thread
+        for (uint x = 0u; x < 6u; x++)
+        {
+            imageStore(u_surfel_irradiance_map, map_base + ivec2(x, lane),
+                vec4(0.0));
+            imageStore(u_surfel_depth_map, map_base + ivec2(x, lane),
+                vec4(0.0));
+        }
+    }
+    barrier();
+
+    // The packets of 4 samples of the mean, merged by the first thread of the
+    // group
+    if (lane == 0u)
+    {
+        const uint count = g_count;
+        MSMEData msme = surfel.m_msme;
+        uint merged = 0u;
+        while (merged < count)
+        {
+            const uint packet = min(4u, count - merged);
+            vec3 sum = vec3(0.0);
+            for (uint i = 0u; i < packet; i++)
+                sum += g_samples[merged + i].xyz;
+            surfelMSME(sum / float(packet), msme, g_short_blend, 0.0);
+            merged += packet;
+        }
+        u_surfels[index].m_msme = msme;
+        // The range of the distances of the moments of the surfel, which the
+        // visibility of the surfel clamps the distances of its points to
+        u_surfel_lights[index].m_depth_range = SURFEL_DEPTH_RANGE *
+            surfel.m_radius;
+    }
+
+    // The map and the moments of the rays, one lane per ray: a texel which
+    // several rays hit is updated by each of them (the values of a frame are
+    // small compared to the mean of the texel). A texel which has no value yet
+    // is written directly: the tile of a new surfel is empty, and a blend from
+    // 0 would take several frames to reach the light of the direction. The
+    // values of the map are clamped to a large value (the map is r16f, and a
+    // value above its range is infinite: it would guide every ray of the surfel
+    // to its texel)
+    for (uint i = lane; i < g_count; i += 32u)
+    {
+        const uint texel_id = uint(g_samples[i].w);
+        const ivec2 texel = map_base + ivec2(int(texel_id % 6u),
+            int(texel_id / 6u));
+        const float luminance = clamp(dot(g_samples[i].xyz, SURFEL_LUMINANCE),
+            0.0, 6.0e4);
+        imageStore(u_surfel_irradiance_map, texel, vec4(new_surfel ? luminance :
+            mix(imageLoad(u_surfel_irradiance_map, texel).r, luminance, 0.2),
+            0.0, 0.0, 0.0));
+        const float depth = g_depths[i];
+        imageStore(u_surfel_depth_map, texel, vec4(new_surfel ?
+            vec2(depth, depth * depth) : mix(imageLoad(u_surfel_depth_map,
+            texel).rg, vec2(depth, depth * depth), 0.1), 0.0, 0.0));
+    }
+    barrier();
+
+    // The sums of the rows of the map (the first level of the walk of
+    // surfelSampleDirection: 6 half floats, 2 per uint) and whether every texel
+    // of the map was hit (a map which the rays didn't fill doesn't guide them).
+    // The sum is clamped to the range of a half float: a row of the texels of
+    // the clamp of the map (6e4) would pack as infinity, and the walk of the
+    // rows of the next frame would have no values
+    if (lane < 6u)
+    {
+        float row_sum = 0.0;
+        bool row_full = true;
+        for (uint x = 0u; x < 6u; x++)
+        {
+            const float texel = imageLoad(u_surfel_irradiance_map,
+                map_base + ivec2(x, lane)).r;
+            row_sum += texel;
+            row_full = row_full && texel > 0.0;
+        }
+        g_row_sums[lane] = packHalf2x16(vec2(min(row_sum, 6.0e4), 0.0));
+        atomicAnd(g_full, row_full ? 1u : 0u);
+    }
+    barrier();
+    if (lane == 0u)
+    {
+        u_surfel_lights[index].m_row_sums_01 = g_row_sums[0] |
+            (g_row_sums[1] << 16u);
+        u_surfel_lights[index].m_row_sums_23 = g_row_sums[2] |
+            (g_row_sums[3] << 16u);
+        u_surfel_lights[index].m_row_sums_45 = g_row_sums[4] |
+            (g_row_sums[5] << 16u);
+        // The visibility of the sun which this frame's first ray traced (see
+        // surfel_gi_trace.comp), the field of the next frames takes it
+        u_surfel_lights[index].m_sun = surfel.m_sun;
+        float rows_sum = 0.0;
+        for (uint y = 0u; y < 6u; y++)
+        {
+            const vec2 row = unpackHalf2x16(g_row_sums[y]);
+            rows_sum += row.x + row.y;
+        }
+        // Not the whole struct: the other passes write the other fields. The
+        // lowest bit of the mantissa of the sum is the flag of a full map, it
+        // doesn't change the value meaningfully
+        u_surfels[index].m_irradiance =
+            (floatBitsToUint(rows_sum) & 0xFFFFFFFEu) | min(g_full, 1u);
+    }
+}

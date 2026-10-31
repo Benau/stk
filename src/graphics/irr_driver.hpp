@@ -165,6 +165,7 @@ private:
     bool                 m_request_screenshot;
 
     bool                 m_ssaoviz;
+    bool                 m_giviz;
     bool                 m_shadowviz;
     bool                 m_lightviz;
     bool                 m_boundingboxesviz;
@@ -354,9 +355,12 @@ public:
     // ------------------------------------------------------------------------
     void resetDebugModes();
     // ------------------------------------------------------------------------
-    void toggleSSAOViz()          { m_ssaoviz = !m_ssaoviz;         }
+    void toggleSSAOViz();
     // ------------------------------------------------------------------------
     bool getSSAOViz()             { return m_ssaoviz;               }
+    // ------------------------------------------------------------------------
+    // The indirect diffuse of the surfels, only the Vulkan renderer shows it
+    void toggleGIDebug();
     // ------------------------------------------------------------------------
     void toggleShadowViz()        { m_shadowviz = !m_shadowviz;     }
     // ------------------------------------------------------------------------

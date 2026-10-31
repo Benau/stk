@@ -14,6 +14,7 @@
 #include "ge_vulkan_skybox_renderer.hpp"
 #include "ge_vulkan_rt_shadow.hpp"
 #include "ge_vulkan_ssao.hpp"
+#include "ge_vulkan_surfel_gi.hpp"
 
 #include <array>
 #include <cassert>
@@ -253,7 +254,7 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
         try
         {
             m_ssao.reset(new GEVulkanSSAO(vk, getSize(), m_depth_texture,
-                m_attachments[GVDFT_NORMAL]));
+                m_attachments[GVDFT_NORMAL], m_attachments[GVDFT_HDR]));
         }
         catch (const std::exception& e)
         {
@@ -280,6 +281,22 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
                 "Failed to initialize ray traced shadow: %s", e.what());
             m_rt_shadow.reset(new GEVulkanRTShadow(vk, getSize(),
                 m_depth_texture, m_attachments[GVDFT_NORMAL], false));
+        }
+    }
+    // The surfel based global illumination, also sampled by the lighting pass
+    if (supports_compute && isSurfelGIEnabled())
+    {
+        try
+        {
+            m_surfel_gi.reset(new GEVulkanSurfelGI(vk, getSize(),
+                m_depth_texture, m_attachments[GVDFT_NORMAL]));
+        }
+        catch (const std::exception& e)
+        {
+            GE::logMessage(GE::GLL_ERROR,
+                "Failed to initialize surfel global illumination: %s",
+                e.what());
+            m_surfel_gi.reset();
         }
     }
     initSplitGBufferDescriptor(vk);
@@ -411,8 +428,10 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
     // which is not used if there is none, specialization constant u_ssao), 4 =
     // the array of the visibility of the ray traced shadows (only
     // deferred_pbr.frag, specialization constant u_rt_shadow_type, a dummy one
-    // if it's not used)
-    std::array<VkDescriptorImageInfo, 5> image_infos = {};
+    // if it's not used), 5 = the irradiance of the surfels (only
+    // deferred_pbr.frag, specialization constant u_surfel_gi, a transparent
+    // texture if it's not used)
+    std::array<VkDescriptorImageInfo, 6> image_infos = {};
     image_infos[0].sampler = vk->getSampler(GVS_NEAREST);
     image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     image_infos[0].imageView =
@@ -445,6 +464,23 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
     image_infos[4].sampler = vk->getSampler(GVS_NEAREST);
     image_infos[4].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     image_infos[4].imageView = m_rt_shadow->getImageView();
+    // The surfel irradiance is half size, the lighting pass samples it with
+    // bilinear filtering
+    image_infos[5].sampler = vk->getSampler(GVS_SKYBOX);
+    if (m_surfel_gi)
+    {
+        image_infos[5].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[5].imageView = m_surfel_gi->getImageView();
+    }
+    else
+    {
+        image_infos[5].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        if (vk->getTransparentTexture())
+        {
+            image_infos[5].imageView =
+                (VkImageView)vk->getTransparentTexture()->getTextureHandler();
+        }
+    }
     createSamplerDescriptor(vk, image_infos.size(),
         &m_descriptor_layout[GVDFP_HDR], &m_descriptor_pool[GVDFP_HDR],
         &m_descriptor_set[GVDFP_HDR], image_infos.data(), "GVDFP_HDR");
@@ -454,7 +490,14 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
 void GEVulkanDeferredFBOSplit::initSplitConvertColorDescriptor(
                                                             GEVulkanDriver* vk)
 {
-    std::array<VkDescriptorImageInfo, 4> image_infos = {};
+    // 0 = hdr, 1 = the first level of the bloom, 2 = the widest level of it,
+    // 3 = the blend texture of it, 4 = the ambient occlusion and 5 = the
+    // irradiance of the surfels (4 and 5 are only read by the debug views of
+    // deferred_convert_color.frag), 6 = the indirect light of the ambient
+    // occlusion (SSIL, added to hdr and to the GI debug view) and 7 = the
+    // albedo of the g-buffer (6 is multiplied by it and added to hdr, only if
+    // u_ssil)
+    std::array<VkDescriptorImageInfo, 8> image_infos = {};
     image_infos[0].sampler = vk->getSampler(GVS_NEAREST);
     image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     image_infos[0].imageView =
@@ -483,7 +526,7 @@ void GEVulkanDeferredFBOSplit::initSplitConvertColorDescriptor(
     VkImageView unused = VK_NULL_HANDLE;
     if (vk->getTransparentTexture())
         unused = (VkImageView)vk->getTransparentTexture()->getTextureHandler();
-    for (unsigned i = 2; i < image_infos.size(); i++)
+    for (unsigned i = 2; i < 6; i++)
     {
         image_infos[i].sampler = vk->getSampler(GVS_SKYBOX);
         image_infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -514,12 +557,71 @@ void GEVulkanDeferredFBOSplit::initSplitConvertColorDescriptor(
                 image_infos[3].imageView = view;
         }
     }
+    // The ambient occlusion is in general layout all the time, the debug view
+    // of the tonemap pass reads it (deferred_convert_color.frag)
+    image_infos[4].sampler = vk->getSampler(GVS_NEAREST);
+    if (m_ssao)
+    {
+        image_infos[4].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[4].imageView = m_ssao->getImageView();
+    }
+    else
+    {
+        image_infos[4].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        image_infos[4].imageView = unused;
+    }
+    // Same for the surfels, which are also in general layout
+    // The surfel irradiance is half size, the lighting pass samples it with
+    // bilinear filtering
+    image_infos[5].sampler = vk->getSampler(GVS_SKYBOX);
+    if (m_surfel_gi)
+    {
+        image_infos[5].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[5].imageView = m_surfel_gi->getImageView();
+    }
+    else
+    {
+        image_infos[5].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        image_infos[5].imageView = unused;
+    }
+    // The indirect light of the ambient occlusion is half size and blurred, a
+    // bilinear sample is enough
+    image_infos[6].sampler = vk->getSampler(GVS_SKYBOX);
+    if (hasSSIL())
+    {
+        image_infos[6].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[6].imageView = m_ssao->getSSILImageView();
+    }
+    else
+    {
+        image_infos[6].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        image_infos[6].imageView = unused;
+    }
+    // The albedo of the g-buffer which it's multiplied by, in read only layout
+    // since the g-buffer pass
+    image_infos[7].sampler = vk->getSampler(GVS_NEAREST);
+    image_infos[7].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    image_infos[7].imageView =
+        (VkImageView)m_attachments[GVDFT_COLOR]->getTextureHandler();
     createSamplerDescriptor(vk, image_infos.size(),
         &m_descriptor_layout[GVDFP_CONVERT_COLOR],
         &m_descriptor_pool[GVDFP_CONVERT_COLOR],
         &m_descriptor_set[GVDFP_CONVERT_COLOR], image_infos.data(),
         "GVDFP_CONVERT_COLOR");
 }   // initSplitConvertColorDescriptor
+
+// ----------------------------------------------------------------------------
+VkImageView GEVulkanDeferredFBOSplit::getImageView(bool srgb,
+                                                  bool load_ondemand) const
+{
+    // The tonemap pass writes to the swapchain image directly when it's the
+    // output, there is no image of this FBO to read then (and it's drawn
+    // without the 2D renderer sampling it)
+    if (((getGEConfig()->m_ssao_debug && m_ssao) ||
+        (getGEConfig()->m_gi_debug && m_surfel_gi)) && !useSwapChainOutput())
+        return m_image_view;
+    return GEVulkanFBOTexture::getImageView(srgb, load_ondemand);
+}   // getImageView
 
 // ----------------------------------------------------------------------------
 void GEVulkanDeferredFBOSplit::createRTT()
@@ -827,6 +929,10 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
     // And the visibility of the ray traced shadows (the sun)
     if (m_rt_shadow)
         m_rt_shadow->render(cmd, p);
+    // And the surfel based global illumination which the lighting pass adds to
+    // the ambient light (compute shaders and a ray per surfel)
+    if (m_surfel_gi)
+        m_surfel_gi->render(cmd, p);
 
     // 3. lighting, the background is the clear color of hdr
     {
@@ -858,11 +964,16 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         vkCmdEndRenderPass(cmd);
     }
 
-    // 4. bloom of the finished hdr (compute shaders only)
-    const bool has_bloom = m_bloom && m_bloom->render(cmd, p);
+    // 4. indirect light of the ambient occlusion, which the tonemap pass adds
+    // to hdr (compute shaders only, the hdr it uses is finished). It needs the
+    // surfel global illumination, it's the light which it bounces
+    if (hasSSIL())
+        m_ssao->renderIndirect(cmd, p);
 
-    // 5. tonemap (and the bloom is added to hdr), then ghost and transparent
-    // materials
+    // 5. bloom of the finished hdr (compute shaders only)
+    const bool has_bloom = m_bloom && m_bloom->render(cmd, p);
+    // 6. tonemap (and the bloom and the indirect light are added to hdr), then
+    // ghost and transparent materials
     {
         VkClearValue clear = {};
         beginPass(cmd, GVDSP_TONEMAP,
@@ -896,7 +1007,7 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         return;
     vkCmdEndRenderPass(cmd);
 
-    // 6. displace, the mask is skipped if no material uses it, but the color
+    // 7. displace, the mask is skipped if no material uses it, but the color
     // pass is always rendered (a copy of the tonemap output then)
     bool has_displace = false;
     for (auto& q : p)

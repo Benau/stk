@@ -1069,6 +1069,11 @@ namespace UserConfigParams
             PARAM_DEFAULT(BoolUserConfigParam(false, "ray_tracing_grass",
             &m_graphics_quality,
             "Wind-animated grass are ray traced (can be slow)"));
+    PARAM_PREFIX BoolUserConfigParam        m_ray_tracing_gi
+            PARAM_DEFAULT(BoolUserConfigParam(false, "ray_tracing_gi",
+            &m_graphics_quality,
+            "Indirect diffuse of the scene traced with surfels (global "
+            "illumination, can be slow)"));
 
     // ---- Misc
     PARAM_PREFIX BoolUserConfigParam        m_cache_overworld

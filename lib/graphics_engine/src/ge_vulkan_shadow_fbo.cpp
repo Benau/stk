@@ -267,31 +267,58 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
     float cosgamma = viewdir.dotProduct(lightdir);
     float singamma = sqrtf(std::max(0.0f, 1.0f - cosgamma * cosgamma));
 
+    irr::core::matrix4 inv_cam_view;
+    cam->getViewMatrix().getInverse(inv_cam_view);
+
     for (unsigned i = 0; i < GVSCC_COUNT; i++)
     {
         std::vector<irr::core::vector3df> points;
         irr::core::aabbox3df lsbody;
         irr::core::matrix4 lslightproj;
 
-        float snear     = getSplitNear(GEVulkanShadowCameraCascade(i));
-        float sfar      = getSplitFar(GEVulkanShadowCameraCascade(i));
-        float vnear     = i ? getSplitFar(GEVulkanShadowCameraCascade(i - 1)) : 3.0;
-        float vfar      = sfar;
-        float dznear    = std::max(vnear - cam->getNearValue(), 0.0f);
-        float dzfar     = std::max(cam->getFarValue() - vfar, 0.0f);
+        // The cascade boundaries are distances from the camera, so the slice
+        // is the part of the frustum between the two spheres of radius snear
+        // and sfar. Interpolating between the near and far planes instead
+        // would split by view depth, whose range depends on the field of
+        // view (the screen corners are farther away than their depth). The
+        // spheres make the covered body curved, so it is sampled over the
+        // whole frustum instead of only at the corners.
+        float snear = std::max(getSplitNear(GEVulkanShadowCameraCascade(i)),
+                               cam->getNearValue());
+        float sfar = std::min(getSplitFar(GEVulkanShadowCameraCascade(i)),
+                              cam->getFarValue());
+        sfar = std::max(sfar, snear);
 
-        // Frustum split by vnear and vfar
-        float f1 = (snear - cam->getNearValue()) / (cam->getFarValue() - cam->getNearValue());
-        float f2 = (sfar - cam->getNearValue()) / (cam->getFarValue() - cam->getNearValue());
         const irr::scene::SViewFrustum *frust = cam->getViewFrustum();
-        points.push_back(frust->getFarLeftDown() * f1 + frust->getNearLeftDown() * (1.0 - f1));
-        points.push_back(frust->getFarLeftDown() * f2 + frust->getNearLeftDown() * (1.0 - f2));
-        points.push_back(frust->getFarRightDown() * f1 + frust->getNearRightDown() * (1.0 - f1));
-        points.push_back(frust->getFarRightDown() * f2 + frust->getNearRightDown() * (1.0 - f2));
-        points.push_back(frust->getFarLeftUp() * f1 + frust->getNearLeftUp() * (1.0 - f1));
-        points.push_back(frust->getFarLeftUp() * f2 + frust->getNearLeftUp() * (1.0 - f2));
-        points.push_back(frust->getFarRightUp() * f1 + frust->getNearRightUp() * (1.0 - f1));
-        points.push_back(frust->getFarRightUp() * f2 + frust->getNearRightUp() * (1.0 - f2));
+        irr::core::vector3df corners[4] =
+        {
+            frust->getFarLeftDown(), frust->getFarRightDown(),
+            frust->getFarLeftUp(), frust->getFarRightUp()
+        };
+        for (unsigned j = 0; j < 4; j++)
+            cam->getViewMatrix().transformVect(corners[j]);
+        // Tangent of the frustum edges in camera view space
+        const float left = corners[0].X / corners[0].Z;
+        const float right = corners[1].X / corners[1].Z;
+        const float bottom = corners[0].Y / corners[0].Z;
+        const float top = corners[2].Y / corners[2].Z;
+        const float radii[2] = { snear, sfar };
+        for (unsigned a = 0; a < 5; a++)
+        {
+            for (unsigned b = 0; b < 5; b++)
+            {
+                irr::core::vector3df dir(left + (right - left) * (a / 4.0f),
+                                         bottom + (top - bottom) * (b / 4.0f),
+                                         1.0f);
+                dir.normalize();
+                for (unsigned r = 0; r < 2; r++)
+                {
+                    irr::core::vector3df point;
+                    inv_cam_view.transformVect(point, dir * radii[r]);
+                    points.push_back(point);
+                }
+            }
+        }
 
         // lsbody as PSR (Potential Shadow Receiver) in camera view space
         for (unsigned j = 0; j < points.size(); j++)
@@ -314,21 +341,6 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
             else lsbody.addInternalPoint(point);
         }
 
-        double bounding_sphere[4] = {};
-        for (unsigned j = 0; j < points.size(); j++)
-        {
-            bounding_sphere[0] += points[j].X / points.size();
-            bounding_sphere[1] += points[j].Y / points.size();
-            bounding_sphere[2] += points[j].Z / points.size();
-        }
-        irr::core::vector3df scenter(bounding_sphere[0], bounding_sphere[1], bounding_sphere[2]);
-
-        for (unsigned j = 0; j < points.size(); j++)
-        {
-            bounding_sphere[3] = std::max(bounding_sphere[3], (double)points[j].getDistanceFromSQ(scenter));
-        }
-        bounding_sphere[3] = std::sqrt(bounding_sphere[3]);
-
         lslightproj(2, 2) = 1.0 / lsbody.getExtent().Z;
         lslightproj(3, 2) = -lsbody.MinEdge.Z / lsbody.getExtent().Z;
 
@@ -344,17 +356,22 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
             else lsbody.addInternalPoint(point);
         }
 
+        // d is the extent of the body along the projection axis (the light
+        // space Y axis, which is the view direction projected in the shadow
+        // map plane)
         float d = lsbody.getExtent().Y;
-        float z0 = znear;
-        float z1 = z0 + d * singamma;
+        // View depth extent of the body, used to calculate the optimal n
+        float zdepth = zfar - znear;
 
-        if (singamma > 0.02f && 3.0f * (dznear / (zfar - znear)) < 2.0f)
+        if (singamma > 0.02f && d > 0.0f && zdepth > 0.0f)
         {
-            float vz0 = std::max(0.0f, std::max(std::max(znear, cam->getNearValue() + dznear), z0));
-            float vz1 = std::max(0.0f, std::min(std::min(zfar, cam->getFarValue() - dzfar), z1));
-
-            float n = (z0 + sqrtf(vz0 * vz1)) / singamma;
-            n = std::max(n, dznear / (2.0f - 3.0f * (dznear / (zfar - znear))));
+            // Wimmer et al. 2004, section 4.5: when the view is tilted
+            // towards the light the far distance has to be replaced by
+            // znear + (zfar - znear) * sin(gamma), and n is measured along
+            // the projected view direction so it is divided by sin(gamma)
+            float z1 = znear + zdepth * singamma;
+            float n = (znear + sqrtf(znear * z1)) / singamma;
+            n = std::max(n, 0.001f);
 
             float f = n + d;
 
@@ -405,8 +422,6 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
     }
 
     // Build shadow camera UBOs
-    irr::core::matrix4 inv_view;
-    m_shadow_view_matrix.getInverse(inv_view);
     for (unsigned i = 0; i < GVSCC_COUNT; i++)
     {
         m_shadow_camera_ubo_data[i].m_projection_view_matrix =

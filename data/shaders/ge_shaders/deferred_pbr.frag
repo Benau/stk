@@ -9,6 +9,9 @@ layout(binding = 3) uniform sampler2D u_ssao_texture;
 // (layer 1 + the index of the light) of GEVulkanRTShadow, used if
 // u_rt_shadow_type has them (a dummy texture is bound if not)
 layout(binding = 4) uniform sampler2DArray u_rt_shadow_texture;
+// Half size irradiance of the surfels of GEVulkanSurfelGI, used if u_surfel_gi
+// (a transparent texture is bound if not)
+layout(binding = 5) uniform sampler2D u_gi_texture;
 // Enables the filter of it in utils/pbr_light.glsl
 #define HAS_RT_SHADOW_TEXTURE
 #define GE_LOAD_GBUFFER(tex) texelFetch(tex, ivec2(gl_FragCoord.xy), 0)
@@ -47,6 +50,9 @@ void main()
     vec3 normal = (u_camera.m_view_matrix * vec4(world_normal, 0.0)).xyz;
     float ao = 1.0;
     float rt_shadow = 1.0;
+    // The irradiance of the surfels, w is their confidence (see
+    // surfel_gi_generate.comp)
+    vec4 gi_irradiance = vec4(0.0);
 #ifdef SPLIT
     if (u_ssao)
         ao = texelFetch(u_ssao_texture, ivec2(gl_FragCoord.xy), 0).x;
@@ -54,9 +60,19 @@ void main()
     {
         rt_shadow = sampleRTShadow(xpos, normal, 0);
     }
+    // The surfel irradiance is at half the size (one texel per 2x2 block), so
+    // the texel of the block is fetched whole: a linear sample at the pixel
+    // center would land between the texels of two blocks and blend the GI of
+    // the two of them (the estimate of a block is not meant to be interpolated)
+    if (u_surfel_gi)
+    {
+        const ivec2 gi_texel = ivec2(floor(gl_FragCoord.xy * 0.5));
+        gi_irradiance = texelFetch(u_gi_texture, gi_texel, 0);
+    }
 #endif
     vec3 hdr = handlePBRDeferred(diffuse_color, pbr, world_normal, eyedir,
-        normal, 1.0 - pbr.x, world_position, xpos.z, ao, rt_shadow);
+        normal, 1.0 - pbr.x, world_position, length(xpos), ao, rt_shadow,
+        gi_irradiance, u_surfel_gi);
     hdr += accumulateLights(u_push_constants.m_fullscreen_light_count,
         diffuse_color, normal, xpos, eyedir, 1.0 - pbr.x, pbr.y,
         world_position.xyz);

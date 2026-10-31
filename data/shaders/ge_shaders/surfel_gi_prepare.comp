@@ -1,0 +1,40 @@
+// Beginning of the frame of the surfels of GEVulkanSurfelGI: the cells of the
+// grid and the counters of the frame are cleared here, so the other passes
+// don't need any condition on the frame. On the first frame the stack of the
+// free surfels is filled and the counters are initialized (the surfels
+// themselves are zeroed by the driver with a fill of the buffer, so none of
+// them is alive). The rays the surfels asked for in the last frame are kept
+// for the adaptive budget of this one, and the rays of this frame are counted
+// again (surfel_gi_update.comp)
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#include "utils/surfel_gi.glsl"
+
+void main()
+{
+    const uint index = gl_GlobalInvocationID.x;
+    if (index < SURFEL_CELL_COUNT)
+    {
+        u_cells[index].m_offset = 0u;
+        u_cells[index].m_count = 0u;
+    }
+
+    if (pc.m_first_frame != 0u && index < SURFEL_MAX_COUNT)
+        u_dead[index] = index;
+
+    if (index == 0u)
+    {
+        u_counter.m_cell_surfels = 0u;
+        u_counter.m_rays = 0u;
+        u_counter.m_active = 0u;
+        u_counter.m_sleeping_spawns = 0u;
+        u_counter.m_last_ray_requests = pc.m_first_frame != 0u ? 0u :
+            u_counter.m_ray_requests;
+        u_counter.m_ray_requests = 0u;
+        if (pc.m_first_frame != 0u)
+        {
+            u_counter.m_alive = 0;
+            u_counter.m_free = int(SURFEL_MAX_COUNT);
+        }
+    }
+}

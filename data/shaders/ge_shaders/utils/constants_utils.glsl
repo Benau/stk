@@ -43,6 +43,14 @@ layout (constant_id = 13) const uint u_rt_shadow_type = 0;
 layout (constant_id = 14) const float u_rt_shadow_scale = 1.0;
 // Of lighting_composite.frag, the light shafts (GEVulkanGodRays) are added
 layout (constant_id = 15) const bool u_god_rays = false;
+// Of deferred_pbr.frag, the ambient diffuse light of the deferred materials is
+// the indirect diffuse of the surfels (GEVulkanSurfelGI) instead of the
+// prefiltered environment and the flat ambient light
+layout (constant_id = 16) const bool u_surfel_gi = false;
+// Of deferred_convert_color.frag, the indirect light of the ambient occlusion
+// (SSIL, GEVulkanSSAO) is added to hdr. It's only used when both the ambient
+// occlusion (u_ssao) and the surfel global illumination (u_surfel_gi) are on
+layout (constant_id = 17) const bool u_ssil = false;
 
 vec3 convertColor(vec3 input_color)
 {

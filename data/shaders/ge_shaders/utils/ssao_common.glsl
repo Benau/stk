@@ -5,8 +5,8 @@ layout(push_constant) uniform PushConstants
     // x0, y0, x1, y1 (exclusive) in pixels of the g-buffer: the viewport of
     // one camera
     ivec4 m_rect;
-    // x: radius of the effect in world units, y: sigma (intensity), z: k
-    // (power), w: height of the viewport relative to the reference height of
+    // x: radius of the effect in world units (the only one of VBAO), y and z:
+    // not used, w: height of the viewport relative to the reference height of
     // the other effects (so the width of the blur is the same part of the
     // screen at any resolution or render scale)
     vec4 m_params;

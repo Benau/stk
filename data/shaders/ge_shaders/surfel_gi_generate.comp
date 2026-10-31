@@ -1,0 +1,415 @@
+// The irradiance of the pixels of GEVulkanSurfelGI at half the size of the
+// g-buffer, which the lighting pass (deferred_pbr.frag) uses as the diffuse
+// ambient light, and the spawn and the removal of the surfels:
+//
+// One thread for every 2x2 block of the viewport, at its first pixel, gathers
+// the surfels of the cell of its world position (they are the surfels of the
+// 27 cells which it intersects, see surfel_gi_cell_to_surfel.comp) and weights
+// them by the angle of their normals and by their distance. The result is the
+// irradiance over PI of the indirect diffuse of the visible surfaces (the mean
+// of the cosine weighted radiance of the surfels), and its alpha is the
+// confidence of the GI: 0 for a pixel outside of the field (it has no ambient
+// diffuse light until the surfels cover it) and 1 for a covered one (see
+// handle_pbr.glsl). The surfels whose radiance is used are seen, so their life
+// is reset (surfel_gi_update.comp).
+//
+// The coverage of a pixel, which decides its spawn and the removal of a surfel,
+// is the sum of the ones of the surfels of its own plane (see
+// SURFEL_COVERAGE_PLANE): the surfels of a surface which hovers over it (a
+// dynamic object over the track) are part of its irradiance but not of its
+// coverage, otherwise the object over covers the surface under it and the
+// removal recycles the surfels of that surface while the spawn of the new ones
+// is stopped, so a moving object leaves holes of cells in the static scene.
+//
+// The blocks of a 16x16 group share the minimum coverage and the maximum
+// contribution of their pixels: the pixel of the group with the least coverage
+// creates a surfel (the pool is flooded at the start, then the holes are
+// filled), and the pixel with the most contribution, if it's over covered,
+// removes the surfel of its surface which contributes the most (it's recycled
+// by surfel_gi_update.comp when its radius is 0). The surfels are not created
+// at every pixel of the screen at once, so the pool is not filled with the
+// surfels of the pixels which are behind the camera or far from it. A pixel
+// which no surfel covers creates one too (the far surfaces and the frames
+// after the camera moved are filled in a few frames instead of seconds). The
+// initial color of a surfel is the irradiance of the field around its pixel, so
+// it continues the light of its neighbours; a pixel outside of the field (a far
+// surface or the start of the scene) has no value yet, so the surfel starts at
+// the environment of its normal plus a quarter of the flat ambient light, see
+// surfelSpawn.
+//
+// Set 0 is the one of GEVulkanRTScene (to attach a new surfel to its triangle),
+// set 1 the camera and the global light, set 2 the pool of the surfels, set 3
+// the mesh textures (only to share the includes of utils/rt_scene.glsl) and set
+// 4 the environment (the seed of a surfel which no surfel covers)
+#extension GL_EXT_ray_query : require
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+#define MESH_TEXTURES_SET 3
+
+#include "utils/surfel_gi.glsl"
+#include "utils/camera.glsl"
+#include "utils/constants_utils.glsl"
+#include "utils/global_light_data.glsl"
+#include "utils/get_vertex_color.glsl"
+#include "utils/sample_mesh_texture.glsl"
+#include "utils/rt_utils.glsl"
+#include "utils/rt_scene.glsl"
+#include "utils/surfel_gi_rt.glsl"
+#include "utils/unproject_position.glsl"
+#include "../utils/decodeNormal.frag"
+
+// The environment of a surfel which no surfel covers when it's created: the
+// diffuse map of its normal plus a quarter of the flat ambient light. The GI of
+// a surface which no surfel of the camera's rays reached is the environment,
+// and a black surfel would darken the pixels which use it until its rays
+// converge
+layout(set = 4, binding = 0) uniform samplerCube u_diffuse;
+
+// The offset of a surfel from the plane of the pixel (along the normal of the
+// surfel) as a fraction of its radius, under which it's a surfel of the
+// surface of the pixel. The neighbours of a surfel of a surface are on its
+// plane, so the offset is a fraction of the radius, while a surface which
+// hovers over the pixel (a kart over the track, a bridge over the ground) is
+// farther from it. Such a surfel lights the pixel (its radiance is part of its
+// irradiance) but it's not one of the surfels of its surface: only the ones of
+// its plane are its coverage, otherwise the object over the surface over
+// covers it, the removal recycles the surfels of the surface (that's the
+// surfel which contributes the most of a pixel of the ground) and the
+// coverage of the object stops the spawn of the new ones, so the cells around
+// the moving object lose their surfels
+const float SURFEL_COVERAGE_PLANE = 0.25;
+
+shared uint g_min_coverage;
+shared uint g_max_contribution;
+
+// Creates a surfel at a position (its triangle of the scene is found so it
+// follows it), initialized with the irradiance of the surfels around the pixel
+// (the same as the reference, which seeds a new surfel with the indirect
+// lighting of its generation pass): the new surfel continues the field of its
+// neighbours instead of starting from an independent sample of them, so the
+// irradiance of the surface doesn't jump where a surfel was created. A pixel
+// which no surfel covers is outside of the field (the far surfaces and the
+// start of the scene): its surfel starts at the environment of its normal plus
+// a quarter of the flat ambient light, so the pixels it covers are not black
+// while its rays converge (field_weight is the weight of the irradiance of the
+// field, 0 outside of it)
+void surfelSpawn(vec3 position, vec3 normal, vec3 irradiance,
+                 float field_weight)
+{
+    if (u_counter.m_alive >= int(SURFEL_MAX_COUNT))
+        return;
+    // A surfel out of the grid would never be registered in a cell, never be
+    // seen and never be traced, so it would only take a slot of the pool (the
+    // grid covers every distance of the scene, see SURFEL_CELL_M)
+    if (!surfelCellValid(surfelCell(position)))
+        return;
+    const uint new_index = surfelAllocate();
+    if (new_index >= SURFEL_MAX_COUNT)
+        return;
+    // The field value weighted by the surfels which the pixel intersects, or
+    // the environment where there is no field
+    const bool covered = field_weight > 0.0;
+    const vec3 seed = covered ? max(irradiance, vec3(0.0)) :
+        texture(u_diffuse, normal).rgb + u_global_light.m_ambient_color * 0.25;
+    uint node_key;
+    uint geometry;
+    uint primitive;
+    uint bary;
+    // The triangle of the ray traced scene which the surface of the pixel is,
+    // so the surfel follows it. A surface which is not in the scene has no
+    // attachment (it doesn't move then, the key 0 is the static geometry)
+    if (!surfelAttach(position, node_key, geometry, primitive, bary))
+    {
+        node_key = 0u;
+        geometry = 0u;
+        primitive = 0u;
+        bary = 0u;
+    }
+    const float camera_distance = distance(position, pc.m_origin.xyz);
+    const float max_radius = surfelMaxRadius(camera_distance);
+    Surfel surfel;
+    surfel.m_position = position;
+    surfel.m_radius = clamp(surfelCoverRadius(camera_distance),
+        max_radius * SURFEL_MIN_SIZE_RATIO, max_radius);
+    surfel.m_normal = normal;
+    surfel.m_node_key = node_key;
+    surfel.m_geometry = geometry;
+    surfel.m_primitive = primitive;
+    surfel.m_bary = bary;
+    surfel.m_ray_offset = 0u;
+    surfel.m_ray_count = 0u;
+    surfel.m_life = SURFEL_MAX_LIFE;
+    surfel.m_frame = 0u;
+    surfel.m_status = SURFEL_STATUS_ALIVE;
+    // The estimator starts at the seed with a large variance, so the samples
+    // can be far from it while it converges (see surfel_gi_integrate.comp).
+    // The variance is relative to the seed (the uncertainty of a value which the
+    // rays of the surfel never sampled), not an absolute 1.0: the firefly clamp
+    // of the estimator widens with the light of the surface then
+    surfel.m_msme.m_mean = seed;
+    surfel.m_msme.m_vbbr = 0.0;
+    surfel.m_msme.m_short_mean = seed;
+    surfel.m_msme.m_inconsistency = 1.0;
+    surfel.m_msme.m_variance = seed * seed + 1.0e-4;
+    // A field seed is the mean of several surfels already, an environment one
+    // is a single guess: the convergence starts earlier for the first
+    surfel.m_msme.m_count = covered ? 4.0 : 2.0;
+    surfel.m_radiance = seed;
+    surfel.m_last_seen = pc.m_frame;
+    // The map is seeded by surfel_gi_integrate.comp (it's empty here), and the
+    // visibility of the sun is traced by its first ray of the next frame
+    surfel.m_irradiance = 0u;
+    surfel.m_sun = -1.0;
+    surfel.m_ray_index = 0u;
+    surfel.m_pad = 0u;
+    u_surfels[new_index] = surfel;
+    // The compact copy which the other passes read (the row sums and the
+    // moments of the empty map are 0, the integration writes them)
+    SurfelLight light;
+    light.m_position_radius = vec4(position, surfel.m_radius);
+    light.m_normal_frame = vec4(normal, 0.0);
+    light.m_radiance = seed;
+    light.m_row_sums_01 = 0u;
+    light.m_row_sums_23 = 0u;
+    light.m_row_sums_45 = 0u;
+    light.m_depth_range = 0.0;
+    light.m_sun = -1.0;
+    u_surfel_lights[new_index] = light;
+}
+
+void main()
+{
+    if (gl_LocalInvocationID.x == 0u && gl_LocalInvocationID.y == 0u)
+    {
+        // Above every coverage, so a group of only sky has no minimum
+        g_min_coverage = floatBitsToUint(10.0);
+        g_max_contribution = 0u;
+    }
+    barrier();
+
+    const ivec4 half_rect = surfelHalfRect(pc.m_rect);
+    const ivec2 block = half_rect.xy + ivec2(gl_GlobalInvocationID.xy);
+    const bool inside = all(lessThan(block, half_rect.zw));
+    // The random epsilon of the comparisons of the group: it's fixed per pixel
+    // (not per frame), so a block which spawns or removes a surfel is the same
+    // from one frame to the next until the coverage changes
+    const uint random_bits = surfelHash(block.x * 1973u + block.y);
+    const float random = float(random_bits) * (1.0 / 4294967296.0);
+
+    // The irradiance of the field at the pixel (0 outside of the field, the
+    // seed of a surfel which is created there is the environment)
+    vec3 irradiance = vec3(0.0);
+    // 1 if a surfel covers the pixel (its irradiance is the field then, not the
+    // environment), see surfelSpawn
+    float field_weight = 0.0;
+    float coverage = 0.0;
+    // The fade of the youngest surfel whose radiance lights the pixel, the
+    // confidence of the irradiance: 1 for a pixel which the field covers (a
+    // surfel fades in during its first 10 frames, so a new one doesn't pop)
+    // and 0 for a pixel outside of the field, which has no ambient diffuse
+    // light until the surfels cover it (see utils/handle_pbr.glsl). It doesn't
+    // fall with the contribution of one surfel: the GI is the ambient of the
+    // covered surface, not only the part of it which one surfel covers
+    float confidence = 0.0;
+    float max_contribution = 0.0;
+    uint max_surfel = SURFEL_NONE;
+    float depth = 0.0;
+    vec3 world_position = vec3(0.0);
+    vec3 world_normal = vec3(0.0);
+    if (inside)
+    {
+        const ivec2 pixel = clamp(block * 2, pc.m_rect.xy, pc.m_rect.zw - 1);
+        // Reverse z, 0 is the sky and it has no surfel
+        depth = texelFetch(u_depth, pixel, 0).x;
+        if (depth != 0.0)
+        {
+            const vec3 xpos = getPosFromUVDepth(vec3(vec2(pixel) + 0.5, depth),
+                u_camera.m_viewport, u_camera.m_inverse_projection_matrix);
+            world_position = (u_camera.m_inverse_view_matrix *
+                vec4(xpos, 1.0)).xyz;
+            world_normal = DecodeNormal(texelFetch(u_normal, pixel, 0).xy);
+            const ivec4 cell = surfelCell(world_position);
+            if (surfelCellValid(cell))
+            {
+                const CellInfo cell_info = u_cells[surfelCellIndex(cell)];
+                if (cell_info.m_offset < SURFEL_CELL_SURFEL_COUNT)
+                {
+                    // The list of a cell near the camera holds hundreds of
+                    // surfels (a surfel is as large as a few pixels), and the
+                    // list is not ordered: the surfels which cover this pixel
+                    // are a few entries of it, so every entry has to be tested
+                    // (a sample leaves the pixels it misses black). The walk
+                    // stops at SURFEL_CELL_LIST_MAX, which is longer than the
+                    // list of a cell in practice
+                    const uint count =
+                        min(cell_info.m_count, SURFEL_CELL_LIST_MAX);
+                    // The weighted mean of the surfels which light the pixel,
+                    // without the visibility of their depth moments, and with
+                    // it: a surfel which a wall hides from the pixel doesn't
+                    // light it (DDGI and W298 SurfelGI). The unweighted mean is
+                    // the fallback when the moments hide every surfel (a surfel
+                    // which just turned has none yet): a covered pixel is never
+                    // black
+                    vec4 contribution_sum = vec4(0.0);
+                    vec4 visible_sum = vec4(0.0);
+                    for (uint i = 0u; i < count; i++)
+                    {
+                        const uint surfel_index =
+                            u_cell_surfels[cell_info.m_offset + i];
+                        if (surfel_index >= SURFEL_MAX_COUNT)
+                            continue;
+                        // The list of a cell only has the surfels which are
+                        // alive in this frame (it's built after
+                        // surfel_gi_update.comp recycled the others). The
+                        // position and the radius first: most of the surfels of
+                        // the list don't reach the pixel, so the rest of the
+                        // compact surfel is only read by the ones which do
+                        const vec4 position_radius =
+                            u_surfel_lights[surfel_index].m_position_radius;
+                        const vec3 bias = position_radius.xyz - world_position;
+                        const float dist = length(bias);
+                        if (dist >= position_radius.w)
+                            continue;
+                        const SurfelLight surfel = u_surfel_lights[surfel_index];
+                        const vec3 surfel_normal = surfel.m_normal_frame.xyz;
+                        const float surfel_radius = position_radius.w;
+                        const float dot_n = dot(world_normal, surfel_normal);
+                        // Distance of the pixel from the plane of the surfel,
+                        // see SURFEL_COVERAGE_PLANE
+                        const float plane_offset = abs(dot(bias, surfel_normal));
+                        // A new surfel is faded in, so the pixels it covers
+                        // don't jump to its seed (the same as the reference,
+                        // which multiplies the contribution of both branches by
+                        // smoothstep(0, 10, frame))
+                        const float fade = smoothstep(0.0, 10.0,
+                            surfel.m_normal_frame.w);
+                        float contribution;
+                        if (dot_n > 0.0)
+                        {
+                            // The surfel is in front of the pixel: the mean of
+                            // the surfels is the irradiance of the pixel (a new
+                            // surfel is seeded with the irradiance around it,
+                            // see surfelSpawn, so it contributes as soon as it
+                            // exists)
+                            contribution = clamp(dot_n, 0.0, 1.0) *
+                                clamp(1.0 - dist / surfel_radius, 0.0, 1.0);
+                            contribution = smoothstep(0.0, 1.0,
+                                contribution);
+                            // The surfels of the surface of the pixel, see
+                            // SURFEL_COVERAGE_PLANE
+                            if (plane_offset < surfel_radius *
+                                SURFEL_COVERAGE_PLANE)
+                            {
+                                coverage += contribution;
+                                if (contribution > max_contribution)
+                                {
+                                    max_contribution = contribution;
+                                    max_surfel = surfel_index;
+                                }
+                            }
+                            confidence = max(confidence, fade);
+                            contribution_sum += vec4(surfel.m_radiance, 1.0) *
+                                (contribution * fade);
+                            visible_sum += vec4(surfel.m_radiance, 1.0) *
+                                (contribution * fade * surfelVisibility(
+                                surfel_index, surfel, world_position));
+                            // Its radiance is used, its life is reset
+                            atomicOr(u_surfels[surfel_index].m_status,
+                                SURFEL_STATUS_SEEN);
+                        }
+                        else
+                        {
+                            // Behind the surfel (it lights the pixel from the
+                            // side), it's not the irradiance of the surface
+                            // but it's the light which reaches it, so it's
+                            // not the first surfels which the pixel is
+                            // intersected by
+                            const float cosine_theta =
+                                dot(bias, world_normal) / dist;
+                            contribution = max(cosine_theta, 0.0) * pow(1.0 -
+                                dist / surfel_radius, 2.0);
+                            contribution_sum += vec4(surfel.m_radiance, 1.0) *
+                                (contribution * fade);
+                            visible_sum += vec4(surfel.m_radiance, 1.0) *
+                                (contribution * fade * surfelVisibility(
+                                surfel_index, surfel, world_position));
+                            confidence = max(confidence, fade);
+                        }
+                    }
+                    // The field of the pixel (0 outside of the field, the seed
+                    // of a surfel which is created there is the environment)
+                    if (contribution_sum.w > 0.0)
+                    {
+                        field_weight = 1.0;
+                        if (visible_sum.w > 0.1)
+                            irradiance = visible_sum.xyz / visible_sum.w;
+                        else
+                            irradiance =
+                                contribution_sum.xyz / contribution_sum.w;
+                    }
+                }
+            }
+        }
+        // The sky, a cell out of the grid (no surfel can be there, see
+        // surfelSpawn) and a list which doesn't fit have no GI, so the pixel
+        // has no ambient diffuse light (the alpha is the confidence)
+        imageStore(u_gi, block, vec4(irradiance, confidence));
+    }
+
+    // The coverage and the contribution of the group, a random epsilon makes
+    // the comparison of the minimum and the maximum unambiguous (every block
+    // of the group has a different value)
+    if (inside && depth != 0.0)
+    {
+        atomicMin(g_min_coverage, floatBitsToUint(coverage +
+            random * 1.0e-5));
+        atomicMax(g_max_contribution, floatBitsToUint(max_contribution +
+            random * 1.0e-5));
+    }
+    barrier();
+    const float group_min_coverage = uintBitsToFloat(g_min_coverage);
+    const float group_max_contribution = uintBitsToFloat(g_max_contribution);
+
+    if (!inside || depth == 0.0)
+        return;
+
+    // The pixel of the group with the least coverage creates a surfel, with a
+    // probability which falls with its coverage (the same as the reference: the
+    // depth is the one of the reference, where 0 is the near plane, and ours is
+    // reverse z, where 0 is the sky and 1 the near plane)
+    const float reference_depth = 1.0 - depth;
+    if (u_counter.m_alive < int(SURFEL_MAX_COUNT) && coverage < 2.0 &&
+        coverage + random * 1.0e-5 == group_min_coverage)
+    {
+        const float spawn_random = surfelRand(block.y * 1973u + block.x,
+            pc.m_frame);
+        if (spawn_random < reference_depth * 0.3 * max(0.0, 2.0 - coverage))
+            surfelSpawn(world_position, world_normal, irradiance,
+                field_weight);
+    }
+    // A pixel which no surfel covers creates one too: the spawn above only
+    // creates one surfel per 16x16 group, so the surfaces which the pool
+    // doesn't reach yet (a far surface, the frames after the camera moved, the
+    // start of the scene) would stay black for seconds. The probability falls
+    // with the distance like the spawn above, so the near field is filled first
+    else if (coverage <= 0.0 &&
+        surfelRand(block.x * 7919u + block.y, pc.m_frame + 9u) <
+        reference_depth * 0.02)
+    {
+        surfelSpawn(world_position, world_normal, irradiance, field_weight);
+    }
+
+    // The pixel of the group with the most contribution, if it's over
+    // covered, removes the surfel which contributes the most (see the radius
+    // of surfel_gi_update.comp), with the probability of the reference, which
+    // falls near the camera
+    if (u_counter.m_alive > 0 && max_surfel != SURFEL_NONE && coverage > 4.0 &&
+        max_contribution + random * 1.0e-5 == group_max_contribution)
+    {
+        const float remove_random = surfelRand(block.x * 7919u + block.y,
+            pc.m_frame + 1u);
+        if (remove_random < reference_depth * 0.2)
+            u_surfels[max_surfel].m_radius = 0.0;
+    }
+}

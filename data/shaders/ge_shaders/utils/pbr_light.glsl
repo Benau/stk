@@ -314,16 +314,22 @@ vec3 calculateLight(int i, vec3 diffuse_color, vec3 normal, vec3 xpos,
     return light_color * attenuation * diffuse_specular;
 }
 
-float getShadowFactor(sampler2DArrayShadow map, vec3 world_position, float view_depth, float NdotL, vec3 normal, vec3 lightdir)
+// camera_distance is the distance of the position from the camera (not its
+// view depth): the cascades are split by distance, see
+// GEVulkanShadowFBO::prepare
+float getShadowFactor(sampler2DArrayShadow map, vec3 world_position,
+                      float camera_distance, float NdotL, vec3 normal,
+                      vec3 lightdir)
 {
-    float end_factor = smoothstep(130., 150., view_depth);
-    if (view_depth >= 150. || NdotL <= 0.001)
+    float end_factor = smoothstep(130., 150., camera_distance);
+    if (camera_distance >= 150. || NdotL <= 0.001)
     {
         return end_factor;
     }
 
     float shadow = 1.0;
-    float factor = smoothstep(9.0, 10.0, view_depth) + smoothstep(40.0, 45.0, view_depth);
+    float factor = smoothstep(9.0, 10.0, camera_distance) +
+        smoothstep(40.0, 45.0, camera_distance);
     int level = int(factor);
 
     vec2 base_normal_bias = (u_global_light.m_shadow_view_matrix * vec4(normal, 0.)).xy;

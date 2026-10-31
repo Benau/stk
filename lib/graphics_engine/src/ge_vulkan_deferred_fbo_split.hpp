@@ -14,6 +14,7 @@ class GEVulkanLightScatter;
 class GEVulkanGodRays;
 class GEVulkanRTShadow;
 class GEVulkanSSAO;
+class GEVulkanSurfelGI;
 
 // Same output as GEVulkanDeferredFBO, but every stage is its own traditional
 // render pass (single subpass) instead of a subpass of one, so there is no
@@ -34,11 +35,15 @@ class GEVulkanSSAO;
 //                them]
 //   lighting   : (g-buffer as textures) -> hdr, skybox, [blurred glow,
 //                light scattering and light shafts, added together]
+//   [ssil      : compute shaders only, the indirect light of the ambient
+//                occlusion, which the tonemap pass adds to hdr, see
+//                GEVulkanSSAO]
 //   [bloom     : compute shaders only, bloom of the finished hdr, see
 //                GEVulkanBloom, if it's enabled and any viewport has anything
 //                to draw]
-//   tonemap    : (hdr as texture, and the bloom is added to it in the same
-//                pass) -> output, then ghost / transparent
+//   tonemap    : (hdr as texture, and the bloom and the indirect light are
+//                added to it in the same pass) -> output, then ghost /
+//                transparent
 //   [displace mask -> displace color, only if the FBO has displace support]
 //
 // If screen space reflection is enabled (GEConfig::m_screen_space_reflection_
@@ -97,6 +102,9 @@ private:
     // the g-buffer is valid
     std::unique_ptr<GEVulkanRTShadow> m_rt_shadow;
 
+    // Same, NULL if the surfel based global illumination is not enabled
+    std::unique_ptr<GEVulkanSurfelGI> m_surfel_gi;
+
     // Same, NULL if bloom is not enabled
     std::unique_ptr<GEVulkanBloom> m_bloom;
 
@@ -142,6 +150,15 @@ public:
     // ------------------------------------------------------------------------
     virtual void createRTT();
     // ------------------------------------------------------------------------
+    // What samples the FBO (the 2D renderer) gets the image of the FBO itself
+    // instead of the one of the final chain when a debug view is on
+    // (GEConfig::m_ssao_debug or m_gi_debug): the tonemap pass writes the
+    // occlusion, or the irradiance of the surfels with the indirect light of
+    // the occlusion, there, and the stages of the chain (depth of field,
+    // anti-aliasing) would blur it
+    virtual VkImageView getImageView(bool srgb = false,
+                                     bool load_ondemand = false) const;
+    // ------------------------------------------------------------------------
     virtual void render(VkCommandBuffer cmd,
                         const std::vector<std::pair<GEVulkanDrawCall*,
                         GEVulkanCamera*> >& p);
@@ -168,6 +185,18 @@ public:
     // Same for the ambient occlusion which the lighting pass samples (the
     // fourth binding of GVDFP_HDR)
     bool hasSSAO() const                             { return m_ssao != NULL; }
+    // ------------------------------------------------------------------------
+    // Same for the surfel based global illumination which the lighting pass
+    // samples (the sixth binding of GVDFP_HDR)
+    bool hasSurfelGI() const                     { return m_surfel_gi != NULL; }
+    // ------------------------------------------------------------------------
+    // True if the indirect light of the ambient occlusion (SSIL) is computed
+    // and added to hdr by the tonemap pass, which needs both the ambient
+    // occlusion and the surfel global illumination
+    bool hasSSIL() const
+    {
+        return m_ssao != NULL && m_surfel_gi != NULL;
+    }
     // Size of the ray traced shadow relative to the FBO, 1.0 if there is none
     float getRTShadowScale() const;
     // ------------------------------------------------------------------------

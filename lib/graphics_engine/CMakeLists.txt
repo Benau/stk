@@ -74,6 +74,7 @@ set(GE_SOURCES
     src/ge_vulkan_shadow_draw_call.cpp
     src/ge_vulkan_shadow_fbo.cpp
     src/ge_vulkan_skybox_renderer.cpp
+    src/ge_vulkan_surfel_gi.cpp
     src/ge_vulkan_texture.cpp
     src/ge_vulkan_texture_descriptor.cpp
     src/ge_gl_texture.cpp
