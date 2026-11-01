@@ -17,36 +17,38 @@
 // sampled with the R3 low discrepancy sequence and guided by the irradiance map
 // of the surfel. Every first hit of the rays spawns a sleeping surfel there
 // (W298 SurfelGI), the ones the field covers too, so the field grows where the
-// rays go and not only where the camera looks. The visibility of the sun at a
-// surfel is traced by its first ray of the frame, and the hits of the paths
-// take it from the field instead of tracing a shadow ray of their own.
-// surfel_gi_integrate.comp: one 32 lane group per surfel which has rays: the
-// multiscale mean estimator (Ray Tracing Gems chapter 25) of its rays, the
-// accumulation of their radiance in its 6x6 irradiance map (which guides its
-// rays) and of their distances in its 6x6 depth moments (the visibility of
-// the surfel, DDGI and W298 SurfelGI).
-// surfel_gi_share.comp: the radiance of the surfels of its cell which reach
-// every surfel merged in the mean of its estimator (the irradiance sharing of
-// GIBS), sampled with a bounded random walk of the list and with a window
+// rays go and not only where the camera looks.
+// surfel_gi_integrate.comp: one thread per surfel which has rays (the layout of
+// the reference): the multiscale mean estimator (Ray Tracing Gems chapter 25)
+// of its rays in packets of 4, the accumulation of their radiance in its 6x6
+// irradiance map (which guides its rays), and the irradiance sharing of GIBS
+// (the radiance of the surfels of its cell which reach it merged in the mean of
+// its estimator), sampled with a bounded walk of the list and with a window
 // which follows the noise of the surfel.
 // surfel_gi_generate.comp: the irradiance of the pixels (the weighted mean of
 // the surfels of their cell), and the spawn of the surfels where the coverage
 // is low: the pool is flooded at the start, then the holes are filled, and a
-// spawn which has no free slot evicts the oldest surfel which no ray of the
-// frame uses (see surfelEvict), so a full pool never leaves a surface the
-// camera reveals without surfels. A surfel of a moving object is only replaced
+// spawn which has no free slot evicts the oldest surfel of an area the camera
+// left (see surfelEvict), so a full pool never leaves a surface the camera
+// reveals without surfels. A surfel of a moving object is only replaced
 // by the same eviction, never by the recycling of the update pass while its
 // surface covers it.
 //
-// The cells are camera relative: the inner cube of the grid (2 * m_half_d world
-// units, m_delta per cell) is uniform, and the 6 frustums around it are larger
-// and larger layers (the ratio SURFEL_CELL_P), so a surfel far from the camera
-// is as large as its cell. A surfel keeps its history when the camera moves
-// (the cells are only a way to find the surfels around a position), and the
-// surfels of an object keep their radiance when it moves: a surface which turns
-// under its surfels (a wheel) is not the surface their samples came from, so
-// surfel_gi_update.comp resets the map and widens the estimator of the surfels
-// it turns.
+// The cells are camera relative and cascaded: SURFEL_CASCADE_COUNT nested cubes
+// of SURFEL_CASCADE_CELLS^3 cells around the camera, the cell of a cascade twice
+// as large as the one of the previous one (m_cell_size * 2^cascade, the same
+// spatial index as the reference implementation): the cell of a position grows
+// with its distance, and the radius of a surfel follows it (see surfelRadius),
+// so a surfel far from the camera is as large as its cell and the pool covers
+// the whole distance of the scene instead of spending its surfels on the near
+// field. A surfel registers in the cells of the cascade of its position, or of
+// the two cascades around its distance (hysteresis, see surfelCascadeRange), so
+// a surfel doesn't flicker between two cascades while the camera moves. A
+// surfel keeps its history when the camera moves (the cells are only a way to
+// find the surfels around a position), and the surfels of an object keep their
+// radiance when it moves: a surface which turns under its surfels (a wheel) is
+// not the surface their samples came from, so surfel_gi_update.comp resets the
+// map and widens the estimator of the surfels it turns.
 //
 // There is no screen space temporal filter: the mean of a surfel is stable
 // (the multiscale mean estimator) and it only changes when its lighting
@@ -100,9 +102,9 @@ struct Surfel
     MSMEData m_msme;
     // The mean of the samples of the surfel at the end of the previous frame
     // (surfel_gi_update.comp copies the mean of the estimator here at the start
-    // of the frame, and surfel_gi_share.comp only writes the estimator), the
-    // input of the irradiance of the pixels of surfel_gi_generate.comp and of
-    // the field of surfelGatherIrradiance (the "radiance" of SurfelPlus)
+    // of the frame), the input of the irradiance of the pixels of
+    // surfel_gi_generate.comp and of the field of surfelGatherIrradiance (the
+    // "radiance" of SurfelPlus)
     vec3 m_radiance;
     // Frame the surfel was last seen in
     uint m_last_seen;
@@ -111,11 +113,6 @@ struct Surfel
     // of the surfel are guided by it then (see surfelSampleDirection), and 0
     // means that the surfel was never integrated
     uint m_irradiance;
-    // The visibility of the sun at the surfel, traced by its first ray of the
-    // frame (-1 while it was never traced): the hits of the paths which the
-    // field covers take it instead of tracing a shadow ray (see
-    // surfelGatherIrradiance)
-    float m_sun;
     // Rays the surfel traced since it was created, the index of the R3 low
     // discrepancy sequence of its next ray (see surfelR3): the sequences of the
     // rays of the frames continue each other, so the directions of its few
@@ -145,16 +142,11 @@ struct SurfelLight
     uint m_row_sums_01;
     uint m_row_sums_23;
     uint m_row_sums_45;
-    // The range of the depth moments of the surfel (the distances of its rays
-    // are clamped to it), 0 while it has none (see surfelVisibility)
-    float m_depth_range;
-    // The visibility of the sun at the surfel (the direct light cache of the
-    // reference article: a hit which the field covers takes the shadow of the
-    // sun from its surfels instead of tracing a ray)
-    float m_sun;
+    // std430 rounds the stride of the struct to the 16 bytes of its vec4s
+    vec2 m_padding;
 };
 
-// Same layout as GEVulkanSurfelGI::SurfelCounter (std430, 36 bytes)
+// Same layout as GEVulkanSurfelGI::SurfelCounter (std430, 32 bytes)
 struct SurfelCounter
 {
     // Number of surfels which are alive
@@ -175,9 +167,6 @@ struct SurfelCounter
     uint m_last_ray_requests;
     // Sleeping surfels the tracing of the frame spawned
     uint m_sleeping_spawns;
-    // Spawns of the holes of the screen which the generate pass of the frame
-    // tried (see SURFEL_HOLE_SPAWNS)
-    uint m_hole_spawns;
 };
 
 struct CellInfo
@@ -235,12 +224,13 @@ layout(set = 2, binding = 9, std430) buffer SurfelRayResultBuffer
 {
     vec4 u_ray_results[];
 };
-// The 6x6 octahedral irradiance map of every surfel (3072x1536 pixels, a 6x6
+// The 6x6 octahedral irradiance map of every surfel (3072x3072 pixels, a 6x6
 // tile for every surfel of the pool): the radiance of the rays of a surfel is
 // accumulated in the tile of its direction, so its bright directions are
 // sampled more (the ray guiding of SurfelPlus, see surfel_gi_trace.comp)
 layout(set = 2, binding = 10) uniform sampler2D u_surfel_irradiance;
-layout(set = 2, binding = 11, r16f) uniform image2D u_surfel_irradiance_map;
+layout(set = 2, binding = 11, r16f)
+coherent uniform image2D u_surfel_irradiance_map;
 // The compact copy of the fields of the surfels which the passes of the cells
 // read (see SurfelLight), written by surfel_gi_update.comp,
 // surfel_gi_integrate.comp and surfel_gi_generate.comp
@@ -248,47 +238,36 @@ layout(set = 2, binding = 12, std430) buffer SurfelLightBuffer
 {
     SurfelLight u_surfel_lights[];
 };
-// The data of every ray of the frame (surfel_gi_trace.comp writes it,
-// surfel_gi_integrate.comp reads it). x is the weight of the sample of the
-// irradiance of the ray, cosine / (PI * pdf), the density of
-// surfelSampleDirection which the direction of the ray was sampled with, so the
-// sample is radiance * weight and the sample doesn't depend on the map (the
-// integration writes the map after the rays were traced). y is the distance of
-// the first hit of the ray (RT_RAY_MAX for a miss), the depth of the texel of
-// its direction in the depth moments of the surfel
+// The weight of every ray of the frame (surfel_gi_trace.comp writes it,
+// surfel_gi_integrate.comp reads it): cosine / (PI * pdf) of the direction of
+// the ray (the density of surfelSampleDirection), so the sample of the
+// irradiance is radiance * weight and it doesn't depend on the map (the
+// integration writes the map after the rays were traced)
 layout(set = 2, binding = 13, std430) buffer SurfelRayDataBuffer
 {
-    vec2 u_ray_data[];
+    float u_ray_data[];
 };
-// The VkDispatchIndirectCommands of the frame: the groups of the tracing (the
-// number of rays, see surfel_gi_cell_info.comp), then the groups of the
-// cooperative integration (x = the surfels which have rays, at most 256, y =
-// ceil(x / 256), so a group is one surfel and its ID is x + y * 256), then the
-// groups of the sharing (one 64 thread group for every surfel which has rays)
+// The VkDispatchIndirectCommands of the frame (see surfel_gi_cell_info.comp):
+// the groups of the tracing (the number of rays), then the groups of the
+// integration (one thread for every surfel which has rays)
 layout(set = 2, binding = 14, std430) buffer SurfelDispatchBuffer
 {
     uint u_dispatch[];
 };
-// The depth moments of the surfels (rg32f, a 6x6 tile for every surfel of the
-// same size as the irradiance map): the mean distance of the hits of a texel
-// and its second moment. The visibility of a surfel from a point is the
-// Chebyshev bound of its moments (DDGI, W298 SurfelGI), see surfelVisibility
-layout(set = 2, binding = 15) uniform sampler2D u_surfel_depth;
-layout(set = 2, binding = 16, rg32f) uniform image2D u_surfel_depth_map;
 // The IDs of the surfels which have rays in the frame (SURFEL_NONE if a surfel
 // was recycled after it asked for them), surfel_gi_update.comp writes them and
-// surfel_gi_integrate.comp reads them: one group of integration for every of
-// them instead of one for every slot of the pool
+// surfel_gi_integrate.comp reads them (one thread for every entry)
 layout(set = 2, binding = 17, std430) buffer SurfelActiveBuffer
 {
     uint u_active[];
 };
 
-// Same layout as GEVulkanSurfelGI::SurfelGIPushConstants (68 bytes)
+// Same layout as GEVulkanSurfelGI::SurfelGIPushConstants (48 bytes)
 layout(push_constant) uniform PushConstants
 {
-    // xyz world position of the camera of the first viewport, the center of
-    // the inner cube of the grid
+    // xyz world position of the origin of the cascades: the camera of the first
+    // viewport snapped to the cell of the finest cascade (a cell of the grid
+    // doesn't move under its surfels while the camera moves in it)
     vec4 m_origin;
     // x0, y0, x1, y1 (exclusive) in pixels of the g-buffer: the viewport
     ivec4 m_rect;
@@ -296,31 +275,21 @@ layout(push_constant) uniform PushConstants
     uint m_frame;
     // 1 if the pool is not initialized (the first frame)
     uint m_first_frame;
-    // Maximum number of rays of the frame
-    uint m_max_rays;
-    // Size of a cell of the inner cube of the grid, and half its size
-    float m_delta;
-    float m_half_d;
-    // Vertical fov of the camera, in radians
-    float m_fov;
-    // Area of a surfel in pixels
-    float m_surfel_size;
-    // Size of the viewport, for the radius of the surfels
-    uint m_full_width;
-    uint m_full_height;
+    // Size of a cell of the finest cascade, and the distance at which the
+    // radius of a surfel grows with its distance to the camera (see
+    // surfelRadius)
+    float m_cell_size;
+    float m_cascade_radius;
 } pc;
 
 // Same as GEVulkanSurfelGI
-const uint SURFEL_MAX_COUNT = 131072u;
-// Rays a surfel traces in a frame: the count of the reference. The estimator
-// merges them in packets of 4 (see surfel_gi_integrate.comp), so the mean of a
-// surfel follows the light of its surface without the noise of a few rays, and
-// the first frames of the pool reach the light of the scene at once instead of
-// averaging the noise of a few samples for a second
-const uint SURFEL_MAX_RAYS = 8u;
-// Rays of a surfel which is warmed up (see SURFEL_WARMUP_FRAMES): the same as
-// the maximum, the count of the reference. The pool is only young after the
-// camera moved into a new area, so the warm up doesn't cost the whole pool
+const uint SURFEL_MAX_COUNT = 262144u;
+// Rays a surfel asks for in a frame at most: the upper end of the adaptive
+// count of surfel_gi_update.comp (the reference mixes 4 and 64 with the
+// variance of the mean of the surfel)
+const uint SURFEL_MAX_RAYS = 64u;
+// Rays of a surfel which is warmed up (see SURFEL_WARMUP_FRAMES) and the size
+// of the ray buffers of the pool
 const uint SURFEL_WARMUP_RAYS = 64u;
 // Rays of all the surfels of a frame at most, the surfels which don't get any
 // keep their radiance (they're traced in the next frame). This is the only
@@ -330,16 +299,14 @@ const uint SURFEL_WARMUP_RAYS = 64u;
 // past the u_ray_ids, u_ray_results and u_ray_data buffers of the pool
 const uint SURFEL_RAY_BUDGET = SURFEL_MAX_COUNT * SURFEL_WARMUP_RAYS;
 // Rays the surfels ask for in a frame, before the adaptive ray counts of the
-// frame before scale them down when the pool is full. Every surfel asks for
-// SURFEL_MAX_RAYS (see surfel_gi_update.comp), so the target is the budget:
-// the soft cut only scales the frame down if the requests of the pool would
-// take more than the rays of the buffers, which the update pass never asks
+// frame before scale them down when the pool is full (see
+// surfel_gi_update.comp): the budget of the rays of the buffers
 const uint SURFEL_RAY_TARGET = SURFEL_RAY_BUDGET;
 // Frames a surfel is warmed up: a surfel which the camera just created has
 // only the seed of the generate pass (the field around it, or the environment)
 // as its value, so its first frames merge the samples with a large temporal
 // window (see surfel_gi_integrate.comp). The 1% window of a converged surfel
-// takes ~50 frames of 8 rays (a second) to leave a wrong seed, which the
+// takes ~50 frames of a few rays (a second) to leave a wrong seed, which the
 // camera sees as a lagging value in every area it moves into; the progressive
 // average of the warm up reaches the light of the surface in a few frames and
 // keeps averaging the noise of the few rays, and the fade in of the generate
@@ -354,36 +321,23 @@ const uint SURFEL_WARMUP_FRAMES = 12u;
 // rays of the neighbours; a slot which the pool needs is taken from the oldest
 // of them (see surfelEvict)
 const uint SURFEL_SLEEPING_LIFE = 300u;
-// Sleeping surfels the tracing of a frame spawns at most: the cells of the
-// surfaces the rays reach are filled in a few frames without the tracing
-// taking the mass of the frame. A sleeping spawn takes the slot of the oldest
-// surfel which the camera doesn't see when the pool is full (see surfelEvict),
-// so the limit is the growth of the field of the view and not a part of the
-// pool
+// Secondary ray spawns use free slots, never the last eighth of the pool,
+// which is the reserve of the spawns of the holes of the generate pass (a
+// sleeping surfel only becomes visible when a pixel finds it, see
+// surfel_gi_trace.comp); the count of the spawns of a frame is bounded so the
+// rays don't stop on the counter, and screen-space holes may evict stale
+// surfels (see surfelEvict)
 const uint SURFEL_SLEEPING_SPAWNS = 512u;
-// Coverage of a block under which the field doesn't cover its pixel: it's a
-// hole, and the generate pass creates a surfel for it at once (see
-// surfel_gi_generate.comp). The spawn of the reference waits for the minimum
-// coverage of a 16x16 group and a random chance which falls with the coverage,
-// so the pixels the camera reveals stay black for seconds
 const float SURFEL_HOLE_COVERAGE = 0.5;
-// Spawns of the holes a frame tries at most: the holes of the screen are
-// filled within a few frames, without the fill of a screen which no surfel
-// covers at all (a turn, a teleport) turning the pool over in one frame and
-// leaving the field of the frame's rays without surfels. The count is of the
-// tries and not of the surfels: a spawn which a full cell refuses spends its
-// try too, and the cost which the limit bounds is the query of the triangle of
-// every try
-const uint SURFEL_HOLE_SPAWNS = 32768u;
 // Window of the merge of the radiance of the neighbours in the mean of a
-// surfel (see surfel_gi_share.comp) falls with the noise of its mean: a surfel
-// which is not converged merges the field around it with a large window, so
-// its mean takes the light of its area in a few frames instead of averaging
-// the noise of its few rays for a second, and a converged surfel only smooths
-// its own mean with a small one. The merge is after the estimator and it only
-// changes its mean, so its variance, its catch up and its firefly clamp are
-// the ones of the rays of the surfel: the sharing can't make the estimator
-// trust a sample which is not from its rays
+// surfel (see surfel_gi_integrate.comp) falls with the noise of its mean: a
+// surfel which is not converged merges the field around it with a large
+// window, so its mean takes the light of its area in a few frames instead of
+// averaging the noise of its few rays for a second, and a converged surfel
+// only smooths its own mean with a small one. The merge is after the
+// estimator and it only changes its mean, so its variance, its catch up and
+// its firefly clamp are the ones of the rays of the surfel: the sharing can't
+// make the estimator trust a sample which is not from its rays
 const float SURFEL_SHARING_WINDOW_CONVERGED = 0.02;
 const float SURFEL_SHARING_WINDOW_NOISY = 0.15;
 // The same windows for the surfel of a moving object (a kart, an item, a
@@ -391,7 +345,7 @@ const float SURFEL_SHARING_WINDOW_NOISY = 0.15;
 // than a static surfel, because the surface it lights moves through the scene,
 // so the light of its surroundings is the light of its new area every frame
 // while its own rays reach it with the lag of the estimator (see
-// surfel_gi_share.comp)
+// surfel_gi_integrate.comp)
 const float SURFEL_SHARING_WINDOW_DYNAMIC_CONVERGED = 0.3;
 const float SURFEL_SHARING_WINDOW_DYNAMIC_NOISY = 0.6;
 // Relative noise of the mean of a surfel (the standard error of its rays over
@@ -403,15 +357,11 @@ const float SURFEL_NOISE_HIGH = 0.2;
 // Surfels a cell takes at most from the static surfaces (surfel_gi_generate
 // comp and surfel_gi_trace.comp refuse to spawn into a cell which has this
 // many, the same kind of limit as kPerCellSurfelLimit of W298 SurfelGI, tuned
-// for our cell and surfel sizes). The list of a cell is the surfels whose
-// sphere intersects it, from the cells around it too (a cell is 3 units
-// across and a surfel reaches 1.5), so it holds the surfels of every surface
-// of the cell and of its neighbours: the cell under a kart already has
-// hundreds from the ground. The limit over the static surfels alone (see
+// for our cell and surfel sizes). The limit over the static surfels alone (see
 // CellInfo.m_count) regulates the pool (the surfels of the static surfaces are
 // the mass of it) without counting the surfels of a moving object, so the
 // kart over the ground doesn't stop the ground from refilling its field
-const uint SURFEL_CELL_SPAWN_LIMIT = 256u;
+const uint SURFEL_CELL_SPAWN_LIMIT = 64u;
 // Surfels a cell takes at most from the surface of a moving object (a kart, an
 // item, a wheel), over its static surfels and not instead of them (the spawn
 // gate of each kind counts its own surfels, see CellInfo.m_count): the kart
@@ -422,20 +372,24 @@ const uint SURFEL_CELL_SPAWN_LIMIT = 256u;
 // grass of the track). The surfels of an object move with it, so a few dozens
 // of them per cell light it and the pool keeps its free surfels for the
 // surfaces the camera reveals
-const uint SURFEL_CELL_DYNAMIC_LIMIT = 256u;
+const uint SURFEL_CELL_DYNAMIC_LIMIT = 64u;
 // Entries of the list of a cell which the gather of a pixel of
 // surfel_gi_generate.comp walks at most. The list is not ordered: the walk has
 // to cover the whole list, a sample of it (or its first entries alone) leaves
 // the pixels which that sample doesn't reach with no field. The limits above
-// keep a cell under this bound with headroom for the surfels which its
-// neighbours register in it (a surfel is in the 27 cells around it), so the
-// walk covers every list in practice (a list which was cut would leave the
+// keep a cell under this bound with headroom: a cell of the cascade of a
+// surface holds the surfels of that surface (a surfel covers the cell of its
+// distance), the hysteresis adds the surfels of the cascade on the other side
+// of a boundary (see SURFEL_CASCADE_HYSTERESIS), and each kind of surfel
+// (static and dynamic) has its own limit. A list which was cut would leave the
 // surface of the cell which is not the one of the object which crowds it
-// without light, in world space blocks); the loop stops at the count of the
+// without light in world space blocks; the loop stops at the count of the
 // cell, so a long bound costs nothing outside of the crowded cells
-const uint SURFEL_CELL_LIST_MAX = 2048u;
-// (surfel, cell) pairs of a frame at most (a surfel is in 27 cells at most)
-const uint SURFEL_CELL_SURFEL_COUNT = SURFEL_MAX_COUNT * 32u;
+const uint SURFEL_CELL_LIST_MAX = 512u;
+// (surfel, cell) pairs of a frame at most: a surfel registers in the cells of
+// one or two cascades which its sphere intersects (a sphere of 1.2 cells of its
+// cascade reaches 3 or 4 cells per axis)
+const uint SURFEL_CELL_SURFEL_COUNT = SURFEL_MAX_COUNT * 64u;
 // Entries of the list of a cell which surfelGatherIrradiance walks at most,
 // starting from a random one and wrapping around (the list of a cell of a
 // surface is long: the surfels which cover the point are a few of them, and
@@ -449,25 +403,15 @@ const uint SURFEL_GATHER_VALID = 4u;
 // walks at most (from a random one, wrapping around), and the surfels which
 // contribute to it at most: the neighbours of a surfel are the surfels of its
 // own cell which reach it (a few of the hundreds of the list), so the sharing
-// is a sampled merge, and the window of the merge (see surfel_gi_share.comp)
-// makes the sample enough
+// is a sampled merge, and the window of the merge (see
+// surfel_gi_integrate.comp) makes the sample enough
 const uint SURFEL_SHARE_WALK = 8u;
 const uint SURFEL_SHARE_VALID = 4u;
-// Distance of the hit of a ray of a surfel in the depth moments, in its
-// radiuses (a miss is the range, so a direction of the sky which a texel never
-// sees is not a surface near the surfel), and the floor of their variance in
-// the same unit: a surface 5% of the radius away from the mean distance of a
-// texel is as visible as one at the mean (the Chebyshev bound of
-// surfelVisibility, which is not the one of a true distribution of the
-// distances)
-const float SURFEL_DEPTH_RANGE = 4.0;
-const float SURFEL_DEPTH_VARIANCE = 0.05;
-// Part of the directions of a ray which is sampled with the cosine weighted
-// hemisphere when the irradiance map of the surfel guides them (the mixture of
-// the guiding and the cosine, see surfelSampleDirection): 1/4 of the rays find
-// the light the map doesn't have yet, and the weight of a sample of a texel
-// which the map values the most is 1 / (1/4 + 3/4 * 27 / 36) = 2/3 of the one
-// of a cosine weighted ray
+// Partition of the directions of a ray between the cosine weighted hemisphere
+// and the guided sampling of the irradiance map of the surfel (see
+// surfelSampleDirection): 1/4 of the rays find the light the map doesn't have
+// yet, and the weight of a sample of a texel which the map values the most is
+// 1 / (1/4 + 3/4 * 27 / 36) = 2/3 of the one of a cosine weighted ray
 const float SURFEL_GUIDE_MIX = 0.25;
 // Relative noise of the samples of the estimator which the deviation of the
 // firefly clamp has at least, and the deviation itself (see surfelMSME): a
@@ -493,25 +437,24 @@ const uint SURFEL_PATH_SEGMENTS = 3u;
 // but it's the light of a hit, so its life stays full while it's used (see
 // surfel_gi_update.comp)
 const uint SURFEL_MAX_LIFE = 1200u;
-// A surfel radius is this part of the radius of its cell at least. The radius
-// of a surfel which covers the pixels of its surface shrinks with the distance
-// of the camera (see surfelCoverRadius), so without a large floor the surfels
-// of a close surface (a kart a few units away) are a fraction of the size of
-// the ones of the track ahead: the field is finer and denser where the camera
-// is close, which the smooth ambient light of the GI doesn't need. Half of the
-// radius of the cell keeps a surfel as large as a good part of it wherever the
-// camera is, so the near surfaces have fewer, larger surfels like the far ones
-const float SURFEL_MIN_SIZE_RATIO = 0.5;
-// Cells per axis of the inner cube of the grid, layers of each frustum, ratio
-// of the size of the layers, half size of the inner cube (in cells: (2 *
-// SURFEL_CELL_N + 6 * SURFEL_CELL_M) * SURFEL_CELL_N * SURFEL_CELL_N). The 32
-// layers reach 96 + 3 * (1.3^32 - 1) / 0.3 ~= 44336 units from the camera, so
-// the grid has every surface of the scene whatever its distance
-const int SURFEL_CELL_N = 64;
-const int SURFEL_CELL_M = 32;
-const int SURFEL_CELL_HALF_N = SURFEL_CELL_N / 2;
-const float SURFEL_CELL_P = 1.3;
-const uint SURFEL_CELL_COUNT = 1048576u;
+// Radius of a surfel near the camera: 1.2 times the size of a cell of the
+// finest cascade, the ratio of the reference. A surfel of the cascade of its
+// distance is about this large over the cell of that cascade (see surfelRadius)
+const float SURFEL_BASE_RADIUS = 0.6;
+// Hysteresis of the cascade of a position, in cascades: a position within this
+// distance of the boundary of two cascades registers its surfel in both, so a
+// surfel near the boundary is found by the pixels on both sides of it and
+// doesn't flicker between two cascades while the camera moves
+const float SURFEL_CASCADE_HYSTERESIS = 0.2;
+// Cells per axis of a cascade, and cascades of the grid: the cube of a cascade
+// is SURFEL_CASCADE_CELLS * m_cell_size * 2^cascade world units across, so the
+// 14 cascades reach 32 * 0.5 * 2^13 = 131072 units from the camera, and every
+// surface of the scene is in a cell whatever its distance
+const int SURFEL_CASCADE_CELLS = 32;
+const int SURFEL_CASCADE_COUNT = 14;
+const uint SURFEL_CELL_COUNT = uint(SURFEL_CASCADE_CELLS) *
+    uint(SURFEL_CASCADE_CELLS) * uint(SURFEL_CASCADE_CELLS) *
+    uint(SURFEL_CASCADE_COUNT);
 
 const uint SURFEL_NONE = 0xFFFFFFFFu;
 const uint SURFEL_STATUS_SLEEPING = 1u;
@@ -580,97 +523,72 @@ ivec4 surfelHalfRect(ivec4 rect)
     return ivec4(rect.xy >> 1, (rect.zw + 1) >> 1);
 }
 
-// The cell (x, y, z) of a world position in the region w (0 is the inner cube,
-// 1 and 2 the X frustums, 3 and 4 the Y ones and 5 and 6 the Z ones). The cell
-// can be outside of the grid, see surfelCellValid
+// The level of the cascade of a position (see SURFEL_CASCADE_COUNT): how many
+// times the half size of the finest cascade (in its cells) the position is away
+// from the origin of the cascades, so the cell of the position is 2^level times
+// the one of the finest cascade. It's negative (or 0) for the positions of the
+// finest cascade
+float surfelCascadeFloat(vec3 position)
+{
+    const vec3 relative = abs(position - pc.m_origin.xyz);
+    const float max_cell = max(max(relative.x, relative.y), relative.z) /
+        pc.m_cell_size + 0.5;
+    return log2(max_cell / (0.5 * float(SURFEL_CASCADE_CELLS)));
+}
+
+int surfelCascadeLevel(float level)
+{
+    return clamp(int(ceil(max(level, 0.0))), 0, SURFEL_CASCADE_COUNT - 1);
+}
+
+// The cascades a surfel of a position registers in: its own one, and the one
+// on the other side of the boundary when the position is within the hysteresis
+// of it. The passes which find the surfels around a point only read its own
+// cascade (see surfelCell), so the surfels near a boundary of a cascade are
+// found from both sides of it while the camera moves and the surfels don't
+// flicker between the two
+ivec2 surfelCascadeRange(vec3 position)
+{
+    const float level = surfelCascadeFloat(position);
+    return ivec2(surfelCascadeLevel(level - SURFEL_CASCADE_HYSTERESIS),
+        surfelCascadeLevel(level + SURFEL_CASCADE_HYSTERESIS));
+}
+
+// The cell (x, y, z) of a position in a cascade: SURFEL_CASCADE_CELLS cells per
+// axis centered on the origin of the cascades, w is the cascade
+ivec4 surfelCellAt(vec3 position, int cascade)
+{
+    const float size = pc.m_cell_size * exp2(float(cascade));
+    const float center = 0.5 * float(SURFEL_CASCADE_CELLS);
+    const ivec3 cell = ivec3(floor((position - pc.m_origin.xyz) / size)) +
+        ivec3(int(center));
+    return ivec4(cell, cascade);
+}
+
+// The cell of a world position in its own cascade, the one which the passes
+// which find the surfels around a point read. The cell can be outside of the
+// grid, see surfelCellValid
 ivec4 surfelCell(vec3 position)
 {
-    const vec3 relative = position - pc.m_origin.xyz;
-    const float half_d = pc.m_half_d;
-    if (abs(relative.x) <= half_d && abs(relative.y) <= half_d &&
-        abs(relative.z) <= half_d)
-    {
-        // The cube is uniform
-        const ivec3 index = clamp(ivec3((relative + half_d) / pc.m_delta),
-            ivec3(0), ivec3(SURFEL_CELL_N - 1));
-        return ivec4(index, 0);
-    }
-
-    // The main axis of the frustum, and the indices of the other axes
-    int region;
-    float main_position;
-    float other_one;
-    float other_two;
-    const float abs_x = abs(relative.x);
-    const float abs_y = abs(relative.y);
-    const float abs_z = abs(relative.z);
-    if (abs_x >= abs_y && abs_x >= abs_z)
-    {
-        region = relative.x > 0.0 ? 1 : 2;
-        main_position = relative.x;
-        other_one = relative.y;
-        other_two = relative.z;
-    }
-    else if (abs_y >= abs_x && abs_y >= abs_z)
-    {
-        region = relative.y > 0.0 ? 3 : 4;
-        main_position = relative.y;
-        other_one = relative.x;
-        other_two = relative.z;
-    }
-    else
-    {
-        region = relative.z > 0.0 ? 5 : 6;
-        main_position = relative.z;
-        other_one = relative.x;
-        other_two = relative.y;
-    }
-
-    // Distance outside of the cube of the layer, the size of the layers grows
-    // with SURFEL_CELL_P (the same as surfelMaxRadius)
-    const float outside = abs(main_position) - half_d;
-    const int layer = int(log(1.0 + float(SURFEL_CELL_N) * outside *
-        (SURFEL_CELL_P - 1.0) / (2.0 * half_d)) / log(SURFEL_CELL_P));
-    const float n = float(SURFEL_CELL_N);
-    int u = int(ceil(other_one * n * 0.5 / main_position)) +
-        SURFEL_CELL_HALF_N;
-    int v = int(ceil(other_two * n * 0.5 / main_position)) +
-        SURFEL_CELL_HALF_N;
-    if (u > 0)
-        u--;
-    if (v > 0)
-        v--;
-    return ivec4(layer, u, v, region);
+    return surfelCellAt(position,
+        surfelCascadeLevel(surfelCascadeFloat(position)));
 }
 
 bool surfelCellValid(ivec4 cell)
 {
-    if (cell.w < 0 || cell.w > 6)
-        return false;
-    if (cell.x < 0 || cell.y < 0 || cell.z < 0)
-        return false;
-    if (cell.w == 0)
-    {
-        return cell.x < SURFEL_CELL_N && cell.y < SURFEL_CELL_N &&
-            cell.z < SURFEL_CELL_N;
-    }
-    return cell.x < SURFEL_CELL_M && cell.y < SURFEL_CELL_N &&
-        cell.z < SURFEL_CELL_N;
+    return cell.w >= 0 && cell.w < SURFEL_CASCADE_COUNT &&
+        cell.x >= 0 && cell.x < SURFEL_CASCADE_CELLS &&
+        cell.y >= 0 && cell.y < SURFEL_CASCADE_CELLS &&
+        cell.z >= 0 && cell.z < SURFEL_CASCADE_CELLS;
 }
 
-// Index of a cell in the buffers (the inner cube first, then the 6 frustums)
+// Index of a cell in the buffers (the cells of a cascade first, then the ones
+// of the next cascade)
 uint surfelCellIndex(ivec4 cell)
 {
-    if (cell.w == 0)
-    {
-        return uint(cell.x + SURFEL_CELL_N * (cell.y +
-            SURFEL_CELL_N * cell.z));
-    }
-    const uint n = uint(SURFEL_CELL_N);
-    const uint start = n * n * n;
-    const uint layer = uint(cell.w - 1);
-    return start + layer * uint(SURFEL_CELL_M) * n * n +
-        uint(cell.x) * n * n + uint(cell.y * SURFEL_CELL_N + cell.z);
+    const uint n = uint(SURFEL_CASCADE_CELLS);
+    return (uint(cell.w) * n + uint(cell.z)) * n * n +
+        uint(cell.y) * n + uint(cell.x);
 }
 
 // Length of the list of a cell from its CellInfo.m_count (the low 16 bits, see
@@ -686,171 +604,50 @@ uint surfelCellDynamicCount(uint count)
     return count >> 16u;
 }
 
-// Offsets of the 27 cells around a cell
-const ivec3 SURFEL_NEIGHBORS[27] = ivec3[27](
-    ivec3(-1, -1, -1), ivec3(-1, 0, -1), ivec3(-1, 1, -1),
-    ivec3(0, -1, -1), ivec3(0, 0, -1), ivec3(0, 1, -1),
-    ivec3(1, -1, -1), ivec3(1, 0, -1), ivec3(1, 1, -1),
-    ivec3(-1, -1, 0), ivec3(-1, 0, 0), ivec3(-1, 1, 0),
-    ivec3(0, -1, 0), ivec3(0, 0, 0), ivec3(0, 1, 0),
-    ivec3(1, -1, 0), ivec3(1, 0, 0), ivec3(1, 1, 0),
-    ivec3(-1, -1, 1), ivec3(-1, 0, 1), ivec3(-1, 1, 1),
-    ivec3(0, -1, 1), ivec3(0, 0, 1), ivec3(0, 1, 1),
-    ivec3(1, -1, 1), ivec3(1, 0, 1), ivec3(1, 1, 1));
-
-// Whether the sphere of the surfel intersects the cell (the AABB of the cell
-// in the world)
-bool surfelIntersectsCell(Surfel surfel, ivec4 cell)
+// Whether the sphere of a surfel at a position intersects the cell (the AABB
+// of the cell in the world)
+bool surfelIntersectsCell(vec3 position, float radius, ivec4 cell)
 {
     if (!surfelCellValid(cell))
         return false;
-    const float half_d = pc.m_half_d;
-    const int half_n = SURFEL_CELL_HALF_N;
-    vec3 min_position;
-    vec3 max_position;
-    if (cell.w == 0)
-    {
-        min_position = -half_d + vec3(cell.xyz) * pc.m_delta;
-        max_position = min_position + pc.m_delta;
-    }
-    else
-    {
-        int u = cell.y;
-        int v = cell.z;
-        if (u < half_n)
-            u -= half_n;
-        else
-            u = u - half_n + 1;
-        if (v < half_n)
-            v -= half_n;
-        else
-            v = v - half_n + 1;
-        // Size of the layer from the cube, the near one first
-        const float near_size = pc.m_delta * (1.0 - pow(SURFEL_CELL_P,
-            float(cell.x))) / (1.0 - SURFEL_CELL_P);
-        const float far_size = pc.m_delta * (1.0 - pow(SURFEL_CELL_P,
-            float(cell.x + 1))) / (1.0 - SURFEL_CELL_P);
-        float main_min;
-        float main_max;
-        if ((cell.w & 1) == 0)
-        {
-            main_min = -(half_d + far_size);
-            main_max = -(half_d + near_size);
-        }
-        else
-        {
-            main_min = half_d + near_size;
-            main_max = half_d + far_size;
-        }
-        const float n = float(SURFEL_CELL_N);
-        // The frustum of a layer is a truncated pyramid, the cell is the quad
-        // between the u and v indices at both ends of it. surfelCell divides
-        // the other axis by the distance from the camera (not from the face of
-        // the cube), so the lateral extent at main_min/main_max is the ratio
-        // times that distance. Adding half_d here (as the reference does) moves
-        // the near end of the quad outward and drops surfels inside the inner
-        // part of their own cell, which leaves their cells empty
-        float a_one;
-        float b_one;
-        float c_one;
-        float d_one;
-        if (u > 0)
-        {
-            a_one = 2.0 * float(u - 1) / n * main_min;
-            b_one = 2.0 * float(u) / n * main_max;
-            c_one = 2.0 * float(u - 1) / n * main_max;
-            d_one = 2.0 * float(u) / n * main_min;
-        }
-        else
-        {
-            a_one = 2.0 * float(u + 1) / n * main_min;
-            b_one = 2.0 * float(u) / n * main_max;
-            c_one = 2.0 * float(u + 1) / n * main_max;
-            d_one = 2.0 * float(u) / n * main_min;
-        }
-        const float min_one = min(min(a_one, b_one), min(c_one, d_one));
-        const float max_one = max(max(a_one, b_one), max(c_one, d_one));
-        float a_two;
-        float b_two;
-        float c_two;
-        float d_two;
-        if (v > 0)
-        {
-            a_two = 2.0 * float(v - 1) / n * main_min;
-            b_two = 2.0 * float(v) / n * main_max;
-            c_two = 2.0 * float(v - 1) / n * main_max;
-            d_two = 2.0 * float(v) / n * main_min;
-        }
-        else
-        {
-            a_two = 2.0 * float(v + 1) / n * main_min;
-            b_two = 2.0 * float(v) / n * main_max;
-            c_two = 2.0 * float(v + 1) / n * main_max;
-            d_two = 2.0 * float(v) / n * main_min;
-        }
-        const float min_two = min(min(a_two, b_two), min(c_two, d_two));
-        const float max_two = max(max(a_two, b_two), max(c_two, d_two));
-        if (cell.w == 1 || cell.w == 2)
-        {
-            min_position = vec3(main_min, min_one, min_two);
-            max_position = vec3(main_max, max_one, max_two);
-        }
-        else if (cell.w == 3 || cell.w == 4)
-        {
-            min_position = vec3(min_one, main_min, min_two);
-            max_position = vec3(max_one, main_max, max_two);
-        }
-        else
-        {
-            min_position = vec3(min_one, min_two, main_min);
-            max_position = vec3(max_one, max_two, main_max);
-        }
-    }
-    min_position += pc.m_origin.xyz;
-    max_position += pc.m_origin.xyz;
-    const vec3 closest = clamp(surfel.m_position, min_position, max_position);
-    const vec3 bias = closest - surfel.m_position;
-    return dot(bias, bias) <= surfel.m_radius * surfel.m_radius;
+    const float size = pc.m_cell_size * exp2(float(cell.w));
+    const vec3 relative = position - pc.m_origin.xyz;
+    const vec3 min_position = (vec3(cell.xyz) -
+        vec3(0.5 * float(SURFEL_CASCADE_CELLS))) * size;
+    const vec3 max_position = min_position + vec3(size);
+    const vec3 closest = clamp(relative, min_position, max_position);
+    const vec3 bias = closest - relative;
+    return dot(bias, bias) <= radius * radius;
 }
 
-// Radius of a surfel which covers the same pixels as a surfel_size area of the
-// viewport at this distance. The reference (calcRadiusApprox of
-// shaderUtils_surfel_cell.glsl) passes SceneCamera::fov, which is the field of
-// view in degrees (CameraManip.getFov() of the reference returns degrees), so
-// the radius is much larger than the area of surfelSize pixels: it's clamped by
-// surfelMaxRadius, i.e. it's about the size of the cell of the grid at its
-// distance, and the pool covers the screen (with the radius of surfelSize
-// pixels it would need thousands of times more surfels and every texel would be
-// unfilled). The area of a surfel of the reference is scaled by
-// SURFEL_SIZE_SCALE: the surfels are fewer and larger (the area of a surfel, so
-// the square of its radius), which the smooth light of the GI doesn't need
-// finer. The area of a surfel is 16x the one of a surfel of 4, so the density
-// of the surfels (surfels per unit of surface) is 16x lower: the pool of 65536
-// has the coverage of a pool of 1M surfels of 4, and the pool of 131072 has
-// twice that coverage
-const float SURFEL_SIZE_SCALE = 64.0;
-float surfelCoverRadius(float distance)
+// The range of the cells of a cascade which the sphere of a surfel intersects,
+// clamped to the cascade (the caller still tests every cell of the range, see
+// surfelIntersectsCell)
+void surfelCellRange(vec3 position, float radius, int cascade,
+                     out ivec3 min_cell, out ivec3 max_cell)
 {
-    const float resolution = max(float(pc.m_full_width),
-        float(pc.m_full_height));
-    const float fov = degrees(pc.m_fov);
-    const float angle = sqrt(pc.m_surfel_size * SURFEL_SIZE_SCALE / 3.14159265) *
-        fov * 2.0 / max(resolution, 1.0);
-    return distance * tan(angle);
+    const float size = pc.m_cell_size * exp2(float(cascade));
+    const vec3 relative = (position - pc.m_origin.xyz) / size;
+    const float extent = radius / size;
+    const float center = 0.5 * float(SURFEL_CASCADE_CELLS);
+    const int limit = SURFEL_CASCADE_CELLS - 1;
+    min_cell = clamp(ivec3(floor(relative - vec3(extent)) + vec3(center)),
+        ivec3(0), ivec3(limit));
+    max_cell = clamp(ivec3(floor(relative + vec3(extent)) + vec3(center)),
+        ivec3(0), ivec3(limit));
 }
 
-// Radius of the cell of a position at this distance from the camera (the size
-// of the layer of the frustum it's in): a surfel is at most this large
-float surfelMaxRadius(float distance)
+// Radius of a surfel at a position: SURFEL_BASE_RADIUS while it's near the
+// camera (1.2 cells of the finest cascade, so the field of the surfaces around
+// the camera is finer than the one of the cascades beyond), then the distance
+// over the cascade radius, i.e. 1.2 cells of the cascade of its distance (see
+// surfelCascadeFloat). The pool covers the whole distance of the scene with a
+// bounded number of surfels per cell instead of spending its surfels on the
+// near field
+float surfelRadius(vec3 position)
 {
-    const float cell_radius = pc.m_half_d / float(SURFEL_CELL_N);
-    if (distance <= pc.m_half_d)
-        return cell_radius;
-    const float outside = distance - pc.m_half_d;
-    const int layer = int(log(1.0 + float(SURFEL_CELL_N) * outside *
-        (SURFEL_CELL_P - 1.0) / (2.0 * pc.m_half_d)) /
-        log(SURFEL_CELL_P));
-    return cell_radius * pow(SURFEL_CELL_P, float(layer));
+    const float distance = length(position - pc.m_origin.xyz);
+    return SURFEL_BASE_RADIUS * max(1.0, distance / pc.m_cascade_radius);
 }
 
 // The hash of Wellons ("Prospecting for Hash Functions")
@@ -1001,9 +798,9 @@ ivec2 surfelSquareTexel(vec2 uv)
 // Top left pixel of the 6x6 tile of the irradiance map of the surfel
 ivec2 surfelIrradianceBase(uint index)
 {
-    const ivec2 resolution = textureSize(u_surfel_irradiance, 0);
-    const int columns = resolution.x / 6;
-    return ivec2(int(index) % columns, int(index) / columns) * 6;
+    // The atlas has GEVulkanSurfelGI::IRRADIANCE_COLUMNS columns.
+    const uint columns = 512u;
+    return ivec2(index % columns, index / columns) * 6;
 }
 
 // The 6 sums of the rows of the 6x6 irradiance map of a surfel (see SurfelLight)
@@ -1263,26 +1060,29 @@ void surfelFree(uint index)
 }
 
 // The slot of a surfel which the pool can reuse when it has no free one: the
-// surfel which the camera doesn't see, the oldest seen one first. A surface
-// which the camera reveals must always have a slot for its surfels (a spawn
-// which fails is a pixel with no ambient light until the life of a surfel of
-// an area the camera left runs out), so the spawns reuse the slot of the least
-// valuable surfel of the pool instead of stopping when it's full. The surfels
-// which the camera saw in the last frames are never taken (the field of the
-// view is the light of the pixels), and a surfel which the rays of the frame
-// use is never taken either: one whose own rays are traced now, and one which
-// a ray used as the light of its hit (a sleeping surfel outside of the view,
-// see surfelGatherIrradiance). The scan is a few slots of the pool: a spawn
-// which has no free slot is the exception, and the field of the view is a
-// small part of a full pool, so one of the slots of the scan is a surfel of an
-// area the camera left. The slot is claimed by clearing its alive bit (the
-// spawns of a frame run at once, so two of them would take the same slot and
-// lose a surfel): SURFEL_NONE if another spawn claimed the best candidate
-// first, so the caller gives up this spawn instead of writing the slot of
-// another one
+// oldest surfel of an area the camera left. A surface which the camera reveals
+// must always have a slot for its surfels (a spawn which fails is a pixel with
+// no ambient light until the life of a surfel of an area the camera left runs
+// out), so the spawns reuse the slot of the least valuable surfel of the pool
+// instead of stopping when it's full. The surfels which the camera saw in the
+// last frames are never taken (the field of the view is the light of the
+// pixels), and a surfel which the field of the rays of the frame used as the
+// light of a hit is never taken either (a sleeping surfel outside of the view,
+// see surfelGatherIrradiance). The rays of a surfel are not a reason to keep
+// it: the generate pass runs after the trace and the integrate passes of the
+// frame, so the rays which the surfels traced this frame were already read,
+// and their count would rule out every surfel of the pool (surfel_gi_update
+// comp gives each of them rays). The scan is a few dozens of slots of the
+// pool: a spawn which has no free slot is the exception, and the field of the
+// view is a small part of a full pool, so one of the slots of the scan is a
+// surfel of an area the camera left. The slot is claimed by clearing its alive
+// bit (the spawns of a frame run at once, so two of them would take the same
+// slot and lose a surfel): SURFEL_NONE if another spawn claimed the best
+// candidate first, so the caller gives up this spawn instead of writing the
+// slot of another one
 uint surfelEvict(uint seed)
 {
-    const uint scan = 8u;
+    const uint scan = 32u;
     const uint start = uint(surfelRand(seed, pc.m_frame + 31u) *
         float(SURFEL_MAX_COUNT));
     uint best = SURFEL_NONE;
@@ -1296,7 +1096,6 @@ uint surfelEvict(uint seed)
         const Surfel other = u_surfels[candidate];
         const uint age = pc.m_frame - other.m_last_seen;
         if ((other.m_status & SURFEL_STATUS_ALIVE) == 0u ||
-            other.m_ray_count != 0u ||
             (other.m_status & (SURFEL_STATUS_SEEN | SURFEL_STATUS_REFED)) !=
             0u || age <= best_age)
             continue;
@@ -1312,56 +1111,6 @@ uint surfelEvict(uint seed)
     return best;
 }
 
-// The visibility of a surfel from a point of the world (Chebyshev's inequality
-// on the depth moments of the texel of its direction, the same test as the
-// probes of DDGI and W298 SurfelGI): the rays of the surfel which its map sent
-// that way stopped at the mean distance m of the texel, with a variance s^2, so
-// a point at the distance d from the surfel is at least (1 - s^2 / (s^2 + (d -
-// m)^2)) visible. A point which is not farther than the mean is not hidden by
-// the surface the texel sees (1), and one behind it is hidden more and more as
-// it's farther (a wall at 2 units doesn't hide the light of the surfel from 3
-// units as much as from 10). The deviation of the textures is clamped to a part
-// of the range of the moments, so a texel which the rays didn't hit (a variance
-// of 0) doesn't hide every point behind its first hit, and one which the rays
-// hit at different distances doesn't hide everything (its variance is large).
-// This is the visibility of the surfel alone, as the DDGI probe map: the
-// shadows of the direct lights are traced.
-float surfelVisibility(uint index, SurfelLight light, vec3 point)
-{
-    const float range = light.m_depth_range;
-    if (range <= 0.0)
-        return 1.0;
-    const vec3 bias = point - light.m_position_radius.xyz;
-    const float dist = length(bias);
-    if (dist < max(light.m_position_radius.w * 0.05, 1.0e-3))
-        return 1.0;
-
-    // The direction in the space of the surfel, and the texel of the map of
-    // that direction (a point behind the surface is the horizon of its normal)
-    vec3 tangent;
-    vec3 bitangent;
-    surfelTangentFrame(light.m_normal_frame.xyz, tangent, bitangent);
-    const vec3 local = vec3(dot(bias, tangent), dot(bias, bitangent),
-        dot(bias, light.m_normal_frame.xyz));
-    const vec3 planar = vec3(local.xy, 0.0);
-    const float planar_length = length(planar);
-    const vec3 direction = local.z >= 0.0 || planar_length < 1.0e-9 ?
-        local : planar / planar_length;
-    const ivec2 texel = surfelSquareTexel(surfelDirToSquare(
-        normalize(direction)));
-    const vec2 moments = texelFetch(u_surfel_depth,
-        surfelIrradianceBase(index) + texel, 0).rg;
-    const float mean = min(moments.x, range);
-    const float variance = max(moments.y - mean * mean, 0.0);
-    const float floor_deviation = range * SURFEL_DEPTH_VARIANCE;
-    const float deviation = max(variance, floor_deviation * floor_deviation);
-    const float point_distance = min(dist, range);
-    if (point_distance <= mean)
-        return 1.0;
-    const float difference = point_distance - mean;
-    return deviation / (deviation + difference * difference);
-}
-
 // The irradiance of a point of a surface from the surfels of its cell (the
 // finalizePathWithSurfel of SurfelPlus, moved to every hit of the multi
 // segment path of surfel_gi_trace.comp): the field of the surfels is the light
@@ -1369,24 +1118,15 @@ float surfelVisibility(uint index, SurfelLight light, vec3 point)
 // The list of the cell is walked from a random entry (the walk wraps around,
 // SURFEL_GATHER_WALK entries), and every surfel which covers the point (its
 // radius and the face of both of its normals) contributes its radiance
-// weighted by the angle of the normals, the distance and its visibility from
-// the point (the depth moments of the surfel, see surfelVisibility: a surfel
-// which a wall hides from the point doesn't light it). The walk stops at
+// weighted by the angle of the normals and the distance. The walk stops at
 // SURFEL_GATHER_VALID surfels: the samples of the rays of a surfel and the
 // estimator of its mean average the field, so a few of them are enough, and
 // the pixels which the camera sees don't have to walk the whole list.
-// sun_direction is the normalized direction of the sun, and sun is the
-// visibility of the sun at the point, the weighted mean of the cached
-// visibility of the surfels which face the sun (-1 if none of them was
-// traced): a hit whose field covers it takes its shadow from the field instead
-// of tracing a shadow ray (the direct light cache of the reference article).
 // Returns false if no surfel of the cell covers the point
-bool surfelGatherIrradiance(vec3 position, vec3 normal,
-                            vec3 sun_direction, uint random_index,
-                            out vec3 irradiance, out float sun)
+bool surfelGatherIrradiance(vec3 position, vec3 normal, uint random_index,
+                            out vec3 irradiance)
 {
     irradiance = vec3(0.0);
-    sun = -1.0;
     const ivec4 cell = surfelCell(position);
     if (!surfelCellValid(cell))
         return false;
@@ -1400,8 +1140,6 @@ bool surfelGatherIrradiance(vec3 position, vec3 normal,
     const uint start = uint(surfelRand(random_index, pc.m_frame) *
         float(count));
     vec4 sum = vec4(0.0);
-    float sun_sum = 0.0;
-    float sun_weight = 0.0;
     uint valid = 0u;
     for (uint i = 0u; i < min(count, SURFEL_GATHER_WALK); i++)
     {
@@ -1441,7 +1179,6 @@ bool surfelGatherIrradiance(vec3 position, vec3 normal,
             contribution = max(cosine_theta, 0.0) * pow(1.0 -
                 dist / other_radius, 2.0);
         }
-        contribution *= surfelVisibility(other_index, other, position);
         if (contribution > 0.0)
         {
             sum += vec4(other.m_radiance, 1.0) * contribution;
@@ -1450,15 +1187,6 @@ bool surfelGatherIrradiance(vec3 position, vec3 normal,
             // doesn't slide away from the surfels of the rays)
             if ((u_surfels[other_index].m_status & SURFEL_STATUS_REFED) == 0u)
                 atomicOr(u_surfels[other_index].m_status, SURFEL_STATUS_REFED);
-            // The visibility of the sun is the one of the surfels which the sun
-            // lights directly (a surfel which faces away from it is not a
-            // shadow, the sun doesn't light the surface it's on)
-            const float sun_cosine = dot(other_normal, sun_direction);
-            if (other.m_sun >= 0.0 && sun_cosine > 0.0)
-            {
-                sun_sum += other.m_sun * contribution;
-                sun_weight += contribution;
-            }
             valid++;
         }
         if (valid >= SURFEL_GATHER_VALID)
@@ -1467,7 +1195,5 @@ bool surfelGatherIrradiance(vec3 position, vec3 normal,
     if (sum.w <= 0.1)
         return false;
     irradiance = sum.xyz / sum.w;
-    if (sun_weight > 0.0)
-        sun = clamp(sun_sum / sun_weight, 0.0, 1.0);
     return true;
 }

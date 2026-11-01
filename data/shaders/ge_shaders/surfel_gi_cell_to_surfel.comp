@@ -1,9 +1,9 @@
 // The ids of the surfels of every cell of GEVulkanSurfelGI: a surfel is in the
-// list of the 27 cells it intersects (see surfelIntersectsCell), so the
-// irradiance of a pixel can be gathered from the cell of its world position
-// alone. The offset of a cell was computed by surfel_gi_cell_info.comp, the
-// count is the position inside the range (it's cleared after the offsets are
-// computed)
+// list of every cell of its cascades which its sphere intersects (see
+// surfelIntersectsCell), so the irradiance of a pixel can be gathered from the
+// cell of its world position alone. The offset of a cell was computed by
+// surfel_gi_cell_info.comp, the count is the position inside the range (it's
+// cleared after the offsets are computed)
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 #include "utils/surfel_gi.glsl"
@@ -16,20 +16,37 @@ void main()
     const Surfel surfel = u_surfels[index];
     if ((surfel.m_status & SURFEL_STATUS_ALIVE) == 0u)
         return;
-    const ivec4 cell = surfelCell(surfel.m_position);
-    for (int i = 0; i < 27; i++)
+    const bool dynamic = surfel.m_pad == SURFEL_PAD_DYNAMIC;
+    // The cells of the cascades of the surfel which its sphere intersects
+    const ivec2 cascades = surfelCascadeRange(surfel.m_position);
+    for (int cascade = cascades.x; cascade <= cascades.y; cascade++)
     {
-        const ivec4 neighbour = cell + ivec4(SURFEL_NEIGHBORS[i], 0);
-        if (!surfelIntersectsCell(surfel, neighbour))
-            continue;
-        const uint flat_index = surfelCellIndex(neighbour);
-        const uint offset = u_cells[flat_index].m_offset;
-        // The list length is the low 16 bits of the count, the high ones count
-        // the surfels of the moving objects (see CellInfo.m_count)
-        const uint at = offset + surfelCellCount(atomicAdd(
-            u_cells[flat_index].m_count, 1u + (surfel.m_pad == SURFEL_PAD_DYNAMIC ?
-            0x10000u : 0u)));
-        if (at < SURFEL_CELL_SURFEL_COUNT)
-            u_cell_surfels[at] = index;
+        ivec3 min_cell;
+        ivec3 max_cell;
+        surfelCellRange(surfel.m_position, surfel.m_radius, cascade,
+            min_cell, max_cell);
+        for (int z = min_cell.z; z <= max_cell.z; z++)
+        {
+            for (int y = min_cell.y; y <= max_cell.y; y++)
+            {
+                for (int x = min_cell.x; x <= max_cell.x; x++)
+                {
+                    const ivec4 cell = ivec4(x, y, z, cascade);
+                    if (!surfelIntersectsCell(surfel.m_position,
+                        surfel.m_radius, cell))
+                        continue;
+                    const uint flat_index = surfelCellIndex(cell);
+                    const uint offset = u_cells[flat_index].m_offset;
+                    // The list length is the low 16 bits of the count, the high
+                    // ones count the surfels of the moving objects (see
+                    // CellInfo.m_count)
+                    const uint at = offset + surfelCellCount(atomicAdd(
+                        u_cells[flat_index].m_count, 1u +
+                        (dynamic ? 0x10000u : 0u)));
+                    if (at < SURFEL_CELL_SURFEL_COUNT)
+                        u_cell_surfels[at] = index;
+                }
+            }
+        }
     }
 }

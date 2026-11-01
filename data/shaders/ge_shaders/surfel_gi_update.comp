@@ -1,23 +1,23 @@
 // The surfels which are alive of GEVulkanSurfelGI, one thread for every slot
 // of the pool: each of them follows the triangle it's attached to (the vertex
 // which moved with its node, see utils/surfel_gi_rt.glsl), updates its radius
-// from its distance to the camera, registers itself in the cells it covers
-// (a surfel is in several of the 27 cells around it, the offsets are computed
-// by surfel_gi_cell_info.comp) and asks for the rays of the frame. A surfel
+// from its distance to the camera (see surfelRadius), registers itself in the
+// cells of its cascades which it covers (the offsets are computed by
+// surfel_gi_cell_info.comp) and asks for the rays of the frame. A surfel
 // whose surface turns under it (the wheels of a kart) invalidates the history
 // of its old normal (its 6x6 irradiance map and its mean), see the reset below.
 // The surfels which are not seen, are too far or are too old go back to the
 // stack of the free surfels, so the pool is used by the surfaces which are
 // around the camera.
 //
-// Every surfel which is not sleeping traces SURFEL_MAX_RAYS rays in the frame
-// (the count of the reference), whichever its noise and its age: the packets
-// of the estimator follow a change of the lighting of the surface in a frame,
-// and the image is not the average of the noise of a few rays. The tracing is
-// the mass of the cost of the frame, so the sum of the rays of the frame is
-// bounded by SURFEL_RAY_BUDGET (the buffers of the rays); the soft
-// SURFEL_RAY_TARGET scales a frame which would ask for more smoothly instead
-// of dropping the rays of a part of the pool.
+// Every surfel which is not sleeping asks for an adaptive number of rays (the
+// count of the reference): 4 rays when its mean converged (its variance is
+// small), up to 64 while it's noisy, a quarter of that when it's outside of
+// the view, and 64 for its first frames. The tracing is the mass of the cost
+// of the frame, so the sum of the rays of the frame is bounded by
+// SURFEL_RAY_BUDGET (the buffers of the rays); the soft SURFEL_RAY_TARGET
+// scales a frame which would ask for more smoothly instead of dropping the
+// rays of a part of the pool.
 //
 // Set 0 is the one of GEVulkanRTScene (the transformations of the nodes),
 // set 1 the camera and the global light (both only to share the includes of
@@ -42,10 +42,6 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 // surface which turns with its node, is not the surface its samples came from
 const float SURFEL_NORMAL_TURN_COS = 0.94;
 
-// The rays and the active surfels of the group, added to the counters of the
-// frame by its first thread (a shared reduction, the atomicAdd of every surfel
-// of the pool would be one contention of the whole pool on one counter)
-shared uint g_rays;
 shared uint g_requests;
 
 void main()
@@ -53,10 +49,7 @@ void main()
     const uint index = gl_GlobalInvocationID.x;
     const uint thread = gl_LocalInvocationIndex;
     if (thread == 0u)
-    {
-        g_rays = 0u;
         g_requests = 0u;
-    }
     barrier();
 
     uint ray_count = 0u;
@@ -77,7 +70,7 @@ void main()
         surfel.m_ray_index += surfel.m_ray_count;
         // The mean of the previous frame, the input of the irradiance of the
         // pixels and of the field of this frame (the "radiance" of SurfelPlus,
-        // the share of the previous frame wrote it)
+        // the integration of the previous frame wrote it)
         surfel.m_radiance = surfel.m_msme.m_mean;
 
         const bool seen = (surfel.m_status & SURFEL_STATUS_SEEN) != 0u;
@@ -95,16 +88,17 @@ void main()
             surfel.m_life = SURFEL_MAX_LIFE;
             surfel.m_last_seen = pc.m_frame;
         }
-        else if (refed)
+        else if (refed && sleeping)
         {
-            // A surfel which the field of a ray used is the light of a hit
-            // (see surfelGatherIrradiance), so it's needed even if the camera
-            // doesn't see it and it lives while it's used: a sleeping one is
-            // outside of the view (its own pixels don't keep it), so it keeps
-            // the short life of the sleeping surfels, and a traced one keeps
-            // the long life of the traced surfels
-            surfel.m_life = max(surfel.m_life, sleeping ?
-                SURFEL_SLEEPING_LIFE : SURFEL_MAX_LIFE);
+            // A sleeping surfel which the field of a ray used is the light of
+            // a hit outside of the view (see surfelGatherIrradiance), so it's
+            // needed even if the camera doesn't see it: it keeps the short life
+            // of the sleeping surfels while it's used (the reference does the
+            // same). A traced surfel which only the rays of the other surfels
+            // use keeps the life it has, so the surfels of an area the camera
+            // left leave the pool when their life runs out instead of keeping
+            // each other alive and holding their slots forever
+            surfel.m_life = max(surfel.m_life, SURFEL_SLEEPING_LIFE);
         }
         if (seen)
         {
@@ -139,9 +133,7 @@ void main()
         {
             surfel.m_irradiance = 0u;
             // The map of the old surface is cleared by the integration (a map
-            // of 0 is the one of a new surfel), and the depth moments of the
-            // old surface can't hide the new one
-            u_surfel_lights[index].m_depth_range = 0.0;
+            // of 0 is the one of a new surfel)
             // The light of the new surface can be far from the light of the old
             // one, which is the only value the surfel has: the variance is the
             // uncertainty of a surface whose light can change by half of it, so
@@ -173,9 +165,10 @@ void main()
             // Far surfels, old surfels and a full pool recycle the ones which
             // are not seen, the surfels of the surface around the camera stay.
             // A surfel which a ray used in this frame is the light of a hit (a
-            // sleeping one is the field of a surface outside of the view):
-            // it's not recycled here whatever the pool, only the eviction of a
-            // spawn takes the oldest surfel which no ray uses (see surfelEvict)
+            // sleeping one is the field of a surface outside of the view): the
+            // recycle of the pool doesn't take it (it leaves when its life
+            // runs out, see the refed branch above, or when a spawn evicts it,
+            // see surfelEvict)
             const float distance_factor = smoothstep(50.0, 100.0,
                 camera_distance);
             float life_factor = float(SURFEL_MAX_LIFE - surfel.m_life) /
@@ -198,17 +191,14 @@ void main()
     }
     if (live)
     {
-        // Radius of the pixels which the surfel covers, at most the size of the
-        // cell of the grid at its distance (a surfel is never larger than its
-        // cell)
-        const float camera_distance = distance(surfel.m_position,
-            pc.m_origin.xyz);
+        // Radius of the surfel: the one of the cascade of its distance (see
+        // surfelRadius), the same as the one the passes which spawned it gave
+        // it. A surfel which the camera sees follows it smoothly, so the
+        // samples it merges don't change at once
         const bool seen = (surfel.m_status & SURFEL_STATUS_SEEN) != 0u;
-        const float max_radius = surfelMaxRadius(camera_distance);
-        float new_radius = min(surfelCoverRadius(camera_distance), max_radius);
-        if (seen)
-            new_radius = mix(surfel.m_radius, new_radius, 0.1);
-        new_radius = max(new_radius, max_radius * SURFEL_MIN_SIZE_RATIO);
+        const float target_radius = surfelRadius(surfel.m_position);
+        const float new_radius = seen ?
+            mix(surfel.m_radius, target_radius, 0.1) : target_radius;
         // A change of the size of the surfel changes the samples it merges, so
         // a discontinuous change widens the estimator. The radius follows the
         // camera every frame, and the reference multiplies the variance every
@@ -222,39 +212,57 @@ void main()
         surfel.m_radius = new_radius;
 
         // The compact copy of the fields which the passes of the cells read
-        // (the row sums of its irradiance map didn't change, they're kept, and
-        // the depth moments of a turned surface were reset above)
+        // (the row sums of its irradiance map are kept)
         u_surfel_lights[index].m_position_radius = vec4(surfel.m_position,
             surfel.m_radius);
         u_surfel_lights[index].m_normal_frame = vec4(surfel.m_normal,
             float(surfel.m_frame));
         u_surfel_lights[index].m_radiance = surfel.m_radiance;
 
-        // The cells the sphere of the surfel intersects, see
-        // surfel_gi_cell_to_surfel.comp (which writes the list). The high 16
-        // bits of the count are the surfels of the moving objects, which each
-        // kind of spawn is gated by (see CellInfo.m_count)
-        const ivec4 cell = surfelCell(surfel.m_position);
+        // The cells of the cascades of the surfel which its sphere intersects,
+        // see surfel_gi_cell_to_surfel.comp (which writes the list). The high
+        // 16 bits of the count are the surfels of the moving objects, which
+        // each kind of spawn is gated by (see CellInfo.m_count)
+        const ivec2 cascades = surfelCascadeRange(surfel.m_position);
         const uint registration = 1u + (surfel.m_pad == SURFEL_PAD_DYNAMIC ?
             0x10000u : 0u);
-        for (int i = 0; i < 27; i++)
+        for (int cascade = cascades.x; cascade <= cascades.y; cascade++)
         {
-            const ivec4 neighbour = cell + ivec4(SURFEL_NEIGHBORS[i], 0);
-            if (!surfelIntersectsCell(surfel, neighbour))
-                continue;
-            atomicAdd(u_cells[surfelCellIndex(neighbour)].m_count,
-                registration);
+            ivec3 min_cell;
+            ivec3 max_cell;
+            surfelCellRange(surfel.m_position, surfel.m_radius, cascade,
+                min_cell, max_cell);
+            for (int z = min_cell.z; z <= max_cell.z; z++)
+            {
+                for (int y = min_cell.y; y <= max_cell.y; y++)
+                {
+                    for (int x = min_cell.x; x <= max_cell.x; x++)
+                    {
+                        const ivec4 cell = ivec4(x, y, z, cascade);
+                        if (!surfelIntersectsCell(surfel.m_position,
+                            surfel.m_radius, cell))
+                            continue;
+                        atomicAdd(u_cells[surfelCellIndex(cell)].m_count,
+                            registration);
+                    }
+                }
+            }
         }
 
         const bool turned = (surfel.m_status & SURFEL_STATUS_TURNED) != 0u;
         const bool sleeping =
             (surfel.m_status & SURFEL_STATUS_SLEEPING) != 0u;
-        // Every surfel which is not sleeping traces the rays of the reference:
-        // the estimator merges them in packets, so a surfel follows a change of
-        // its lighting in a frame and the pool converges the light of the
-        // scene as a whole. A sleeping surfel is outside of the view and keeps
-        // the light its seed gave it until the camera sees it
-        request_count = sleeping ? 0u : SURFEL_MAX_RAYS;
+        // The adaptive ray count of the reference: 4 rays for a converged
+        // surfel, up to 64 while its variance is large, a quarter of that for
+        // a surfel which is not seen (or sleeping), and the whole count of a
+        // warm up for the first 20 frames of a surfel
+        const float variance = length(surfel.m_msme.m_variance);
+        request_count = uint(mix(4.0, 64.0, clamp(variance * 1.2, 0.0, 1.0)));
+        if (sleeping || !seen)
+            request_count /= 4u;
+        if (surfel.m_frame < 20u)
+            request_count = 64u;
+        request_count = min(request_count, SURFEL_MAX_RAYS);
 
         // The soft budget: when the surfels of the previous frame asked for
         // more than SURFEL_RAY_TARGET rays, the rays of every surfel are cut by
@@ -272,21 +280,23 @@ void main()
         // The cost of the frame is bounded by the ray buffer of the pool, the
         // surfels which don't get a range keep their radiance (see
         // SURFEL_RAY_BUDGET)
-        const uint ray_offset = atomicAdd(u_counter.m_rays, ray_count);
-        if (ray_offset + ray_count <= SURFEL_RAY_BUDGET)
+        surfel.m_ray_offset = 0u;
+        surfel.m_ray_count = 0u;
+        if (ray_count > 0u)
         {
-            for (uint i = 0; i < ray_count; i++)
-                u_ray_ids[ray_offset + i] = index;
-            surfel.m_ray_offset = ray_offset;
-            surfel.m_ray_count = ray_count;
-            is_active = true;
-        }
-        else
-        {
-            // The rays are given back, so the surfels which are allocated after
-            // this one can still use the budget (the same as the reference)
-            atomicAdd(u_counter.m_rays, uint(-int(ray_count)));
-            surfel.m_ray_count = 0u;
+            const uint ray_offset = atomicAdd(u_counter.m_rays, ray_count);
+            if (ray_offset + ray_count <= SURFEL_RAY_BUDGET)
+            {
+                for (uint i = 0u; i < ray_count; i++)
+                    u_ray_ids[ray_offset + i] = index;
+                surfel.m_ray_offset = ray_offset;
+                surfel.m_ray_count = ray_count;
+                is_active = true;
+            }
+            else
+            {
+                atomicAdd(u_counter.m_rays, uint(-int(ray_count)));
+            }
         }
 
         // The bits of this frame are consumed, the pool bit stays, and the
@@ -297,21 +307,10 @@ void main()
         u_surfels[index] = surfel;
     }
 
-    // The sum of the rays and of the surfels of the block, and the list of the
-    // surfels which have rays (the integration dispatches one group for every
-    // of them, see surfel_gi_cell_info.comp). The index of the list is the
-    // global counter: the surfels of the whole pool share it
     if (is_active)
         u_active[atomicAdd(u_counter.m_active, 1u)] = index;
-    if (index < SURFEL_MAX_COUNT)
-    {
-        atomicAdd(g_rays, ray_count);
-        atomicAdd(g_requests, request_count);
-    }
+    atomicAdd(g_requests, request_count);
     barrier();
     if (thread == 0u)
-    {
-        atomicAdd(u_counter.m_rays, g_rays);
         atomicAdd(u_counter.m_ray_requests, g_requests);
-    }
 }

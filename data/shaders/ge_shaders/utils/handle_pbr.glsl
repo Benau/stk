@@ -25,15 +25,7 @@ vec3 gtaoMultiBounce(float visibility, vec3 albedo)
 // 1.0 if there is none. Same as IBL.frag of the OpenGL renderer.
 // rt_shadow is the visibility of the sun of GEVulkanRTShadow, it's only used if
 // the sun is ray traced (u_rt_shadow_type)
-// gi_irradiance is the indirect diffuse of the surfels of GEVulkanSurfelGI (an
-// irradiance over PI, the unit of the irradiance of the environment), xyz is the
-// irradiance and w the confidence of the surfels (0 if it's not enabled). When
-// the GI is enabled (gi_lighting) it's the whole ambient diffuse light of the
-// surface: the irradiance of the prefiltered environment and the flat ambient
-// light are not added to it (the sky which reaches the surfel is only the one
-// its rays see, so the ambient is not counted twice, and a pixel which the
-// surfels don't cover is black until they do). The materials which are lit
-// forward (gi_lighting is false) keep the environment and the flat ambient light
+// Surfel confidence blends the environment fallback into GI without adding both.
 vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
                        vec3 eyedir, vec3 normal, float perceptual_roughness,
                        vec4 world_position, float camera_distance,
@@ -76,12 +68,13 @@ vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
         // environment: the surfels are a diffuse GI only
         radiance = textureLod(u_specular, world_reflection,
             radiance_level).rgb;
-        // The GI is the whole irradiance of the ambient diffuse light when it's
-        // enabled (the sky is only seen by its rays, so the sky of the cube is
-        // not counted twice and the ambient doesn't hide the GI); the
-        // materials without the GI keep the environment
-        irradiance = gi ? gi_irradiance.xyz :
-            texture(u_diffuse, world_normal).rgb;
+        if (!gi || coverage < 1.0)
+            irradiance = texture(u_diffuse, world_normal).rgb;
+    }
+    if (gi)
+    {
+        irradiance = mix(irradiance + u_global_light.m_ambient_color * 0.25,
+            gi_irradiance.xyz, coverage);
     }
 
     vec3 lightdir = sunDirection(reflection,
@@ -108,10 +101,8 @@ vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
         gi ? vec3(0.0) : u_global_light.m_ambient_color,
         perceptual_roughness, pbr.y, pbr.z, shadow, ao_diffuse, ao_specular);
 
-    // Without IBL the diffuse ambient light is the surfel GI alone
-    if (!u_ibl)
-        mixed_color += gi ? gi_irradiance.xyz * diffuse_color * ao_diffuse :
-            vec3(0.0);
+    if (!u_ibl && gi)
+        mixed_color += irradiance * diffuse_color * ao_diffuse;
 
     return mixed_color;
 }

@@ -24,25 +24,23 @@
 
 namespace GE
 {
-// The reference grid (d = 96, n = 64, so a cell is 3 units wide and a surfel
-// is at most 1.5 units large). A larger surfel covers more of the screen, so
-// the pool needs fewer of them and the spawn probabilities are lower (see
-// surfel_gi_generate.comp) while the amount of light a pixel receives stays
-// the same: surfels are also larger (SURFEL_SIZE is the area of a surfel in
-// pixels at the near field). The shader scales this area by SURFEL_SIZE_SCALE
-// of utils/surfel_gi.glsl: the surfels are 16 pixels there, 4 times the area
-// and twice the radius of the reference tuning, a quarter of the density
-const float GEVulkanSurfelGI::CELL_DELTA = 3.0f;
-const float GEVulkanSurfelGI::CELL_HALF_DELTA = 96.0f;
-const float GEVulkanSurfelGI::SURFEL_SIZE = 4.0f;
+// The cascaded grid of the reference (32 cells per axis per cascade, the cell
+// of a cascade twice the one of the previous one). The finest cell is 0.5 world
+// units, and the radius of a surfel is 0.6 units near the camera, i.e. 1.2
+// cells, then grows with the distance over 8 units: a surfel of the cascade of
+// its distance is about as large as the cell of that cascade (the same ratio),
+// so the number of surfels per cell is bounded whatever the distance and the
+// pool covers the whole scene instead of spending its slots on the near field
+const float GEVulkanSurfelGI::CELL_SIZE = 0.5f;
+const float GEVulkanSurfelGI::CASCADE_RADIUS = 8.0f;
 
 namespace
 {
 // Same as the push constants of utils/surfel_gi.glsl
 struct SurfelGIPushConstants
 {
-    // xyz world position of the camera of the first viewport, the center of
-    // the inner cube of the grid
+    // xyz world position of the origin of the cascades: the camera of the
+    // first viewport snapped to the cell of the finest cascade
     float m_origin[4];
     // x0, y0, x1, y1 (exclusive) in pixels of the g-buffer of the viewport
     int32_t m_rect[4];
@@ -50,19 +48,13 @@ struct SurfelGIPushConstants
     // number of rays of a surfel
     uint32_t m_frame;
     uint32_t m_first_frame;
-    uint32_t m_max_rays;
-    // Size of a cell of the inner cube, half its size, vertical fov of the
-    // camera and area of a surfel in pixels
-    float m_delta;
-    float m_half_d;
-    float m_fov;
-    float m_surfel_size;
-    // Size of the viewport (for the radius of the surfels)
-    uint32_t m_full_width;
-    uint32_t m_full_height;
+    // Size of a cell of the finest cascade, and the distance at which the
+    // radius of a surfel grows with its distance to the camera
+    float m_cell_size;
+    float m_cascade_radius;
 };
-static_assert(sizeof(SurfelGIPushConstants) == 68,
-    "SurfelGIPushConstants is 68 bytes in the shaders");
+static_assert(sizeof(SurfelGIPushConstants) == 48,
+    "SurfelGIPushConstants is 48 bytes in the shaders");
 
 // ----------------------------------------------------------------------------
 // Number of groups of size threads which cover count
@@ -79,7 +71,7 @@ GEVulkanSurfelGI::GEVulkanSurfelGI(GEVulkanDriver* vk,
                                    GEVulkanAttachmentTexture* depth,
                                    GEVulkanAttachmentTexture* normal)
                     : GEVulkanPostProcessing(vk, size),
-                      m_gi(NULL), m_surfel_irradiance(NULL), m_surfel_depth(NULL),
+                      m_gi(NULL), m_surfel_irradiance(NULL),
                       m_layout(VK_NULL_HANDLE), m_pool(VK_NULL_HANDLE),
                       m_set(VK_NULL_HANDLE), m_data_layout(VK_NULL_HANDLE),
                       m_pipeline_layout(VK_NULL_HANDLE),
@@ -113,15 +105,9 @@ GEVulkanSurfelGI::GEVulkanSurfelGI(GEVulkanDriver* vk,
                 IRRADIANCE_ROWS * IRRADIANCE_TILE), VK_FORMAT_R16_SFLOAT,
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
             VK_IMAGE_ASPECT_COLOR_BIT);
-        // Matching depth-moment tiles, initialized by the integration shader
-        m_surfel_depth = new GEVulkanAttachmentTexture(vk,
-            irr::core::dimension2d<irr::u32>(IRRADIANCE_COLUMNS * IRRADIANCE_TILE,
-                IRRADIANCE_ROWS * IRRADIANCE_TILE), VK_FORMAT_R32G32_SFLOAT,
-            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-            VK_IMAGE_ASPECT_COLOR_BIT);
-        std::array<GEVulkanAttachmentTexture*, 3> general_images =
+        std::array<GEVulkanAttachmentTexture*, 2> general_images =
         {
-            m_gi, m_surfel_irradiance, m_surfel_depth
+            m_gi, m_surfel_irradiance
         };
         initializeGeneralImages(general_images.data(), general_images.size());
         createDescriptors(depth, normal);
@@ -152,10 +138,9 @@ bool GEVulkanSurfelGI::createBuffers()
         sizeof(uint32_t) * RAY_BUDGET,
         sizeof(float) * 4 * RAY_BUDGET,
         sizeof(SurfelLight) * MAX_SURFELS,
-        sizeof(float) * 2 * RAY_BUDGET,
-        // Three VkDispatchIndirectCommands: tracing, then the cooperative
-        // integration, then the irradiance sharing
-        sizeof(uint32_t) * 9,
+        sizeof(float) * RAY_BUDGET,
+        // Two VkDispatchIndirectCommands: tracing, then the integration
+        sizeof(uint32_t) * 6,
         sizeof(uint32_t) * MAX_SURFELS
     };
     // Only surfels need clearing; the other buffers are written before reading
@@ -207,8 +192,6 @@ void GEVulkanSurfelGI::destroy()
     m_gi = NULL;
     delete m_surfel_irradiance;
     m_surfel_irradiance = NULL;
-    delete m_surfel_depth;
-    m_surfel_depth = NULL;
     for (Buffer& buffer : m_buffers)
     {
         if (buffer.m_buffer != VK_NULL_HANDLE)
@@ -239,17 +222,17 @@ void GEVulkanSurfelGI::createDescriptors(GEVulkanAttachmentTexture* depth,
 {
     VkDevice device = m_vk->getDevice();
     // 0 normal, 1 depth, 2 irradiance, 3..9 pool/cells/rays, 10/11 irradiance
-    // tiles, 12 compact surfels, 13 ray PDF/distance, 14 trace/integration
-    // groups, 15/16 depth moments, 17 active surfel IDs
-    std::array<VkDescriptorSetLayoutBinding, 18> bindings = {};
+    // tiles, 12 compact surfels, 13 ray weights, 14 trace/integration groups
+    // and 17 active surfel IDs
+    std::array<VkDescriptorSetLayoutBinding, 16> bindings = {};
     for (unsigned i = 0; i < bindings.size(); i++)
     {
-        bindings[i].binding = i;
+        bindings[i].binding = i < 15 ? i : 17;
         bindings[i].descriptorCount = 1;
-        if (i < 2 || i == 10 || i == 15)
+        if (bindings[i].binding < 2 || bindings[i].binding == 10)
             bindings[i].descriptorType =
                 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        else if (i == 2 || i == 11 || i == 16)
+        else if (bindings[i].binding == 2 || bindings[i].binding == 11)
             bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         else
             bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -268,9 +251,9 @@ void GEVulkanSurfelGI::createDescriptors(GEVulkanAttachmentTexture* depth,
 
     std::array<VkDescriptorPoolSize, 3> pool_sizes = {};
     pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    pool_sizes[0].descriptorCount = 4;
+    pool_sizes[0].descriptorCount = 3;
     pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    pool_sizes[1].descriptorCount = 3;
+    pool_sizes[1].descriptorCount = 2;
     pool_sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     pool_sizes[2].descriptorCount = BI_COUNT;
     VkDescriptorPoolCreateInfo pool_info = {};
@@ -296,7 +279,7 @@ void GEVulkanSurfelGI::createDescriptors(GEVulkanAttachmentTexture* depth,
             "GEVulkanSurfelGI");
     }
 
-    std::array<VkDescriptorImageInfo, 7> image_infos = {};
+    std::array<VkDescriptorImageInfo, 5> image_infos = {};
     image_infos[0].sampler = m_vk->getSampler(GVS_NEAREST);
     image_infos[0].imageView = (VkImageView)normal->getTextureHandler();
     image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -315,11 +298,6 @@ void GEVulkanSurfelGI::createDescriptors(GEVulkanAttachmentTexture* depth,
     image_infos[4].imageView =
         (VkImageView)m_surfel_irradiance->getTextureHandler();
     image_infos[4].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    image_infos[5].sampler = m_vk->getSampler(GVS_NEAREST);
-    image_infos[5].imageView = (VkImageView)m_surfel_depth->getTextureHandler();
-    image_infos[5].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    image_infos[6].imageView = (VkImageView)m_surfel_depth->getTextureHandler();
-    image_infos[6].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
     std::array<VkDescriptorBufferInfo, BI_COUNT> buffer_infos = {};
     for (unsigned i = 0; i < BI_COUNT; i++)
@@ -328,23 +306,23 @@ void GEVulkanSurfelGI::createDescriptors(GEVulkanAttachmentTexture* depth,
         buffer_infos[i].offset = 0;
         buffer_infos[i].range = m_buffers[i].m_size;
     }
-    // Same binding order as utils/surfel_gi.glsl (-1 for image bindings)
-    const int buffer_order[18] =
+    // Same binding order as utils/surfel_gi.glsl (-1 for image bindings, 17
+    // is the last entry)
+    const int buffer_order[16] =
     {
         -1, -1, -1,
         BI_SURFEL, BI_COUNTER, BI_DEAD, BI_CELL, BI_CELL_SURFEL, BI_RAY_ID,
         BI_RAY_RESULT,
         -1, -1,
-        BI_SURFEL_LIGHT, BI_RAY_DATA, BI_DISPATCH,
-        -1, -1, BI_ACTIVE
+        BI_SURFEL_LIGHT, BI_RAY_DATA, BI_DISPATCH, BI_ACTIVE
     };
 
-    std::array<VkWriteDescriptorSet, 18> writes = {};
+    std::array<VkWriteDescriptorSet, 16> writes = {};
     for (unsigned i = 0; i < writes.size(); i++)
     {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = m_set;
-        writes[i].dstBinding = i;
+        writes[i].dstBinding = i < 15 ? i : 17;
         writes[i].descriptorCount = 1;
         if (i < 3)
         {
@@ -363,17 +341,6 @@ void GEVulkanSurfelGI::createDescriptors(GEVulkanAttachmentTexture* depth,
         {
             writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             writes[i].pImageInfo = &image_infos[4];
-        }
-        else if (i == 15)
-        {
-            writes[i].descriptorType =
-                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            writes[i].pImageInfo = &image_infos[5];
-        }
-        else if (i == 16)
-        {
-            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            writes[i].pImageInfo = &image_infos[6];
         }
         else
         {
@@ -493,7 +460,6 @@ void GEVulkanSurfelGI::createPipelines()
         &specialization);
 
     createPipeline("surfel_gi_integrate.comp", &m_pipelines[PI_INTEGRATE]);
-    createPipeline("surfel_gi_share.comp", &m_pipelines[PI_SHARE]);
     createPipeline("surfel_gi_generate.comp", &m_pipelines[PI_GENERATE]);
 }   // createPipelines
 
@@ -628,27 +594,17 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
 
     SurfelGIPushConstants pc = {};
     const irr::core::vector3df origin = first_camera->getAbsolutePosition();
-    pc.m_origin[0] = origin.X;
-    pc.m_origin[1] = origin.Y;
-    pc.m_origin[2] = origin.Z;
+    // The cascades are centered on the camera snapped to the cell of the
+    // finest cascade, so a cell doesn't move under its surfels while the
+    // camera moves in it
+    const float snap = CELL_SIZE;
+    pc.m_origin[0] = std::floor(origin.X / snap) * snap + 0.001f;
+    pc.m_origin[1] = std::floor(origin.Y / snap) * snap + 0.001f;
+    pc.m_origin[2] = std::floor(origin.Z / snap) * snap + 0.001f;
     pc.m_frame = m_frame;
     pc.m_first_frame = m_needs_clear ? 1 : 0;
-    pc.m_max_rays = MAX_RAYS;
-    pc.m_delta = CELL_DELTA;
-    pc.m_half_d = CELL_HALF_DELTA;
-    // The vertical fov of the projection of the camera (the aspect of the
-    // projection is not used)
-    const irr::core::matrix4& projection =
-        first_camera->getViewFrustum()->getTransform(
-        irr::video::ETS_PROJECTION);
-    float fov = 2.0f * std::atan(1.0f / std::max(projection[5], 1.0e-4f));
-    if (!(fov > 0.0f && fov < 3.14159265f))
-        fov = 1.0f;
-    pc.m_fov = fov;
-    pc.m_surfel_size = SURFEL_SIZE;
-    pc.m_full_width = (uint32_t)(viewports[0].m_rect[2] - viewports[0].m_rect[0]);
-    pc.m_full_height =
-        (uint32_t)(viewports[0].m_rect[3] - viewports[0].m_rect[1]);
+    pc.m_cell_size = CELL_SIZE;
+    pc.m_cascade_radius = CASCADE_RADIUS;
 
     const unsigned buffer_idx = (unsigned)m_vk->getCurrentBufferIdx();
     const VkDescriptorSet rt_set = *rt_scene->getDescriptorSet(buffer_idx);
@@ -688,7 +644,7 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
     computeToComputeBarrier(cmd, 0);
 
     // 3. The offsets of the lists of the cells, and then the lists (a surfel
-    // is in the 27 cells around it)
+    // is in the cells of its cascades which its sphere intersects)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipelines[PI_CELL_INFO]);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -732,8 +688,8 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
     vkCmdDispatchIndirect(cmd, m_buffers[BI_DISPATCH].m_buffer, 0);
     computeToComputeBarrier(cmd, 0);
 
-    // 5. Integrate samples and depth moments, one 32-thread group per active
-    // surfel (linear group ID is x + y * 256)
+    // 5. Integrate the samples and share the irradiance of the neighbours, one
+    // thread per active surfel
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipelines[PI_INTEGRATE]);
     // The global light is read for the skytop color of the clamp of the
@@ -749,22 +705,7 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
         3 * sizeof(uint32_t));
     computeToComputeBarrier(cmd, 0);
 
-    // 6. Share from immutable SurfelLight into the MSME mean of the surfels
-    // which have rays (one thread per entry of u_active)
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_pipelines[PI_SHARE]);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_pipeline_layout, 0, 1, &rt_set, 0, NULL);
-    viewports[0].m_draw_call->bindDataDescriptorSet(m_vk, cmd,
-        VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline_layout, 1);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_pipeline_layout, 2, 1, &m_set, 0, NULL);
-    push_constants();
-    vkCmdDispatchIndirect(cmd, m_buffers[BI_DISPATCH].m_buffer,
-        6 * sizeof(uint32_t));
-    computeToComputeBarrier(cmd, 0);
-
-    // 7. The irradiation of the pixels of every viewport, and the spawn and
+    // 6. The irradiation of the pixels of every viewport, and the spawn and
     // the removal of the surfels
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipelines[PI_GENERATE]);

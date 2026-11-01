@@ -17,31 +17,29 @@ class GEVulkanAttachmentTexture;
 // like GEVulkanSSAO). It's all compute shaders between the g-buffer and the
 // lighting render pass:
 //
-// 1. surfel_gi_prepare.comp: the cells of the grid and the counters of the
-//    frame are cleared, on the first frame the stack of the free surfels is
-//    filled
+// 1. surfel_gi_prepare.comp: the cells of the cascaded grid and the counters
+//    of the frame are cleared, on the first frame the stack of the free
+//    surfels is filled
 // 2. surfel_gi_update.comp: every surfel follows the triangle of the scene it
 //    was created on (the node transformation of GEVulkanRTScene, see
-//    utils/surfel_gi_rt.glsl), updates its radius, registers itself in the
-//    cells it intersects and asks for the rays of the frame. The surfels
-//    which are not seen, are far or are old are recycled
+//    utils/surfel_gi_rt.glsl), updates its radius from its distance to the
+//    camera, registers itself in the cells of its cascades which it intersects
+//    and asks for the rays of the frame. The surfels which are not seen, are
+//    far or are old are recycled
 // 3. surfel_gi_cell_info.comp and surfel_gi_cell_to_surfel.comp: the lists of
-//    the surfels of every cell of the grid
+//    the surfels of every cell of the cascades
 // 4. surfel_gi_trace.comp: a few cosine weighted rays per surfel, traced in
 //    the scene of GEVulkanRTScene and shaded like the reflection of a solid
 //    material (utils/rt_reflection.glsl), a ray which hits nothing sees the
 //    skybox. The first hit of a ray spawns a sleeping surfel there, the ones
 //    the field covers too, so the rays generate surfels along with the pixels
 //    of the generate pass
-// 5. surfel_gi_integrate.comp: one cooperative group per active surfel merges
-//    the samples with the multiscale mean estimator of Ray Tracing Gems
-//    chapter 25 (surfelMSME) and updates its irradiance and depth moments
-// 6. surfel_gi_share.comp: shares irradiance using immutable SurfelLight and
-//    updated depth moments, writing only the MSME mean
-// 7. surfel_gi_generate.comp: the irradiance of every 2x2 block of the
-//    viewport (the weighted mean of the surfels of its cell), and the spawn of
-//    the surfels of the holes of the field (the blocks which no surfel covers,
-//    at once) and of the pixels with the least coverage of their group
+// 5. surfel_gi_integrate.comp: one thread per active surfel merges the samples
+//    with the multiscale mean estimator of Ray Tracing Gems chapter 25
+//    (surfelMSME), updates its irradiance map and shares the irradiance of its
+//    neighbours (IRRADIANCE_SHARE of the reference)
+// 6. surfel_gi_generate.comp: gather irradiance and fill distinct screen-space
+//    holes
 //
 // There is no screen space temporal filter of the irradiance: the mean of a
 // surfel is temporally stable (the multiscale mean estimator) and it only
@@ -59,42 +57,39 @@ public:
     enum : uint32_t
     {
         // Surfels of the pool
-        MAX_SURFELS = 131072,
-        // Rays a surfel traces in a frame (the same as SURFEL_MAX_RAYS of
-        // utils/surfel_gi.glsl): the count of the reference, 64
-        MAX_RAYS = 64,
-        // Rays a surfel which is warmed up traces in a frame (the same as
-        // SURFEL_WARMUP_RAYS of utils/surfel_gi.glsl): the same count
+        MAX_SURFELS = 262144,
+        // Rays of a surfel which is warmed up (the same as SURFEL_WARMUP_RAYS
+        // of utils/surfel_gi.glsl): the size of the buffers of the rays
         WARMUP_RAYS = 64,
         // Rays of all the surfels of a frame at most (the surfels which don't
         // get any keep their radiance, they're traced in the next frame) and
         // the size of the buffers of the rays
         RAY_BUDGET = MAX_SURFELS * WARMUP_RAYS,
-        // (surfel, cell) pairs of a frame at most (a surfel is in the 27 cells
-        // around it at most)
-        CELL_SURFELS = MAX_SURFELS * 32,
+        // (surfel, cell) pairs of a frame at most: a surfel registers in the
+        // cells of one or two cascades which its sphere intersects
+        CELL_SURFELS = MAX_SURFELS * 64,
         // Pixels of the tile of a surfel in the map of its irradiance, tiles
         // per row of the map and rows of the map
         IRRADIANCE_TILE = 6,
         IRRADIANCE_COLUMNS = 512,
         IRRADIANCE_ROWS = MAX_SURFELS / IRRADIANCE_COLUMNS,
-        // Cells per axis of the inner cube of the grid, layers of each frustum
-        // and the cells of all of them (the inner cube first, then 6 frustums).
-        // The 32 layers reach ~44336 units from the camera, so the grid has
-        // every surface of the scene whatever its distance
-        CELL_N = 64,
-        CELL_M = 32,
-        CELL_COUNT = CELL_N * CELL_N * CELL_N +
-            6 * CELL_M * CELL_N * CELL_N,
+        // Cells per axis of a cascade, cascades of the grid and the cells of
+        // all of them. The cube of a cascade is 32 * 0.5 * 2^cascade world
+        // units across, so the 14 cascades reach 131072 units from the camera,
+        // and every surface of the scene has a cell whatever its distance
+        CASCADE_CELLS = 32,
+        CASCADE_COUNT = 14,
+        CELL_COUNT = CASCADE_CELLS * CASCADE_CELLS * CASCADE_CELLS *
+            CASCADE_COUNT,
         // Frames a surfel lives when it's not seen
         MAX_LIFE = 1200
     };
 private:
-    // Size of a cell of the inner cube, half its size and the area of a surfel
-    // in pixels (the same as the constants of utils/surfel_gi.glsl)
-    static const float CELL_DELTA;
-    static const float CELL_HALF_DELTA;
-    static const float SURFEL_SIZE;
+    // Size of a cell of the finest cascade and the distance at which the
+    // radius of a surfel grows with its distance to the camera (the same as
+    // the constants of utils/surfel_gi.glsl)
+    static const float CELL_SIZE;
+    static const float CASCADE_RADIUS;
 
     // Same layout as MSMEData of utils/surfel_gi.glsl (std430, 48 bytes)
     struct MSMEData
@@ -137,13 +132,12 @@ private:
         // floatBitsToUint of the sum of the 6x6 irradiance map, and 1 in the
         // lowest bit if it's full (it guides the rays then)
         uint32_t m_irradiance;
-        // Visibility of the sun at the surfel, traced by its first ray (-1
-        // while it was never traced), and the index of the R3 sequence of its
-        // next ray
-        float m_sun;
+        // The index of the R3 sequence of the next ray
         uint32_t m_ray_index;
-        // The shaders round the struct to 16 bytes
+        // SURFEL_PAD_DYNAMIC for the surfel of a moving object
         uint32_t m_pad;
+        // The shaders round the struct to 16 bytes
+        uint32_t m_pad2;
     };
     static_assert(sizeof(Surfel) == 144, "Surfel is 144 bytes in the shaders");
 
@@ -160,15 +154,13 @@ private:
         uint32_t m_row_sums_01;
         uint32_t m_row_sums_23;
         uint32_t m_row_sums_45;
-        // Range of the depth moments of the surfel (0 while it has none), the
-        // visibility of the field, and the visibility of the sun at the surfel
-        float m_depth_range;
-        float m_sun;
+        // std430 rounds the stride of the struct to the 16 bytes of its vec4s
+        float m_padding[2];
     };
     static_assert(sizeof(SurfelLight) == 64,
         "SurfelLight is 64 bytes in the shaders");
 
-    // Same layout as SurfelCounter of utils/surfel_gi.glsl (std430, 36 bytes)
+    // Same layout as SurfelCounter of utils/surfel_gi.glsl (std430, 32 bytes)
     struct SurfelCounter
     {
         int32_t m_alive;
@@ -180,12 +172,9 @@ private:
         uint32_t m_last_ray_requests;
         // Sleeping surfels the tracing of the frame spawned
         uint32_t m_sleeping_spawns;
-        // Spawns of the holes of the screen which the generate pass of the
-        // frame tried
-        uint32_t m_hole_spawns;
     };
-    static_assert(sizeof(SurfelCounter) == 36,
-        "SurfelCounter is 36 bytes in the shaders");
+    static_assert(sizeof(SurfelCounter) == 32,
+        "SurfelCounter is 32 bytes in the shaders");
 
     struct Buffer
     {
@@ -205,7 +194,7 @@ private:
         BI_RAY_RESULT,
         BI_SURFEL_LIGHT,
         BI_RAY_DATA,
-        // VkDispatchIndirectCommand for tracing, then cooperative integration
+        // VkDispatchIndirectCommand for tracing, then integration
         BI_DISPATCH,
         BI_ACTIVE,
         BI_COUNT
@@ -222,15 +211,12 @@ private:
     // are guided by its bright directions
     GEVulkanAttachmentTexture* m_surfel_irradiance;
 
-    // Depth moments in matching 6x6 tiles (rg32f, sampled and storage, general)
-    GEVulkanAttachmentTexture* m_surfel_depth;
-
     // Binding 0 is the normal and 1 the depth of the g-buffer (combined image
     // samplers), 2 the storage image of the result, 3 to 9 the buffers of the
     // pool, the cells and the rays, 10 and 11 the irradiance map of the
     // surfels (a sampler and a storage image), 12 the compact copy of the
-    // surfels, 13 ray PDF/distance, 14 trace/integration groups, 15 and 16
-    // depth moments (sampler/storage), and 17 active surfel IDs
+    // surfels, 13 the weight of the rays, 14 trace/integration groups, and 17
+    // active surfel IDs
     VkDescriptorSetLayout m_layout;
 
     VkDescriptorPool m_pool;
@@ -260,7 +246,6 @@ private:
         PI_CELL_TO_SURFEL,
         PI_TRACE,
         PI_INTEGRATE,
-        PI_SHARE,
         PI_GENERATE,
         PI_COUNT
     };

@@ -32,7 +32,7 @@ GEVulkanSkyBoxRenderer::GEVulkanSkyBoxRenderer()
     m_dummy_shadow_fbo = new GEVulkanShadowFBO(vk, 4);
 
     // m_env_descriptor_layout
-    std::array<VkDescriptorSetLayoutBinding, 4> texture_layout_binding = {};
+    std::array<VkDescriptorSetLayoutBinding, 5> texture_layout_binding = {};
     texture_layout_binding[0].binding = 0;
     texture_layout_binding[0].descriptorCount = 1;
     texture_layout_binding[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -46,6 +46,10 @@ GEVulkanSkyBoxRenderer::GEVulkanSkyBoxRenderer()
     texture_layout_binding[2].binding = 2;
     texture_layout_binding[3] = texture_layout_binding[0];
     texture_layout_binding[3].binding = 3;
+    // The skybox through its linear view, which the surfel GI converts to
+    // linear space itself (see skyboxRadiance of surfel_gi_trace.comp)
+    texture_layout_binding[4] = texture_layout_binding[0];
+    texture_layout_binding[4].binding = 4;
 
     VkDescriptorSetLayoutCreateInfo setinfo = {};
     setinfo.flags = 0;
@@ -100,6 +104,7 @@ GEVulkanSkyBoxRenderer::GEVulkanSkyBoxRenderer()
     info[3].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     info[3].sampler = vk->getSampler(GVS_SHADOW_MAP);
     info[3].imageView = (VkImageView)m_dummy_shadow_fbo->getTextureHandler();
+    info[4] = info[0];
 
     VkWriteDescriptorSet write_descriptor_set = {};
     write_descriptor_set.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -281,7 +286,7 @@ void GEVulkanSkyBoxRenderer::fillDescriptor(VkDescriptorSet ds,
                                             GEVulkanShadowFBO* sfbo) const
 {
     GEVulkanDriver* vk = getVKDriver();
-    std::array<VkDescriptorImageInfo, 4> info;
+    std::array<VkDescriptorImageInfo, 5> info;
     info[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     info[0].sampler = vk->getSampler(GVS_SKYBOX);
     info[0].imageView = m_diffuse_env_cubemap ?
@@ -301,6 +306,10 @@ void GEVulkanSkyBoxRenderer::fillDescriptor(VkDescriptorSet ds,
         info[3].imageView = (VkImageView)sfbo->getTextureHandler();
     else
         info[3].imageView = (VkImageView)m_dummy_shadow_fbo->getTextureHandler();
+    // The linear view of the skybox: the surfel GI decodes the sRGB content
+    // itself, so its sky is linear space whatever the srgb view is here
+    info[4] = info[2];
+    info[4].imageView = (VkImageView)m_texture_cubemap->getImageView(false);
 
     VkWriteDescriptorSet write_descriptor_set = {};
     write_descriptor_set.sType =

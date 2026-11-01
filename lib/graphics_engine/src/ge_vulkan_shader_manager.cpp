@@ -205,6 +205,11 @@ std::vector<uint32_t> compileShader(shaderc_shader_kind kind,
     };
 
     ShadercResources res;
+    if (name.compare(0, 10, "surfel_gi_") == 0)
+    {
+        shaderc_compile_options_set_optimization_level(res.options,
+            shaderc_optimization_level_performance);
+    }
     // Ray query needs SPIR-V 1.4 (Vulkan 1.2), only for the shaders using it
     if (shader_data.find("GL_EXT_ray_query") != std::string::npos)
     {

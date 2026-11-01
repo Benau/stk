@@ -1877,7 +1877,7 @@ void GEVulkanDrawCall::createVulkanData()
     std::vector<VkDescriptorPoolSize> sizes =
     {
         {
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5
         },
         {
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
