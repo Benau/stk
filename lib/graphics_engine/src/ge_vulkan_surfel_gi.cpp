@@ -141,13 +141,15 @@ bool GEVulkanSurfelGI::createBuffers()
         sizeof(float) * RAY_BUDGET,
         // Two VkDispatchIndirectCommands: tracing, then the integration
         sizeof(uint32_t) * 6,
-        sizeof(uint32_t) * MAX_SURFELS
+        sizeof(uint32_t) * MAX_SURFELS,
+        // Two atomic spawn reservations per cell (static, dynamic)
+        sizeof(uint32_t) * 2 * CELL_COUNT
     };
     // Only surfels need clearing; the other buffers are written before reading
     const bool clearable[BI_COUNT] =
     {
         false, true, false, false, false, false, false, false, false, false,
-        false
+        false, false
     };
     VmaAllocationCreateInfo alloc_info = {};
     alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
@@ -222,12 +224,12 @@ void GEVulkanSurfelGI::createDescriptors(GEVulkanAttachmentTexture* depth,
 {
     VkDevice device = m_vk->getDevice();
     // 0 normal, 1 depth, 2 irradiance, 3..9 pool/cells/rays, 10/11 irradiance
-    // tiles, 12 compact surfels, 13 ray weights, 14 trace/integration groups
-    // and 17 active surfel IDs
-    std::array<VkDescriptorSetLayoutBinding, 16> bindings = {};
+    // tiles, 12 compact surfels, 13 ray weights, 14 trace/integration groups,
+    // 15 spawn reservations of the cells and 17 active surfel IDs
+    std::array<VkDescriptorSetLayoutBinding, 17> bindings = {};
     for (unsigned i = 0; i < bindings.size(); i++)
     {
-        bindings[i].binding = i < 15 ? i : 17;
+        bindings[i].binding = i < 16 ? i : 17;
         bindings[i].descriptorCount = 1;
         if (bindings[i].binding < 2 || bindings[i].binding == 10)
             bindings[i].descriptorType =
@@ -308,21 +310,21 @@ void GEVulkanSurfelGI::createDescriptors(GEVulkanAttachmentTexture* depth,
     }
     // Same binding order as utils/surfel_gi.glsl (-1 for image bindings, 17
     // is the last entry)
-    const int buffer_order[16] =
+    const int buffer_order[17] =
     {
         -1, -1, -1,
         BI_SURFEL, BI_COUNTER, BI_DEAD, BI_CELL, BI_CELL_SURFEL, BI_RAY_ID,
         BI_RAY_RESULT,
         -1, -1,
-        BI_SURFEL_LIGHT, BI_RAY_DATA, BI_DISPATCH, BI_ACTIVE
+        BI_SURFEL_LIGHT, BI_RAY_DATA, BI_DISPATCH, BI_CELL_SPAWN, BI_ACTIVE
     };
 
-    std::array<VkWriteDescriptorSet, 16> writes = {};
+    std::array<VkWriteDescriptorSet, 17> writes = {};
     for (unsigned i = 0; i < writes.size(); i++)
     {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = m_set;
-        writes[i].dstBinding = i < 15 ? i : 17;
+        writes[i].dstBinding = i < 16 ? i : 17;
         writes[i].descriptorCount = 1;
         if (i < 3)
         {

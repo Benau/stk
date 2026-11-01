@@ -57,7 +57,7 @@ public:
     enum : uint32_t
     {
         // Surfels of the pool
-        MAX_SURFELS = 262144,
+        MAX_SURFELS = 65536,
         // Rays of a surfel which is warmed up (the same as SURFEL_WARMUP_RAYS
         // of utils/surfel_gi.glsl): the size of the buffers of the rays
         WARMUP_RAYS = 64,
@@ -84,6 +84,11 @@ public:
         // Frames a surfel lives when it's not seen
         MAX_LIFE = 1200
     };
+    // The map has a 6x6 tile for every surfel of the pool: a different
+    // MAX_SURFELS which is not a multiple of IRRADIANCE_COLUMNS would leave
+    // the last surfels without a tile (and a null row count)
+    static_assert(IRRADIANCE_ROWS * IRRADIANCE_COLUMNS == MAX_SURFELS,
+        "The irradiance atlas must have a tile for every surfel");
 private:
     // Size of a cell of the finest cascade and the distance at which the
     // radius of a surfel grows with its distance to the camera (the same as
@@ -197,6 +202,9 @@ private:
         // VkDispatchIndirectCommand for tracing, then integration
         BI_DISPATCH,
         BI_ACTIVE,
+        // Two atomic spawn reservations per cell (static, dynamic), see
+        // surfelReserveCellSpawn
+        BI_CELL_SPAWN,
         BI_COUNT
     };
 
@@ -215,8 +223,8 @@ private:
     // samplers), 2 the storage image of the result, 3 to 9 the buffers of the
     // pool, the cells and the rays, 10 and 11 the irradiance map of the
     // surfels (a sampler and a storage image), 12 the compact copy of the
-    // surfels, 13 the weight of the rays, 14 trace/integration groups, and 17
-    // active surfel IDs
+    // surfels, 13 the weight of the rays, 14 trace/integration groups, 15 the
+    // spawn reservations of the cells, and 17 active surfel IDs
     VkDescriptorSetLayout m_layout;
 
     VkDescriptorPool m_pool;

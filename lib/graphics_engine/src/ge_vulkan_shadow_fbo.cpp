@@ -479,14 +479,17 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
             else lsbody.addInternalPoint(point);
         }
 
-        // Only the far cascade is shrunk to the scene. The near cascades keep
-        // their fixed body, the near boundary of the next cascade relies on
-        // the far distance of the previous one. The parts of the far body
-        // outside of the bounding box of the scene can't contain any shadow
-        // receiver, so they are removed by clipping the body by the light
-        // space bounding box of the scene.
-        bool clip_xy = false;
-        if (i == GVSCC_FAR && m_scene_bbox_valid)
+        // The parts of a body outside of the bounding box of the scene can't
+        // contain any shadow receiver, and a caster can only shadow a receiver
+        // that projects to its own texel, so every cascade is shrunk to the
+        // scene without losing a shadow. The clip keeps the view depth range
+        // of the split: it only narrows the light space box, the near
+        // rectangle at view depth snear is not moved. The sunward face of the
+        // clipped box is behind the scene's own sunward face, which contains
+        // every receiver, so the light space near plane never cuts a receiver
+        // (the sun casts from the negative light space Z side).
+        bool clip_y = false;
+        if (m_scene_bbox_valid)
         {
             irr::core::vector3df scene_edges[8];
             m_scene_bbox.getEdges(scene_edges);
@@ -504,11 +507,9 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
                 // A degenerate body would break the projection matrices
                 if (extent.X > 1e-3f && extent.Y > 1e-3f && extent.Z > 1e-3f)
                 {
-                    // Only a narrowing of X or Y changes the fit, a clip of Z
-                    // alone keeps the X/Y bounds of the body
-                    clip_xy = clipped.MinEdge.X != lsbody.MinEdge.X ||
-                        clipped.MaxEdge.X != lsbody.MaxEdge.X ||
-                        clipped.MinEdge.Y != lsbody.MinEdge.Y ||
+                    // The exact warped X fit is derived from the Y bounds of
+                    // the body, it is only valid when the clip keeps them
+                    clip_y = clipped.MinEdge.Y != lsbody.MinEdge.Y ||
                         clipped.MaxEdge.Y != lsbody.MaxEdge.Y;
                     lsbody = clipped;
                 }
@@ -519,9 +520,8 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
         irr::core::vector3df ls_points[8];
         lsbody.getEdges(ls_points);
 
-        // The view depth range of the body is fixed by the split distances:
-        // the far cascade is still built with its full 200 distance and is
-        // only clipped inside the scene bounding box
+        // The view depth range of the warp is fixed by the split distances,
+        // the scene clip only narrows the light space box of the body
         float znear = snear;
         float zfar = sfar;
 
@@ -570,9 +570,9 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
             // spherical patch, but the warped corners of the box pair the
             // largest X with the smallest Y and overstate X', which leaves a
             // wide unused margin in the map. The warped box corners are only
-            // used when the scene clip narrowed the X/Y bounds, because the
-            // clipped body shape is not tracked.
-            if (!clip_xy)
+            // used when the scene clip narrowed the Y bounds, because then
+            // the near rectangle and the patch are not the body anymore.
+            if (!clip_y)
             {
                 float c = n - lsbody.MinEdge.Y;
                 irr::core::vector3df lsleft_view, lsup_view;
@@ -635,13 +635,20 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
         // Fit the warped body to the unit cube. The warp is monotone in Y, so
         // the warped corners give the exact Y bounds. For X the exact bounds
         // of the body are used when known, the corners of the box alone are
-        // too loose.
+        // too loose. The body is inside both the exact body bounds and the
+        // bounds of the clipped box, so their intersection stays valid and
+        // keeps the fit tight when the scene clip narrowed the body in X.
         float fit_min_x = lsbody.MinEdge.X;
         float fit_max_x = lsbody.MaxEdge.X;
         if (has_exact_fit_x)
         {
-            fit_min_x = exact_fit_min_x;
-            fit_max_x = exact_fit_max_x;
+            float clipped_min_x = std::max(fit_min_x, exact_fit_min_x);
+            float clipped_max_x = std::min(fit_max_x, exact_fit_max_x);
+            if (clipped_max_x > clipped_min_x + 1e-6f)
+            {
+                fit_min_x = clipped_min_x;
+                fit_max_x = clipped_max_x;
+            }
         }
         irr::core::matrix4 fittounitcube;
         fittounitcube(0, 0) = 2.0f / (fit_max_x - fit_min_x);

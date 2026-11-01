@@ -137,9 +137,19 @@ bool surfelAttach(vec3 world_position, out uint node_key, out uint geometry,
     // whatever the distance
     const float tolerance = max(0.1, distance_to_position * 0.005);
 
+    // Only the segment around the surface is queried, not the one from the
+    // camera: the triangle of the position is within the tolerance of it, so a
+    // surface in front of the position (a leaf of a plant between the camera
+    // and the surface of the pixel, which the ray traced scene has, unlike the
+    // one of a farther object which the depth buffer shows) can't take the
+    // attachment of the surfel, and a thin or far surface which the depth
+    // buffer shows but a surface in front of it hides from a ray from the
+    // camera still gets its surfel attached. The query is also as short as the
+    // tolerance, not as long as the distance
     rayQueryEXT query;
-    rayQueryInitializeEXT(query, u_tlas, 0, 0xFF, camera_position, 0.0,
-        direction, distance_to_position + tolerance);
+    rayQueryInitializeEXT(query, u_tlas, 0, 0xFF, camera_position,
+        max(0.0, distance_to_position - tolerance), direction,
+        distance_to_position + tolerance);
     RT_PROCEED(query)
     if (rayQueryGetIntersectionTypeEXT(query, true) !=
         gl_RayQueryCommittedIntersectionTriangleEXT)

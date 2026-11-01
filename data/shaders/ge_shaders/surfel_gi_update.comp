@@ -8,7 +8,10 @@
 // of its old normal (its 6x6 irradiance map and its mean), see the reset below.
 // The surfels which are not seen, are too far or are too old go back to the
 // stack of the free surfels, so the pool is used by the surfaces which are
-// around the camera.
+// around the camera. A surfel which neither the camera's pixels nor a ray of
+// the frame use is out of the GI, so it ages thirty-two times faster and frees
+// its slot (and its entries of the cell lists) in about 38 frames (see
+// SURFEL_MAX_LIFE).
 //
 // Every surfel which is not sleeping asks for an adaptive number of rays (the
 // count of the reference): 4 rays when its mean converged (its variance is
@@ -81,7 +84,14 @@ void main()
             (surfel.m_status & SURFEL_STATUS_SLEEPING) != 0u;
         // The life is reset while the surfel is seen, so a surfel of a surface
         // which is not visible (behind the camera, occluded, far) is recycled
-        surfel.m_life = surfel.m_life == 0u ? 0u : surfel.m_life - 1u;
+        // when its life runs out. A surfel which no ray used either is out of
+        // the GI, so it ages SURFEL_UNSEEN_LIFE_STEP lives per frame and the
+        // pool and the cell lists get its slot back in a thirty-second of the
+        // frames (see SURFEL_MAX_LIFE); a surfel which the rays still use is the
+        // light of a hit and only ages one life per frame
+        const uint life_step = (!seen && !refed) ?
+            SURFEL_UNSEEN_LIFE_STEP : 1u;
+        surfel.m_life -= min(surfel.m_life, life_step);
         surfel.m_frame = min(surfel.m_frame + 1u, 65535u);
         if (seen)
         {
@@ -267,15 +277,19 @@ void main()
         // The soft budget: when the surfels of the previous frame asked for
         // more than SURFEL_RAY_TARGET rays, the rays of every surfel are cut by
         // the ratio (with a random rounding, so the cut surfels are not the
-        // same from one frame to the next)
+        // same from one frame to the next). A surfel which gets no ray keeps
+        // its radiance and asks again in the next frame: the sum of the counts
+        // of the frame is the target, one ray per surfel is not a floor
         ray_count = request_count;
         const uint last_requests = max(u_counter.m_last_ray_requests, 1u);
-        if (last_requests > SURFEL_RAY_TARGET && ray_count > 1u)
+        if (last_requests > SURFEL_RAY_TARGET)
         {
             const float scaled = float(ray_count) * float(SURFEL_RAY_TARGET) /
                 float(last_requests);
-            ray_count = min(ray_count, max(1u, uint(scaled + surfelRand(index,
-                pc.m_frame + 5u))));
+            const uint scaled_count = uint(scaled);
+            ray_count = min(ray_count, scaled_count +
+                (surfelRand(index, pc.m_frame + 5u) <
+                    scaled - float(scaled_count) ? 1u : 0u));
         }
         // The cost of the frame is bounded by the ray buffer of the pool, the
         // surfels which don't get a range keep their radiance (see

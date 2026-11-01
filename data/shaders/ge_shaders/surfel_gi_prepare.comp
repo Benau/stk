@@ -17,6 +17,9 @@ void main()
     {
         u_cells[index].m_offset = 0u;
         u_cells[index].m_count = 0u;
+        // The spawn reservations of the frame, see surfelReserveCellSpawn
+        u_cell_spawns[index * 2u] = 0u;
+        u_cell_spawns[index * 2u + 1u] = 0u;
     }
 
     if (pc.m_first_frame != 0u && index < SURFEL_MAX_COUNT)

@@ -117,12 +117,12 @@ void surfelSpawn(vec3 position, vec3 normal, vec3 irradiance,
     // neither stops the field of the other (counting the kart against the
     // static limit left the ground under it with holes which it could never
     // refill while the kart was there). The grass is not dynamic: it's a thin
-    // surface everywhere, which the field of its cells already lights
-    const uint cell_count = u_cells[surfelCellIndex(cell)].m_count;
-    const uint dynamic_count = surfelCellDynamicCount(cell_count);
-    if (dynamic_object ? dynamic_count >= SURFEL_CELL_DYNAMIC_LIMIT :
-        surfelCellCount(cell_count) - dynamic_count >=
-        SURFEL_CELL_SPAWN_LIMIT)
+    // surface everywhere, which the field of its cells already lights. The
+    // count of the cell is the one of the list built before this pass, so the
+    // spawns of the frame (of this pass and of the tracing) reserve it
+    // atomically, or concurrent spawns would all pass the same count and
+    // overshoot the limits
+    if (!surfelReserveCellSpawn(cell, dynamic_object))
         return;
     // A free slot of the pool, or the slot of the oldest surfel which the
     // camera doesn't see (see surfelEvict): a full pool never leaves the
@@ -131,7 +131,10 @@ void surfelSpawn(vec3 position, vec3 normal, vec3 irradiance,
     if (new_index >= SURFEL_MAX_COUNT)
         new_index = surfelEvict(evict_seed);
     if (new_index >= SURFEL_MAX_COUNT)
+    {
+        surfelReleaseCellSpawn(cell, dynamic_object);
         return;
+    }
     // The field value weighted by the surfels which the pixel intersects, or
     // the environment where there is no field
     const bool covered = field_weight > 0.0;
@@ -206,9 +209,33 @@ void main()
     vec3 world_normal = vec3(0.0);
     if (inside)
     {
-        const ivec2 pixel = clamp(block * 2, pc.m_rect.xy, pc.m_rect.zw - 1);
-        // Reverse z, 0 is the sky and it has no surfel
-        depth = texelFetch(u_depth, pixel, 0).x;
+        const ivec2 first = clamp(block * 2, pc.m_rect.xy, pc.m_rect.zw - 1);
+        const ivec2 last = min(first + ivec2(1), pc.m_rect.zw - 1);
+        // The nearest pixel of the 2x2 block (reverse z, 0 is the sky), not
+        // its first one: a thin surface (a leaf, a wire, a thin bar) covers
+        // one pixel of its block, and the first pixel would take the
+        // background behind it. The surfel of the block would then be spawned
+        // on the background, where the attach of the thin surface can't reach
+        // it (the segment from the camera crosses the thin surface first), and
+        // the pixel would use the field of the background, which is a dark
+        // hole where a sunlit surface is in front of a dark one. The nearest
+        // pixel gives the thin surface the field and the surfels of its block
+        // wherever it covers one pixel of it
+        ivec2 pixel = first;
+        depth = texelFetch(u_depth, first, 0).x;
+        for (int y = first.y; y <= last.y; y++)
+        {
+            for (int x = first.x; x <= last.x; x++)
+            {
+                const float candidate = texelFetch(u_depth, ivec2(x, y),
+                    0).x;
+                if (candidate > depth)
+                {
+                    depth = candidate;
+                    pixel = ivec2(x, y);
+                }
+            }
+        }
         if (depth != 0.0)
         {
             const vec3 xpos = getPosFromUVDepth(vec3(vec2(pixel) + 0.5, depth),
