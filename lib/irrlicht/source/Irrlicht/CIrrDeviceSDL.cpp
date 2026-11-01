@@ -960,12 +960,39 @@ bool CIrrDeviceSDL::run()
 			}
 			break;
 
+#if SDL_VERSION_ATLEAST(2, 0, 9)
+		case SDL_DISPLAYEVENT:
+			GE::logMessage(GE::GLL_INFO, "SDL display event %d on display %d, "
+				"data1 %d (orientation: 1 landscape, 2 landscape flipped, "
+				"3 portrait, 4 portrait flipped)", (int)SDL_event.display.event,
+				(int)SDL_event.display.display, (int)SDL_event.display.data1);
+			break;
+#endif
 		case SDL_QUIT:
 			Close = true;
 			break;
 
 		case SDL_WINDOWEVENT:
 			{
+				const Uint8 window_event = SDL_event.window.event;
+				if (window_event == SDL_WINDOWEVENT_SIZE_CHANGED ||
+					window_event == SDL_WINDOWEVENT_RESIZED ||
+					window_event == SDL_WINDOWEVENT_RESTORED ||
+					window_event == SDL_WINDOWEVENT_MINIMIZED ||
+					window_event == SDL_WINDOWEVENT_MAXIMIZED
+#if SDL_VERSION_ATLEAST(2, 0, 9)
+					|| window_event == SDL_WINDOWEVENT_DISPLAY_CHANGED
+#endif
+					)
+				{
+					int drawable_w = 0, drawable_h = 0;
+					SDL_Vulkan_GetDrawableSize(Window, &drawable_w, &drawable_h);
+					GE::logMessage(GE::GLL_INFO, "SDL window event %d: "
+						"data1 %d data2 %d, drawable %dx%d, cached size %ux%u",
+						(int)window_event, (int)SDL_event.window.data1,
+						(int)SDL_event.window.data2, drawable_w, drawable_h,
+						(unsigned)Width, (unsigned)Height);
+				}
 				if (SDL_event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
 				{
 					handleNewSize(SDL_event.window.data1, SDL_event.window.data2);

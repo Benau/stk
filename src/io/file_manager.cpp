@@ -36,6 +36,7 @@
 
 #ifdef ANDROID
 #include "io/assets_android.hpp"
+#include <SDL_system.h>
 #endif
 
 #ifdef __HAIKU__
@@ -1402,6 +1403,52 @@ void FileManager::redirectOutput()
     Log::verbose("main", "Error messages and other text output will "
                          "be logged to %s.", logoutfile.c_str());
     Log::openOutputFiles(logoutfile);
+
+#ifdef ANDROID
+    // /storage/emulated/0/Android/data/<package> is hidden from most file
+    // managers (Android 11+) and needs adb, while
+    // /storage/emulated/0/Android/media/<package> is writable by the app
+    // without any permission and can be browsed and shared by the user, so a
+    // user who can't use adb logcat can send us this copy of the log.
+    std::vector<std::string> mirror_dirs;
+    const char* external_path = SDL_AndroidGetExternalStoragePath();
+    if (external_path != NULL)
+    {
+        const std::string data_marker = "/Android/data/";
+        const std::string path = external_path;
+        size_t pos = path.find(data_marker);
+        if (pos != std::string::npos)
+        {
+            size_t pkg_begin = pos + data_marker.size();
+            size_t pkg_end = path.find('/', pkg_begin);
+            std::string package = pkg_end == std::string::npos ?
+                path.substr(pkg_begin) :
+                path.substr(pkg_begin, pkg_end - pkg_begin);
+            mirror_dirs.push_back(path.substr(0, pos) + "/Android/media/" +
+                package + "/");
+        }
+    }
+#ifdef ANDROID_PACKAGE_NAME
+    mirror_dirs.push_back(std::string("/storage/emulated/0/Android/media/") +
+        ANDROID_PACKAGE_NAME + "/");
+#endif
+    for (const std::string& dir : mirror_dirs)
+    {
+        if (!checkAndCreateDirectoryP(dir))
+            continue;
+        const std::string mirror_file = dir + m_stdout_filename;
+        // Keep the log of the previous run, it may be the one of a crash
+        removeFile(mirror_file + ".1");
+        if (fileExists(mirror_file))
+            FileUtils::renameU8Path(mirror_file, mirror_file + ".1");
+        if (Log::openMirrorFile(mirror_file))
+        {
+            Log::info("FileManager", "A copy of the log is also written to "
+                "%s", mirror_file.c_str());
+            break;
+        }
+    }
+#endif
 }   // redirectOutput
 
 //-----------------------------------------------------------------------------
