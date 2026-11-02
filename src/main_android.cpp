@@ -28,6 +28,9 @@
 #include "SDL_stdinc.h"
 #include "SDL_system.h"
 #include <jni.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <string>
 std::string g_android_main_user_agent;
 
 extern int android_main(int argc, char *argv[]);
@@ -105,6 +108,41 @@ extern "C" int SDL_main(int argc, char *argv[])
 extern "C" void* LoadVulkanDrivers(const char *path);
 extern "C" const char* Android_Custom_Vulkan_Driver_In_Use();
 
+#if defined(ANDROID) && defined(__aarch64__)
+// Makes the (custom) Vulkan driver, which is loaded inside this process, write
+// its log (Mesa's MESA_LOG_FILE) next to our stdout.log copy, so it can be
+// retrieved with a file browser without adb. Mesa still logs to logcat too.
+static void setup_driver_log_file()
+{
+    if (getenv("MESA_LOG_FILE") != NULL)
+        return;
+    const char* external_path = SDL_AndroidGetExternalStoragePath();
+    if (external_path == NULL)
+        return;
+    const std::string data_marker = "/Android/data/";
+    const std::string path = external_path;
+    size_t pos = path.find(data_marker);
+    if (pos == std::string::npos)
+        return;
+    size_t pkg_begin = pos + data_marker.size();
+    size_t pkg_end = path.find('/', pkg_begin);
+    std::string package = pkg_end == std::string::npos ?
+        path.substr(pkg_begin) : path.substr(pkg_begin, pkg_end - pkg_begin);
+    // Same directory as the stdout.log copy written by FileManager
+    std::string dir = path.substr(0, pos) + "/Android/media";
+    mkdir(dir.c_str(), 0775);
+    dir += "/" + package;
+    mkdir(dir.c_str(), 0775);
+    struct stat st;
+    if (stat(dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode))
+        return;
+    const std::string file = dir + "/mesa.log";
+    setenv("MESA_LOG_FILE", file.c_str(), 1);
+    // Mesa opens the file with "w" when the driver is initialized
+    Log::info("MainAndroid", "Vulkan driver log: %s", file.c_str());
+}
+#endif
+
 void override_default_params_for_mobile()
 {
     // It has an effect only on the first run, when config file is created.
@@ -125,6 +163,7 @@ void override_default_params_for_mobile()
 #if defined(__aarch64__)
     if (SDL_GetAndroidSDKVersion() >= 28)
     {
+        setup_driver_log_file();
         void* obj = LoadVulkanDrivers("libvulkan.so");
         const char* driver = Android_Custom_Vulkan_Driver_In_Use();
         if (driver != NULL)
