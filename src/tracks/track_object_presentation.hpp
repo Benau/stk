@@ -87,12 +87,13 @@ public:
     // ------------------------------------------------------------------------
 
     virtual void reset() {}
+    virtual void onStart() {}
     virtual void setEnable(bool enabled)
     {
         Log::warn("TrackObjectPresentation", "setEnable unimplemented for this presentation type");
     }
     virtual void updateGraphics(float dt) {}
-    virtual void update(float dt) {}
+    virtual bool update(float dt) { return false; }
     virtual void move(const core::vector3df& xyz, const core::vector3df& hpr,
         const core::vector3df& scale, bool isAbsoluteCoord) {}
 
@@ -196,7 +197,8 @@ class TrackObjectPresentationLibraryNode : public TrackObjectPresentationSceneNo
     TrackObject* m_parent;
     using TrackObjectPresentationSceneNode::move;
     std::string m_name;
-    bool m_start_executed, m_reset_executed;
+private:
+    void onReset();
 public:
     // Static so a track object can know it before this is constructed (the
     // children of the library are created inside the constructor)
@@ -205,12 +207,12 @@ public:
         const XMLNode& xml_node,
         ModelDefinitionLoader& model_def_loader);
     virtual ~TrackObjectPresentationLibraryNode();
-    virtual void update(float dt) OVERRIDE;
     virtual void reset() OVERRIDE
     {
-        m_reset_executed = false;
         TrackObjectPresentationSceneNode::reset();
+        onReset();
     }
+    virtual void onStart() OVERRIDE;
     virtual void move(const core::vector3df& xyz, const core::vector3df& hpr,
         const core::vector3df& scale, bool isAbsoluteCoord) OVERRIDE;
 };   // TrackObjectPresentationLibraryNode
