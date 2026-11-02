@@ -33,6 +33,7 @@
 #include "IrrlichtDevice.h"
 
 #ifdef _IRR_COMPILE_WITH_VULKAN_
+#include "SDL_version.h"
 #include "SDL_vulkan.h"
 #include <algorithm>
 #include <atomic>
@@ -679,6 +680,12 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
     os::Printer::log("Vulkan vendor", getVendorInfo().c_str());
     os::Printer::log("Vulkan renderer", m_properties.deviceName);
     os::Printer::log("Vulkan driver version", getDriverVersionString().c_str());
+    GE::logMessage(GLL_INFO, "Vulkan device: vendorID 0x%x deviceID 0x%x "
+        "apiVersion %u.%u.%u raw driverVersion 0x%x", m_properties.vendorID,
+        m_properties.deviceID, VK_VERSION_MAJOR(m_properties.apiVersion),
+        VK_VERSION_MINOR(m_properties.apiVersion),
+        VK_VERSION_PATCH(m_properties.apiVersion),
+        m_properties.driverVersion);
     for (const char* ext : m_device_extensions)
         os::Printer::log("Vulkan enabled extension", ext);
 
@@ -1342,6 +1349,96 @@ std::string GEVulkanDriver::getDriverVersionString() const
 }   // getDriverVersionString
 
 // ----------------------------------------------------------------------------
+namespace
+{
+// Diagnostic helpers used to log what the surface / swapchain really look like
+// on a device (for example foldables where SDL and Vulkan may disagree)
+const char* getTransformName(VkSurfaceTransformFlagBitsKHR t)
+{
+    switch (t)
+    {
+    case VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR: return "identity";
+    case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR: return "rotate90";
+    case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR: return "rotate180";
+    case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR: return "rotate270";
+    case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_BIT_KHR: return "hmirror";
+    case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR: return "hmirror+rotate90";
+    case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_180_BIT_KHR: return "hmirror+rotate180";
+    case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR: return "hmirror+rotate270";
+    case VK_SURFACE_TRANSFORM_INHERIT_BIT_KHR: return "inherit";
+    default: return "unknown";
+    }
+}   // getTransformName
+
+// ----------------------------------------------------------------------------
+std::string getTransformMaskString(VkSurfaceTransformFlagsKHR flags)
+{
+    std::string ret;
+    for (uint32_t bit = 1; bit <= VK_SURFACE_TRANSFORM_INHERIT_BIT_KHR;
+         bit <<= 1)
+    {
+        if ((flags & bit) == 0)
+            continue;
+        if (!ret.empty())
+            ret += ",";
+        ret += getTransformName((VkSurfaceTransformFlagBitsKHR)bit);
+    }
+    return ret.empty() ? "none" : ret;
+}   // getTransformMaskString
+
+// ----------------------------------------------------------------------------
+const char* getPresentModeName(VkPresentModeKHR m)
+{
+    switch (m)
+    {
+    case VK_PRESENT_MODE_IMMEDIATE_KHR: return "immediate";
+    case VK_PRESENT_MODE_MAILBOX_KHR: return "mailbox";
+    case VK_PRESENT_MODE_FIFO_KHR: return "fifo";
+    case VK_PRESENT_MODE_FIFO_RELAXED_KHR: return "fifo_relaxed";
+    default: return "unknown";
+    }
+}   // getPresentModeName
+
+// ----------------------------------------------------------------------------
+const char* getResultName(VkResult r)
+{
+    switch (r)
+    {
+    case VK_SUCCESS: return "VK_SUCCESS";
+    case VK_SUBOPTIMAL_KHR: return "VK_SUBOPTIMAL_KHR";
+    case VK_ERROR_OUT_OF_DATE_KHR: return "VK_ERROR_OUT_OF_DATE_KHR";
+    case VK_ERROR_SURFACE_LOST_KHR: return "VK_ERROR_SURFACE_LOST_KHR";
+    case VK_ERROR_DEVICE_LOST: return "VK_ERROR_DEVICE_LOST";
+    case VK_ERROR_OUT_OF_HOST_MEMORY: return "VK_ERROR_OUT_OF_HOST_MEMORY";
+    case VK_ERROR_OUT_OF_DEVICE_MEMORY: return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
+    case VK_ERROR_NATIVE_WINDOW_IN_USE_KHR: return "VK_ERROR_NATIVE_WINDOW_IN_USE_KHR";
+    case VK_ERROR_INITIALIZATION_FAILED: return "VK_ERROR_INITIALIZATION_FAILED";
+    case VK_TIMEOUT: return "VK_TIMEOUT";
+    case VK_NOT_READY: return "VK_NOT_READY";
+    default: return "other VkResult";
+    }
+}   // getResultName
+
+// ----------------------------------------------------------------------------
+/** Logs unusual acquire / present results without flooding the log: the first
+ *  50 occurrences of a call site (tracked by its counter) and then every
+ *  300th. */
+void logSwapchainResult(const char* where, VkResult result, bool suboptimal,
+                        unsigned& counter, const VkExtent2D& swap_extent,
+                        const core::dimension2du& screen_size)
+{
+    const unsigned n = counter++;
+    if (n >= 50 && n % 300 != 0)
+        return;
+    GE::logMessage(GLL_WARNING,
+        "Swapchain %s: %s (%d)%s, swapchain extent %ux%u, ScreenSize %ux%u, "
+        "occurrence #%u", where, getResultName(result), (int)result,
+        suboptimal ? " after suboptimal acquire" : "", swap_extent.width,
+        swap_extent.height, screen_size.Width, screen_size.Height, n + 1);
+}   // logSwapchainResult
+}   // anonymous namespace
+
+// ----------------------------------------------------------------------------
 void GEVulkanDriver::createSwapChain()
 {
     VkSurfaceFormatKHR surface_format = m_surface_formats[0];
@@ -1457,6 +1554,56 @@ found_mode:
     }
 #endif
 
+    // Diagnostics for devices where the output is corrupted or mis-sized
+    {
+        int win_w = 0, win_h = 0;
+        SDL_GetWindowSize(m_params.m_sdl_window, &win_w, &win_h);
+        int display_index = SDL_GetWindowDisplayIndex(m_params.m_sdl_window);
+        SDL_DisplayMode display_mode = {};
+        if (display_index >= 0)
+            SDL_GetCurrentDisplayMode(display_index, &display_mode);
+        int orientation = -1;
+#if SDL_VERSION_ATLEAST(2, 0, 9)
+        orientation = (int)SDL_GetDisplayOrientation(
+            display_index >= 0 ? display_index : 0);
+#endif
+        GE::logMessage(GLL_INFO,
+            "Swapchain query: SDL window %dx%d, SDL drawable %dx%d, "
+            "display %d mode %dx%d@%dHz orientation %d (SDL: 0 unknown, "
+            "1 landscape, 2 landscape flipped, 3 portrait, "
+            "4 portrait flipped)", win_w, win_h, w, h, display_index,
+            display_mode.w, display_mode.h, display_mode.refresh_rate,
+            orientation);
+        GE::logMessage(GLL_INFO,
+            "Swapchain query: surface currentExtent %ux%u%s, min %ux%u, "
+            "max %ux%u, currentTransform %s, supportedTransforms %s, "
+            "image count min %u max %u, supportedUsageFlags 0x%x",
+            surface_extent.width, surface_extent.height,
+            surface_extent_valid ? "" : " (not usable)", min_extent.width,
+            min_extent.height, max_extent.width, max_extent.height,
+            getTransformName(m_surface_capabilities.currentTransform),
+            getTransformMaskString(
+            m_surface_capabilities.supportedTransforms).c_str(),
+            m_surface_capabilities.minImageCount,
+            m_surface_capabilities.maxImageCount,
+            (unsigned)m_surface_capabilities.supportedUsageFlags);
+        if (surface_extent_valid &&
+            (surface_extent.width != (uint32_t)w ||
+            surface_extent.height != (uint32_t)h))
+        {
+            const bool transposed = surface_extent.width == (uint32_t)h &&
+                surface_extent.height == (uint32_t)w;
+            GE::logMessage(GLL_WARNING,
+                "Surface currentExtent %ux%u differs from SDL drawable "
+                "%dx%d (%s), using %ux%u for the logical screen size",
+                surface_extent.width, surface_extent.height, w, h,
+                transposed ? "transposed, so the driver may report the "
+                "identity orientation instead of the current one" :
+                "not just a rotation", actual_extent.width,
+                actual_extent.height);
+        }
+    }
+
     VkSwapchainCreateInfoKHR create_info = {};
     create_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     create_info.surface = m_vk->surface;
@@ -1502,6 +1649,7 @@ found_mode:
     create_info.oldSwapchain = VK_NULL_HANDLE;
 
     m_swap_chain_extent = actual_extent;
+    const core::dimension2du previous_screen_size = ScreenSize;
     ScreenSize.Width = m_swap_chain_extent.width;
     ScreenSize.Height = m_swap_chain_extent.height;
     m_clip = getFullscreenClip();
@@ -1514,13 +1662,36 @@ found_mode:
         std::swap(m_swap_chain_extent.width, m_swap_chain_extent.height);
     }
 
+    GE::logMessage(GLL_INFO,
+        "Creating swapchain: ScreenSize %ux%u (was %ux%u), imageExtent "
+        "%ux%u, preTransform %s (pre-rotation matrix %s), format %d "
+        "colorspace %d, present mode %s, requested images %u, composite "
+        "alpha 0x%x, sharing mode %s, render scale %.2f",
+        ScreenSize.Width, ScreenSize.Height, previous_screen_size.Width,
+        previous_screen_size.Height, create_info.imageExtent.width,
+        create_info.imageExtent.height,
+        getTransformName(m_surface_capabilities.currentTransform),
+        m_pre_rotation_matrix.isIdentity() ? "identity" : "rotated",
+        (int)surface_format.format, (int)surface_format.colorSpace,
+        getPresentModeName(present_mode), swap_chain_images_count,
+        (unsigned)create_info.compositeAlpha,
+        create_info.imageSharingMode == VK_SHARING_MODE_CONCURRENT ?
+        "concurrent" : "exclusive", getGEConfig()->m_render_scale);
+
     VkResult result = vkCreateSwapchainKHR(m_vk->device, &create_info, NULL,
         &m_vk->swap_chain);
 
     if (result != VK_SUCCESS)
+    {
+        GE::logMessage(GLL_ERROR, "vkCreateSwapchainKHR failed: %s (%d)",
+            getResultName(result), (int)result);
         throw std::runtime_error("vkCreateSwapchainKHR failed");
+    }
 
     vkGetSwapchainImagesKHR(m_vk->device, m_vk->swap_chain, &swap_chain_images_count, NULL);
+    GE::logMessage(GLL_INFO, "Swapchain created with %u images, "
+        "swapchain extent now %ux%u", swap_chain_images_count,
+        m_swap_chain_extent.width, m_swap_chain_extent.height);
     m_vk->swap_chain_images.resize(swap_chain_images_count);
     vkGetSwapchainImagesKHR(m_vk->device, m_vk->swap_chain, &swap_chain_images_count,
         &m_vk->swap_chain_images[0]);
@@ -1964,6 +2135,11 @@ void GEVulkanDriver::copyBuffer(VkBuffer src_buffer, VkBuffer dst_buffer,
 // ----------------------------------------------------------------------------
 void GEVulkanDriver::OnResize(const core::dimension2d<u32>& size)
 {
+    GE::logMessage(GLL_INFO, "OnResize: SDL size %ux%u (previous window size "
+        "%ux%u, ScreenSize %ux%u, rendering %s)", size.Width, size.Height,
+        m_params.WindowSize.Width, m_params.WindowSize.Height,
+        ScreenSize.Width, ScreenSize.Height,
+        g_paused_rendering.load() ? "paused" : "active");
     m_params.WindowSize = size;
     CNullDriver::OnResize(size);
     if (g_paused_rendering.load() == false)
@@ -2133,6 +2309,9 @@ bool GEVulkanDriver::endScene()
 
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
     {
+        static unsigned acquire_fail_count = 0;
+        logSwapchainResult("acquire", result, false, acquire_fail_count,
+            m_swap_chain_extent, ScreenSize);
         video::CNullDriver::endScene();
         GEVulkan2dRenderer::clear();
         if (result == VK_ERROR_OUT_OF_DATE_KHR ||
@@ -2206,6 +2385,12 @@ bool GEVulkanDriver::endScene()
         ul.unlock();
     }
     const bool end_scene_result = video::CNullDriver::endScene();
+    if (result != VK_SUCCESS || acquire_suboptimal)
+    {
+        static unsigned present_issue_count = 0;
+        logSwapchainResult("present", result, acquire_suboptimal,
+            present_issue_count, m_swap_chain_extent, ScreenSize);
+    }
     if (result == VK_ERROR_SURFACE_LOST_KHR)
     {
         recreate_swap_chain(true/*handle_surface*/);

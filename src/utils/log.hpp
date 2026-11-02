@@ -65,6 +65,10 @@ private:
 
     /** The file where stdout output will be written */
     static FILE* m_file_stdout;
+    /** An optional second copy of the log, used by Android to also write it
+     *  to a place which file managers can reach without adb */
+    static FILE* m_file_mirror;
+
 
     /** An optional buffer for lines to be output. */
     struct LineInfo
@@ -114,6 +118,7 @@ public:
     LOG(fatal,   LL_FATAL);
 
     static void openOutputFiles(const std::string &logout);
+    static bool openMirrorFile(const std::string &path);
 
     static void closeOutputFiles();
     static void flushBuffers();

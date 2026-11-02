@@ -43,6 +43,7 @@
 Log::LogLevel Log::m_min_log_level = Log::LL_VERBOSE;
 bool          Log::m_no_colors     = false;
 FILE*         Log::m_file_stdout   = NULL;
+FILE*         Log::m_file_mirror   = NULL;
 size_t        Log::m_buffer_size = 1;
 bool          Log::m_console_log = true;
 Synchronised<std::vector<struct Log::LineInfo> > Log::m_line_buffer;
@@ -280,6 +281,7 @@ void Log::writeLine(const char *line, int level)
 #endif
 
     if (m_file_stdout) fprintf(m_file_stdout, "%s", line);
+    if (m_file_mirror) fprintf(m_file_mirror, "%s", line);
 
 #ifdef WIN32
     if (level >= LL_FATAL)
@@ -331,9 +333,29 @@ void Log::openOutputFiles(const std::string &logout)
 } // closeOutputFiles
 
 // ----------------------------------------------------------------------------
+/** Opens an additional copy of the log (used by Android).
+ *  \param path Full path of the file.
+ *  \return True if the file was opened.
+ */
+bool Log::openMirrorFile(const std::string &path)
+{
+    m_file_mirror = FileUtils::fopenU8Path(path, "w");
+    if (!m_file_mirror)
+        return false;
+    // Disable buffering so that messages are there even if the game crashes
+    setvbuf(m_file_mirror, NULL, _IONBF, 0);
+    return true;
+} // openMirrorFile
+
+// ----------------------------------------------------------------------------
 /** Function to close output files */
 void Log::closeOutputFiles()
 {
-    fclose(m_file_stdout);
+    if (m_file_stdout)
+        fclose(m_file_stdout);
+    m_file_stdout = NULL;
+    if (m_file_mirror)
+        fclose(m_file_mirror);
+    m_file_mirror = NULL;
 } // closeOutputFiles
 
