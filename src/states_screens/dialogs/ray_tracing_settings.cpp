@@ -49,8 +49,8 @@ void RayTracingSettingsDialog::beforeAddingWidgets()
         ->setState(UserConfigParams::m_ray_tracing_reflection);
     getWidget<CheckBoxWidget>("rt_displace_reflection")
         ->setState(UserConfigParams::m_ray_tracing_displace_reflection);
-    getWidget<CheckBoxWidget>("rt_shadow")
-        ->setState(UserConfigParams::m_ray_tracing_shadow);
+    //getWidget<CheckBoxWidget>("rt_shadow")
+    //    ->setState(UserConfigParams::m_ray_tracing_shadow);
     getWidget<CheckBoxWidget>("rt_dynamic_objects")
         ->setState(UserConfigParams::m_ray_tracing_dynamic_objects);
     getWidget<CheckBoxWidget>("rt_foliage")
@@ -68,7 +68,7 @@ void RayTracingSettingsDialog::updateActivation()
     bool on = m_supported && enabled->getState();
     getWidget<CheckBoxWidget>("rt_reflection")->setActive(on);
     getWidget<CheckBoxWidget>("rt_displace_reflection")->setActive(on);
-    getWidget<CheckBoxWidget>("rt_shadow")->setActive(on);
+    //getWidget<CheckBoxWidget>("rt_shadow")->setActive(on);
     getWidget<CheckBoxWidget>("rt_dynamic_objects")->setActive(on);
     getWidget<CheckBoxWidget>("rt_foliage")->setActive(on);
     getWidget<CheckBoxWidget>("rt_grass")->setActive(on);
@@ -109,8 +109,8 @@ GUIEngine::EventPropagation RayTracingSettingsDialog::processEvent(
                 UserConfigParams::m_ray_tracing_displace_reflection =
                     getWidget<CheckBoxWidget>("rt_displace_reflection")
                     ->getState();
-                UserConfigParams::m_ray_tracing_shadow =
-                    getWidget<CheckBoxWidget>("rt_shadow")->getState();
+                //UserConfigParams::m_ray_tracing_shadow =
+                //    getWidget<CheckBoxWidget>("rt_shadow")->getState();
                 UserConfigParams::m_ray_tracing_dynamic_objects =
                     getWidget<CheckBoxWidget>("rt_dynamic_objects")
                     ->getState();
