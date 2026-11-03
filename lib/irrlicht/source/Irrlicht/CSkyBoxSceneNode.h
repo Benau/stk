@@ -44,11 +44,25 @@ namespace scene
 		//! Returns type of the scene node
 		virtual ESCENE_NODE_TYPE getType() const { return ESNT_SKY_BOX; }
 
+		//! Returns an id that is unique among all skybox scene nodes ever created
+		/** Ids are never reused, so an id can be used to tell whether the skybox
+		has changed without holding a reference to the node (unlike a pointer,
+		which can be reused by a new node after the old one is deleted). */
+		virtual u64 getUniqueNodeID() const { return UniqueSkyBoxID; }
+
 		//! Creates a clone of this scene node and its children.
 		virtual ISceneNode* clone(ISceneNode* newParent=0, ISceneManager* newManager=0); 
 
 	private:
 
+		//! Created on the main thread only (scene nodes are not thread-safe)
+		static u64 getNextUniqueSkyBoxID()
+		{
+			static u64 counter = 0;
+			return ++counter;
+		}
+
+		u64 UniqueSkyBoxID;
 		core::aabbox3d<f32> Box;
 		u16 Indices[4];
 		video::S3DVertex Vertices[4*6];

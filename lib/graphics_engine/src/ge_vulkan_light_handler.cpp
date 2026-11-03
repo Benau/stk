@@ -83,7 +83,7 @@ static const float LIGHT_PRUNE_INTERVAL = 1.0f;
 
 // ----------------------------------------------------------------------------
 // State of a light that survives from frame to frame, keyed by
-// ILightSceneNode::getUniqueLightID so the node doesn't need to be referenced
+// ISceneNode::getUniqueNodeID so the node doesn't need to be referenced
 struct GELightState
 {
     // 0 to 1, multiplied to the light color
@@ -546,7 +546,7 @@ void GEVulkanLightHandler::addLightNode(irr::scene::ILightSceneNode* node)
         }
         GELightEntry e = {};
         e.m_light = gl;
-        e.m_state = m_lights->getState(node->getUniqueLightID(),
+        e.m_state = m_lights->getState(node->getUniqueNodeID(),
             node->isNoFadeInOutActive());
         m_lights->m_data.push_back(e);
     }
@@ -559,7 +559,7 @@ void GEVulkanLightHandler::touchLightNode(irr::scene::ILightSceneNode* node)
         return;
     // Same fade as if it was submitted, so a light doesn't fade in again
     // every time it comes back to the view
-    m_lights->advance(m_lights->getState(node->getUniqueLightID(),
+    m_lights->advance(m_lights->getState(node->getUniqueNodeID(),
             node->isNoFadeInOutActive()));
 }   // touchLightNode
 
