@@ -194,7 +194,10 @@ void GEVulkanShadowFBO::createRTT()
         dependencies[2 * i + 1].srcSubpass      = i;
         dependencies[2 * i + 1].dstSubpass      = VK_SUBPASS_EXTERNAL;
         dependencies[2 * i + 1].srcStageMask    = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-        dependencies[2 * i + 1].dstStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        // Also read by the compute shader of the light scattering
+        dependencies[2 * i + 1].dstStageMask    =
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
         dependencies[2 * i + 1].srcAccessMask   = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         dependencies[2 * i + 1].dstAccessMask   = VK_ACCESS_SHADER_READ_BIT;
         dependencies[2 * i + 1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;

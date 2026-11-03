@@ -2822,9 +2822,11 @@ void GEVulkanDrawCall::renderSolidRT(GEVulkanDriver* vk, VkCommandBuffer cmd)
 bool GEVulkanDrawCall::hasLightScatter() const
 {
     // Same as the OpenGL renderer which needs the fog (the density is 0 if
-    // there is none), and it has no point of marching without any light
+    // there is none). Without any point light there is nothing to march,
+    // unless the sun of the light shafts (which the track can change at
+    // runtime) is scattered by the fog
     return m_light_scatter && m_light_handler &&
-        m_light_handler->getLightCount() > 0 &&
+        (m_light_handler->getLightCount() > 0 || hasGodRays()) &&
         m_light_handler->getFogDensity() > 0.0f;
 }   // hasLightScatter
 

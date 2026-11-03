@@ -126,19 +126,6 @@ float getShadowPCF(sampler2DArrayShadow map, vec2 shadowtexcoord, int layer, flo
     return sum * (1.0 / 16.0);
 }
 
-int getFaceIndex(vec3 d)
-{
-    vec3 a = abs(d);
-    int face;
-    if(a.x > a.y && a.x > a.z)
-        face = d.x > 0 ? 0 : 1;
-    else if(a.y > a.z)
-        face = d.y > 0 ? 2 : 3;
-    else
-        face = d.z > 0 ? 4 : 5;
-    return face;
-}
-
 // ---------------------------------------------------------------------------
 // sampleOmniShadow
 //

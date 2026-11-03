@@ -1,6 +1,11 @@
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0) uniform sampler2D u_depth;
+
+// The environment descriptor set contains the layered shadow map.
+// Binding 3 is the sun cascades followed by the point/spot shadow layers.
+layout(set = 2, binding = 3) uniform sampler2DArrayShadow u_shadow_map;
+
 // Light scattering has no alpha and is never negative
 #ifdef SHADER_STORAGE_IMAGE_EXTENDED_FORMATS
 layout(set = 0, binding = 1, r11f_g11f_b10f) uniform writeonly image2D u_scatter;
@@ -13,20 +18,34 @@ layout(push_constant) uniform PushConstants
     // x0, y0, x1, y1 (exclusive) in pixels of the depth: the viewport of one
     // camera, u_scatter is half the size of it and covers the same area
     ivec4 m_rect;
+    // xyz is the position (world space) of the sun of the light shaft, w its
+    // radius, all 0 if the track has none
+    vec4 m_light_shaft_position_radius;
+    // rgb is the color and a the opacity of the sun of the light shaft, a is
+    // 0 if the track has none
+    vec4 m_light_shaft_color_opacity;
 } pc;
 
 #include "utils/camera.glsl"
+#include "utils/constants_utils.glsl"
 #include "utils/global_light_data.glsl"
 #include "utils/unproject_position.glsl"
 
-// Light scattering of the point lights in the fog: every pixel marches in 16
-// steps from the farthest point of its ray inside the sphere of the light (or
-// the geometry, whichever is closer) back to the camera. The result is blurred
-// (the gaussian mode of blur_hdr.comp) and added to hdr (lighting_composite.frag).
+// Volumetric light scattering is accumulated at half resolution along each
+// camera ray. The sun is integrated with 24 jittered, quadratically
+// distributed steps, attenuated by exponential fog, the Henyey-Greenstein
+// phase function and the sun shadow. Point and spot lights are integrated in
+// 16 steps over the part of each ray inside their light sphere. A light with
+// a shadow uses jittered equiangular sampling, so the samples follow the light
+// and the shadowed shape does not depend on the camera distance (uniform steps
+// from the camera alias against thin shadows and look like waves when the
+// camera moves). A light without a shadow has a smooth integrand, which uniform
+// steps handle well and cheaper.
 //
-// Here every tile of 16x16 pixels first collects the lights which touch its
-// view frustum (like the billboards do, but with the exact sphere), so most of
-// the pixels loop over few lights or none.
+// Each 16x16 tile first collects the lights whose spheres intersect its view
+// frustum, so most pixels loop over few lights or none. The result is blurred
+// (the gaussian mode of blur_hdr.comp) and added to hdr
+// (lighting_composite.frag).
 const int STEPS = 16;
 const uint TILE_THREADS = 64u;
 
@@ -34,6 +53,166 @@ shared uint s_count;
 shared uint s_index[MAX_RENDERING_LIGHT];
 // View space position (xyz) and radius (w)
 shared vec4 s_light[MAX_RENDERING_LIGHT];
+
+// A single depth comparison is sufficient for a volume sample. Unlike a
+// surface, it has no normal and needs neither PCF filtering nor normal bias.
+float sampleSunCascadeSingle(int cascade, vec3 world_pos)
+{
+    vec4 clip = u_global_light.m_shadow_projection_view_matrix[cascade] *
+        vec4(world_pos, 1.0);
+    if (clip.w <= 0.0)
+        return 1.0;
+    vec3 ndc = clip.xyz / clip.w;
+    vec2 uv = ndc.xy * 0.5 + 0.5;
+    if (any(lessThan(uv, vec2(0.0))) ||
+        any(greaterThan(uv, vec2(1.0))) || ndc.z < 0.0 || ndc.z > 1.0)
+        return 1.0;
+    return texture(u_shadow_map, vec4(uv, float(cascade), ndc.z));
+}
+
+// Select one cascade from view-space depth. Do not blend neighboring
+// cascades: each volumetric step needs only one comparison sample.
+float sampleSunShadowSingle(vec3 world_pos, float view_depth)
+{
+    int level = view_depth < 10.0 ? 0 :
+        (view_depth < 45.0 ? 1 : 2);
+    return sampleSunCascadeSingle(level, world_pos);
+}
+
+float sampleOmniShadowSingle(int light_id, vec3 world_pos)
+{
+    vec3 light_pos = u_global_light.m_lights[light_id].m_position_radius.xyz;
+    vec3 surface_to_light = light_pos - world_pos;
+    vec3 to_light = surface_to_light / max(length(surface_to_light), 0.0001);
+    // A small depth bias avoids precision self-shadowing. There is no normal
+    // bias because the volume sample has no surface normal.
+    vec3 biased_pos = world_pos + to_light * 0.08;
+    float spot_scale =
+        u_global_light.m_lights[light_id].m_direction_scale_offset.z;
+    int face = spot_scale != 0.0 ? 0 : getFaceIndex(biased_pos - light_pos);
+    int layer = light_id * OMNI_FACES_PER_LIGHT + face;
+    // The combined shadow array stores sun-cascade layers before omni layers.
+    if (u_shadow_type == GST_COMBINED)
+        layer += 3;
+
+    mat4 pv = u_global_light.m_lights[light_id]
+        .m_shadow_projection_view_matrix[face];
+    vec4 clip = pv * vec4(biased_pos, 1.0);
+    if (clip.w <= 0.0)
+        return 1.0;
+    vec3 ndc = clip.xyz / clip.w;
+    vec2 uv = ndc.xy * 0.5 + 0.5;
+    if (any(lessThan(uv, vec2(0.0))) ||
+        any(greaterThan(uv, vec2(1.0))) || ndc.z < 0.0 || ndc.z > 1.0)
+        return 1.0;
+    return texture(u_shadow_map, vec4(uv, float(layer), ndc.z));
+}
+
+// Henyey-Greenstein phase function, cos_theta is the cosine between the
+// direction of the ray and the one where the light comes from (the direction
+// toward the sun for the sun), g is the anisotropy (0 is isotropic)
+float phaseHG(float cos_theta, float g)
+{
+    const float pi = 3.14159265359;
+    float g2 = g * g;
+    return (1.0 - g2) / (4.0 * pi *
+        pow(max(1.0 + g2 - 2.0 * g * cos_theta, 1.0e-4), 1.5));
+}
+
+float interleavedGradientNoise(vec2 p)
+{
+    return fract(52.9829189 * fract(dot(p,
+        vec2(0.06711056, 0.00583715))));
+}
+
+// The light shaft (god rays) of the track, it comes from the push constants
+// and not from a specialization constant because the track can change it at
+// runtime (GEVulkanDriver::setGodRays), without recreating the pipeline
+bool hasLightShaft()
+{
+    return pc.m_light_shaft_color_opacity.a > 0.0;
+}
+
+// The parent renderer already multiplies the color by the opacity
+vec3 getLightShaftColor()
+{
+    return pc.m_light_shaft_color_opacity.rgb;
+}
+
+// World space direction from the camera to the sun of the light shaft
+vec3 getSunDirection()
+{
+    vec3 to_sun = pc.m_light_shaft_position_radius.xyz -
+        u_camera.m_inverse_view_matrix[3].xyz;
+    float distance_to_sun = length(to_sun);
+    return distance_to_sun > 0.0001 ?
+        to_sun / distance_to_sun : normalize(u_global_light.m_sun_direction);
+}
+
+// Sun in-scattering through the fog, it needs the light shaft of the track.
+// The shadow of it only depends on the shadow settings (u_shadow_type and
+// u_shadow_size), like the one of the point lights
+vec3 sunScatter(vec3 ray_dir, float scene_distance, vec2 pixel)
+{
+    const float density = u_global_light.m_fog_density;
+    float far_distance = min(scene_distance,
+        max(u_global_light.m_fog_range.y, 1.0));
+    far_distance = min(far_distance, 6.0 / max(density, 1.0e-8));
+    if (far_distance <= 0.0)
+        return vec3(0.0);
+
+    const vec3 sun_radiance = u_global_light.m_sun_color *
+        (u_global_light.m_sun_scatter * 7.5) * getLightShaftColor();
+    const vec3 world_ray_dir = normalize(
+        (u_camera.m_inverse_view_matrix * vec4(ray_dir, 0.0)).xyz);
+    const float phase = phaseHG(dot(world_ray_dir, getSunDirection()), 0.7);
+    const vec3 scatter_radiance = sun_radiance * phase;
+
+    const bool shadow_enabled = (u_shadow_type & GST_SUN) != 0u &&
+        u_shadow_size != 0u;
+
+    // No sun shadows: integrate homogeneous fog analytically.
+    if (!shadow_enabled)
+    {
+        return scatter_radiance *
+            (1.0 - exp(-density * far_distance));
+    }
+
+    vec3 scatter = vec3(0.0);
+    float transmittance = 1.0;
+    float jitter = interleavedGradientNoise(pixel);
+
+    const int sun_steps = 12;
+    for (int i = 0; i < sun_steps; i++)
+    {
+        float u0 = float(i) / float(sun_steps);
+        float u1 = float(i + 1) / float(sun_steps);
+
+        float t0 = far_distance * u0 * u0;
+        float t1 = far_distance * u1 * u1;
+
+        // Jitter only the shadow sampling position.
+        float u = (float(i) + jitter) / float(sun_steps);
+        float sample_t = far_distance * u * u;
+
+        float extinction = density * (t1 - t0);
+        float segment_transmittance = exp(-extinction);
+
+        // Exact integrated extinction over this segment.
+        float weight = transmittance *
+            (1.0 - segment_transmittance);
+
+        vec3 xpos = ray_dir * sample_t;
+        vec3 world_pos = (u_camera.m_inverse_view_matrix *
+            vec4(xpos, 1.0)).xyz;
+
+        float shadow = sampleSunShadowSingle(world_pos, xpos.z);
+
+        scatter += scatter_radiance * shadow * weight;
+        transmittance *= segment_transmittance;
+    }
+    return scatter;
+}
 
 void main()
 {
@@ -88,8 +267,12 @@ void main()
 
     if (!inside)
         return;
+
+    const bool sun_scatter_enabled = hasLightShaft() &&
+        u_global_light.m_sun_scatter > 0.0 &&
+        any(greaterThan(u_global_light.m_sun_color, vec3(0.0)));
     const uint count = s_count;
-    if (count == 0u)
+    if (count == 0u && !sun_scatter_enabled)
     {
         imageStore(u_scatter, dst, vec4(0.0));
         return;
@@ -109,29 +292,90 @@ void main()
 
     const float density = u_global_light.m_fog_density;
     vec3 scatter = vec3(0.0);
+    if (sun_scatter_enabled)
+    {
+        // The sun is scattered even without any point light (the fog is lit by
+        // it)
+        scatter += sunScatter(ray_dir, scene_distance, vec2(dst));
+    }
+    // Same condition as the lighting pass (pbr_light.glsl)
+    const bool light_shadow = (u_shadow_type & GST_POINTLIGHT) != 0u &&
+        u_shadow_size != 0u;
+    // Same noise for every light, shifted per light, see below
+    float jitter = 0.0;
+    if (light_shadow)
+        jitter = interleavedGradientNoise(vec2(dst));
     for (uint n = 0u; n < count; n++)
     {
         vec3 light_pos = s_light[n].xyz;
         float radius = s_light[n].w;
+        // Closest point of the ray to the light, and the squared distance of
+        // the light to the ray
         float along = dot(ray_dir, light_pos);
+        float h2 = dot(light_pos, light_pos) - along * along;
         // The ray never gets inside the sphere of the light
-        if (along + radius <= 0.0 ||
-            dot(light_pos, light_pos) - along * along >= radius * radius)
-            continue;
-
-        float farthest = min(along + radius, scene_distance);
-        float closest = along - radius;
-        // Start from the camera if the closest point is almost at it
-        if (closest * ray_dir.z < 1.0)
-            closest = 0.0;
-        float step_size = (farthest - closest) / float(STEPS);
-        // The light is behind the geometry
-        if (step_size <= 0.0)
+        if (along + radius <= 0.0 || h2 >= radius * radius)
             continue;
 
         uint light_idx = s_index[n];
-        vec3 fog_factor = u_global_light.m_lights[light_idx]
-            .m_color_inverse_square_range.xyz * density * step_size * 20.0;
+        const bool handle_shadow =
+            light_shadow && light_idx < u_point_shadow_limit;
+        vec3 light_color = u_global_light.m_lights[light_idx]
+            .m_color_inverse_square_range.xyz;
+
+        // Where the attenuation by the fog along the ray starts, it is the
+        // same for both ways of sampling (start from the camera if the closest
+        // point is almost at it)
+        float closest = along - radius;
+        if (closest * ray_dir.z < 1.0)
+            closest = 0.0;
+
+        // Uniform steps (no shadow): from the farthest point back to the
+        // camera, the integrand is smooth
+        float farthest = 0.0;
+        float step_size = 0.0;
+        // Equiangular sampling (shadow): the samples are spread evenly in the
+        // angle seen from the light, so they follow the 1 / (1 + d^2) falloff,
+        // which is exactly the integrand along the ray. Their positions only
+        // depend on the light (not on the distance of the camera), which keeps
+        // the shape of the shadowed scattering stable when the camera moves.
+        // With h = sqrt(1 + squared distance of the light to the ray) and s
+        // the distance from the closest point, 1 + d^2 = h^2 + s^2 and
+        // s = h * tan(theta), so a step of the angle is
+        // dt = (1 + d^2) / h * dtheta and the falloff cancels out.
+        float h = 1.0;
+        float theta_begin = 0.0;
+        float theta_step = 0.0;
+        float offset = 0.0;
+        vec3 fog_factor;
+        if (handle_shadow)
+        {
+            // The part of the ray inside the sphere, clamped by the camera and
+            // the geometry
+            float half_chord = sqrt(radius * radius - h2);
+            float t_begin = max(along - half_chord, 0.0);
+            float t_end = min(along + half_chord, scene_distance);
+            // The light is behind the geometry
+            if (t_end <= t_begin)
+                continue;
+            h = sqrt(1.0 + max(h2, 0.0));
+            theta_begin = atan((t_begin - along) / h);
+            float theta_end = atan((t_end - along) / h);
+            theta_step = (theta_end - theta_begin) / float(STEPS);
+            // Different offset per light, otherwise the noise of overlapping
+            // lights is correlated
+            offset = fract(jitter + 0.61803398875 * float(n));
+            fog_factor = light_color * density * 20.0 * theta_step / h;
+        }
+        else
+        {
+            farthest = min(along + radius, scene_distance);
+            step_size = (farthest - closest) / float(STEPS);
+            // The light is behind the geometry
+            if (step_size <= 0.0)
+                continue;
+            fog_factor = light_color * density * step_size * 20.0;
+        }
 
         // Spotlight direction calculation
         float sscale = u_global_light.m_lights[light_idx]
@@ -147,11 +391,26 @@ void main()
 
         for (int j = 0; j < STEPS; j++)
         {
-            vec3 xpos = ray_dir * (farthest - float(j) * step_size);
+            float t;
+            float l;
+            if (handle_shadow)
+            {
+                float theta = theta_begin + (float(j) + offset) * theta_step;
+                t = along + h * tan(theta);
+                l = t - closest;
+            }
+            else
+            {
+                t = farthest - float(j) * step_size;
+                l = float(STEPS - j) * step_size;
+            }
+            vec3 xpos = ray_dir * t;
             vec3 light_to_pos = light_pos - xpos;
             float d = length(light_to_pos);
-            float l = float(STEPS - j) * step_size;
-            vec3 base_att = fog_factor / (1.0 + d * d) *
+            // The falloff is already part of the angle step if sampled by it
+            vec3 base_att = handle_shadow ?
+                fog_factor : fog_factor / (1.0 + d * d);
+            base_att = base_att *
                 max((radius - d) / radius, 0.0) * exp(-density * (d + l));
 
             // Apply spotlight attenuation
@@ -161,6 +420,12 @@ void main()
                     abs(sscale) + u_global_light.m_lights[light_idx]
                     .m_direction_scale_offset.w, 0.0, 1.0);
                 base_att *= sattenuation * sattenuation;
+            }
+            if (handle_shadow)
+            {
+                vec3 world_pos = (u_camera.m_inverse_view_matrix *
+                    vec4(xpos, 1.0)).xyz;
+                base_att *= sampleOmniShadowSingle(int(light_idx), world_pos);
             }
             scatter += base_att;
         }
