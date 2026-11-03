@@ -5,6 +5,7 @@
 #include <SColor.h>
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 
 namespace irr
@@ -22,7 +23,9 @@ class GEVulkanSkyBoxRenderer
 {
 private:
     friend class GEVulkanEnvironmentMap;
-    irr::scene::ISceneNode* m_skybox;
+    // ISceneNode::getUniqueNodeID of the current skybox, 0 if none, a pointer
+    // can't be used because a new skybox can reuse the address of a deleted one
+    uint64_t m_skybox_id;
 
     GEVulkanArrayTexture *m_texture_cubemap, *m_diffuse_env_cubemap,
         *m_specular_env_cubemap, *m_dummy_env_cubemap;
@@ -53,7 +56,7 @@ public:
     {
         while (m_skybox_loading.load());
         while (m_env_cubemap_loading.load());
-        m_skybox = NULL;
+        m_skybox_id = 0;
     }
     // ------------------------------------------------------------------------
     irr::video::SColor getSkytopColor() const
@@ -70,7 +73,7 @@ public:
     // ------------------------------------------------------------------------
     bool isLoading() const
     {
-        return m_skybox == NULL || m_skybox_loading.load() == true ||
+        return m_skybox_id == 0 || m_skybox_loading.load() == true ||
             m_env_cubemap_loading.load() == true;
     }
     // ------------------------------------------------------------------------

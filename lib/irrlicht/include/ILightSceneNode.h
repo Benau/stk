@@ -26,15 +26,7 @@ public:
 	//! constructor
 	ILightSceneNode(ISceneNode* parent, ISceneManager* mgr, s32 id,
 		const core::vector3df& position = core::vector3df(0,0,0))
-		: ISceneNode(parent, mgr, id, position),
-		  UniqueLightID(getNextUniqueLightID()) {}
-
-	//! Returns an id that is unique among all light scene nodes ever created
-	/** Ids are never reused, so an id can be used to track a light across
-	frames without holding a reference to the node (unlike a pointer, which
-	can be reused by a new node after the old one is deleted). Unrelated to
-	ISceneNode::getID(). */
-	u64 getUniqueLightID() const { return UniqueLightID; }
+		: ISceneNode(parent, mgr, id, position) {}
 
 	//! Sets the light data associated with this ILightSceneNode
 	/** \param light The new light data. */
@@ -98,16 +90,6 @@ public:
 
 	//! Returns whether the temporary no-fade override is active.
 	virtual bool isNoFadeInOutActive() const = 0;
-private:
-
-	//! Created on the main thread only (scene nodes are not thread-safe)
-	static u64 getNextUniqueLightID()
-	{
-		static u64 counter = 0;
-		return ++counter;
-	}
-
-	u64 UniqueLightID;
 };
 
 } // end namespace scene

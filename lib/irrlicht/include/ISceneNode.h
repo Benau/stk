@@ -818,6 +818,13 @@ namespace scene
 		{
 			return child->isVisible();
 		}
+		//! Returns an id that is unique among all nodes of the same kind ever created
+		/** Only node classes that need to be tracked across frames without
+		holding a reference (light, skybox) override this. Ids are never reused,
+		so unlike a pointer (which can be reused by a new node after the old one
+		is deleted) it can identify a node safely. 0 means the node has no unique
+		id. Unrelated to getID(). */
+		virtual u64 getUniqueNodeID() const { return 0; }
 
 	protected:
 

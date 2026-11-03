@@ -15,7 +15,7 @@ namespace GE
 {
 // ----------------------------------------------------------------------------
 GEVulkanSkyBoxRenderer::GEVulkanSkyBoxRenderer()
-                      : m_skybox(NULL), m_texture_cubemap(NULL),
+                      : m_skybox_id(0), m_texture_cubemap(NULL),
                         m_diffuse_env_cubemap(NULL),
                         m_specular_env_cubemap(NULL),
                         m_dummy_env_cubemap(NULL), m_dummy_shadow_fbo(NULL),
@@ -150,12 +150,13 @@ void GEVulkanSkyBoxRenderer::addSkyBox(irr::scene::ISceneNode* skybox)
 {
     if (skybox->getType() != irr::scene::ESNT_SKY_BOX)
         return;
-    if (m_skybox == skybox)
+    const uint64_t id = skybox->getUniqueNodeID();
+    if (m_skybox_id == id)
         return;
 
     while (m_skybox_loading.load());
     while (m_env_cubemap_loading.load());
-    m_skybox = skybox;
+    m_skybox_id = id;
     std::vector<GEVulkanTexture*> sky_tex;
     std::array<int, 6> order = {{ 1, 3, 4, 5, 2, 0}};
 

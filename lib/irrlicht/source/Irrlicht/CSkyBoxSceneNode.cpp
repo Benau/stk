@@ -17,7 +17,7 @@ namespace scene
 //! constructor
 CSkyBoxSceneNode::CSkyBoxSceneNode(video::ITexture* top, video::ITexture* bottom, video::ITexture* left,
 			video::ITexture* right, video::ITexture* front, video::ITexture* back, ISceneNode* parent, ISceneManager* mgr, s32 id)
-: ISceneNode(parent, mgr, id)
+: ISceneNode(parent, mgr, id), UniqueSkyBoxID(getNextUniqueSkyBoxID())
 {
 	#ifdef _DEBUG
 	setDebugName("CSkyBoxSceneNode");

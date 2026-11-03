@@ -51,6 +51,13 @@ public:
 	//! Returns type of the scene node
 	virtual ESCENE_NODE_TYPE getType() const { return ESNT_LIGHT; }
 
+	//! Returns an id that is unique among all light scene nodes ever created
+	/** Ids are never reused, so an id can be used to track a light across
+	frames without holding a reference to the node (unlike a pointer, which
+	can be reused by a new node after the old one is deleted). Unrelated to
+	ISceneNode::getID(). */
+	virtual u64 getUniqueNodeID() const { return UniqueLightID; }
+
 	//! Writes attributes of the scene node.
 	virtual void serializeAttributes(io::IAttributes* out, io::SAttributeReadWriteOptions* options=0) const;
 
@@ -107,6 +114,14 @@ public:
 	virtual bool isNoFadeInOutActive() const;
 private:
 
+	//! Created on the main thread only (scene nodes are not thread-safe)
+	static u64 getNextUniqueLightID()
+	{
+		static u64 counter = 0;
+		return ++counter;
+	}
+
+	u64 UniqueLightID;
 	video::SLight LightData;
 	core::aabbox3d<f32> BBox;
 	s32 DriverLightIndex;
