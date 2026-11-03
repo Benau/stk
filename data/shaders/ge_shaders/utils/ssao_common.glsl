@@ -5,8 +5,8 @@ layout(push_constant) uniform PushConstants
     // x0, y0, x1, y1 (exclusive) in pixels of the g-buffer: the viewport of
     // one camera
     ivec4 m_rect;
-    // x: radius of the effect in world units, y: sigma (intensity), z: k
-    // (power), w: height of the viewport relative to the reference height of
+    // x: radius of the effect in world units (the only one of VBAO), y and z:
+    // not used, w: height of the viewport relative to the reference height of
     // the other effects (so the width of the blur is the same part of the
     // screen at any resolution or render scale)
     vec4 m_params;
@@ -64,4 +64,13 @@ float ssaoDepthWeight(float center, float other)
 {
     float tolerance = 0.2 * pc.m_params.x + 0.02 * min(center, 1000.0);
     return max(0.0, 1.0 - abs(center - other) / tolerance);
+}
+
+// Depth of a pixel of a half size image (ssao_blur.comp and ssil_blur.comp):
+// the occlusion and the indirect light were evaluated at the first pixel of
+// its 2x2 block, which is the depth of the block
+float ssaoBlockDepth(sampler2D depth_buffer, ivec2 block)
+{
+    ivec2 pixel = clamp(block * 2, pc.m_rect.xy, pc.m_rect.zw - 1);
+    return texelFetch(depth_buffer, pixel, 0).x;
 }

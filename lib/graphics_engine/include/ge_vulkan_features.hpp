@@ -51,6 +51,10 @@ bool supportsASTC4x4();
 // ----------------------------------------------------------------------------
 bool supportsShaderStorageImageExtendedFormats();
 // ----------------------------------------------------------------------------
+// gl_ClipDistance, used to cut the back hemisphere of the dual paraboloid
+// shadow maps
+bool supportsShaderClipDistance();
+// ----------------------------------------------------------------------------
 bool supportsDynamicRendering();
 // ----------------------------------------------------------------------------
 bool supportsDynamicRenderingLocalRead();

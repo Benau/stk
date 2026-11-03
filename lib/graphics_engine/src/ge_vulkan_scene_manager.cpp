@@ -12,6 +12,7 @@
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_mesh_cache.hpp"
 #include "ge_vulkan_mesh_scene_node.hpp"
+#include "ge_vulkan_omni_shadow_fbo.hpp"
 #include "ge_vulkan_shadow_fbo.hpp"
 #include "ge_vulkan_skybox_renderer.hpp"
 #include "ge_vulkan_target_group.hpp"
@@ -228,12 +229,17 @@ void GEVulkanSceneManager::drawAll(irr::u32 flags)
         camera->update(cam);
         dc->prepare(camera);
         GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
+        GEVulkanOmniShadowFBO* ofbo = dc->getOmniShadowFBO();
         if (sfbo)
             sfbo->prepare(camera, dc->getLightHandler());
+        if (ofbo)
+            ofbo->prepare(camera, dc->getLightHandler());
         OnRegisterSceneNode();
         dc->generate(vk);
         if (sfbo)
             sfbo->generate();
+        if (ofbo)
+            ofbo->generate();
     }
     m_current_group = NULL;
     m_current_entry = NULL;
@@ -278,6 +284,9 @@ irr::u32 GEVulkanSceneManager::registerNodeForRendering(
     GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
     if (sfbo)
         sfbo->addNode(node);
+    GEVulkanOmniShadowFBO* ofbo = dc->getOmniShadowFBO();
+    if (ofbo)
+        ofbo->addNode(node);
     return 1;
 }   // registerNodeForRendering
 

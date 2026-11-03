@@ -18,7 +18,8 @@ namespace GE
 // ----------------------------------------------------------------------------
 GEVulkanShadowDrawCall::GEVulkanShadowDrawCall(GEVulkanShadowFBO* sfbo,
                                                GEVulkanShadowCameraCascade cc)
-                      : GEVulkanDrawCall(), m_sfbo(sfbo), m_cascade(cc)
+                      : GEVulkanDrawCall(), m_sfbo(sfbo), m_cascade(cc),
+                        m_render_state(true)
 {
 }   // GEVulkanShadowDrawCall
 
@@ -38,7 +39,7 @@ void GEVulkanShadowDrawCall::prepareShadow(unsigned layer)
 bool GEVulkanShadowDrawCall::skip(irr::scene::ISceneNode* node) const
 {
     // Skip small objects for far shadows
-    if (m_cascade == GVSCC_FAR && node->getBoundingBox().getArea() < 20.0f)
+    if (m_cascade >= GVSCC_FAR && node->getBoundingBox().getArea() < 20.0f)
         return true;
     return false;
 }   // skip

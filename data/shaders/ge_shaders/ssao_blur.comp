@@ -22,12 +22,6 @@ const int MAX_TAP_RADIUS = 6;
 // Lower resolutions can't have less than this (a tap of 1 texel is needed)
 const float MIN_SIGMA = 0.5;
 
-float blockDepth(ivec2 block)
-{
-    ivec2 pixel = clamp(block * 2, pc.m_rect.xy, pc.m_rect.zw - 1);
-    return texelFetch(u_depth, pixel, 0).x;
-}
-
 void main()
 {
     const ivec4 half_rect = ssaoHalfRect(pc.m_rect);
@@ -42,7 +36,7 @@ void main()
     const int tap_radius = min(int(ceil(2.0 * sigma)), MAX_TAP_RADIUS);
     const float exponent_scale = -0.5 / (sigma * sigma);
     const ivec2 direction = pc.m_misc.yz;
-    float center_z = blockDepth(block);
+    float center_z = ssaoBlockDepth(u_depth, block);
     float sum = 0.0;
     float weight_sum = 0.0;
     for (int i = -tap_radius; i <= tap_radius; i++)
@@ -50,7 +44,7 @@ void main()
         ivec2 q = clamp(block + direction * i, half_rect.xy,
             half_rect.zw - 1);
         float w = exp(float(i * i) * exponent_scale) *
-            ssaoDepthWeight(center_z, blockDepth(q));
+            ssaoDepthWeight(center_z, ssaoBlockDepth(u_depth, q));
         sum += w * texelFetch(u_ao, q, 0).x;
         weight_sum += w;
     }

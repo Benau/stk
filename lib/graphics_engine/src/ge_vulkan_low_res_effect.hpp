@@ -37,8 +37,10 @@ public:
 
         // Compute shader of the march, it has the depth at set 0 binding 0,
         // the image at set 0 binding 1 (writeonly, r11f_g11f_b10f if
-        // SHADER_STORAGE_IMAGE_EXTENDED_FORMATS is defined, rgba16f if not)
-        // and the data descriptor set of draw calls at set 1
+        // SHADER_STORAGE_IMAGE_EXTENDED_FORMATS is defined, rgba16f if not),
+        // the data descriptor set of draw calls at set 1 and their environment
+        // at set 2 (the shadow map, with the shadow specialization constants
+        // of the deferred lighting)
         const char* m_shader;
 
         // Size of the push constants of the shader (compute stage)
@@ -85,7 +87,9 @@ private:
     // layout can't be used after the set layout it was created with is gone
     VkDescriptorSetLayout m_data_layout;
 
-    // Set 0 is m_layout and set 1 is m_data_layout
+    // Set 0 is m_layout, set 1 is m_data_layout and set 2 is the environment
+    // layout of GEVulkanSkyBoxRenderer (borrowed, it lives as long as the
+    // driver)
     VkPipelineLayout m_pipeline_layout;
 
     VkPipeline m_pipeline;

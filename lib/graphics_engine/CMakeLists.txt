@@ -39,7 +39,6 @@ set(GE_SOURCES
     src/ge_vulkan_billboard_buffer.cpp
     src/ge_vulkan_bloom.cpp
     src/ge_vulkan_camera_scene_node.cpp
-    src/ge_vulkan_combined_shadow_fbo.cpp
     src/ge_vulkan_command_loader.cpp
     src/ge_vulkan_deferred_fbo.cpp
     src/ge_vulkan_deferred_fbo_split.cpp
@@ -71,6 +70,7 @@ set(GE_SOURCES
     src/ge_vulkan_shadow_draw_call.cpp
     src/ge_vulkan_shadow_fbo.cpp
     src/ge_vulkan_skybox_renderer.cpp
+    src/ge_vulkan_surfel_gi.cpp
     src/ge_vulkan_texture.cpp
     src/ge_vulkan_texture_descriptor.cpp
     src/ge_gl_texture.cpp

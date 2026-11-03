@@ -34,9 +34,10 @@ bool GEVulkanGodRays::hasEffect(const GEVulkanDrawCall* dc) const
 // ----------------------------------------------------------------------------
 void GEVulkanGodRays::pushConstants(VkCommandBuffer cmd, const Viewport& vp)
 {
-    // The same for all viewports, already multiplied by the opacity
-    const irr::core::vector3df& sun = m_vk->getGodRaysPosition();
-    const irr::core::vector3df& color = m_vk->getGodRaysColor();
+    // The same for all viewports
+    const irr::core::vector3df& sun = m_vk->getLightShaftPosition();
+    const irr::core::vector3df& color = m_vk->getLightShaftColor();
+    const float opacity = m_vk->getLightShaftOpacity();
     struct PushConstants
     {
         int32_t m_rect[4];
@@ -48,10 +49,10 @@ void GEVulkanGodRays::pushConstants(VkCommandBuffer cmd, const Viewport& vp)
     pc.m_sun_radius[0] = sun.X;
     pc.m_sun_radius[1] = sun.Y;
     pc.m_sun_radius[2] = sun.Z;
-    pc.m_sun_radius[3] = m_vk->getGodRaysRadius();
-    pc.m_color[0] = color.X;
-    pc.m_color[1] = color.Y;
-    pc.m_color[2] = color.Z;
+    pc.m_sun_radius[3] = m_vk->getLightShaftRadius();
+    pc.m_color[0] = color.X * opacity;
+    pc.m_color[1] = color.Y * opacity;
+    pc.m_color[2] = color.Z * opacity;
     vkCmdPushConstants(cmd, getPipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT,
         0, sizeof(pc), &pc);
 }   // pushConstants

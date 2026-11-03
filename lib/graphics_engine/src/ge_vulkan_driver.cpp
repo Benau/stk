@@ -19,6 +19,7 @@
 #include "ge_vulkan_final_chain.hpp"
 #include "ge_vulkan_hiz_depth.hpp"
 #include "ge_vulkan_mesh_cache.hpp"
+#include "ge_vulkan_omni_shadow_fbo.hpp"
 #include "ge_vulkan_rt_scene.hpp"
 #include "ge_vulkan_scene_manager.hpp"
 #include "ge_vulkan_target_group.hpp"
@@ -551,8 +552,11 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
 
     m_disable_wait_idle = false;
     m_fog_enabled = false;
-    m_god_rays_enabled = false;
-    m_god_rays_radius = 20.0f;
+    m_fog_height_start = 0.0f;
+    m_fog_height_end = 0.0f;
+    m_light_shaft_enabled = false;
+    m_light_shaft_radius = 20.0f;
+    m_light_shaft_opacity = 1.0f;
     g_schedule_pausing_rendering.store(false);
     g_paused_rendering.store(false);
     g_device_created.store(true);
@@ -657,6 +661,11 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
             GEVulkanFeatures::needsRTMeshTextureMirror());
         if (GEVulkanFeatures::supportsRayQuery())
             m_rt_scene = new GEVulkanRTScene(this);
+        // Before createSwapChain: the deferred split fbo creates the low res
+        // effects, whose pipeline layout borrows the environment descriptor
+        // set layout of it (the volumetric light scattering reads the shadow
+        // map with it)
+        m_skybox_renderer = new GEVulkanSkyBoxRenderer();
     }
     catch (std::exception& e)
     {
@@ -685,7 +694,6 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
     {
         createCommandBuffers();
         GEVulkan2dRenderer::init(this);
-        m_skybox_renderer = new GEVulkanSkyBoxRenderer();
         GEMaterialManager::init();
         GEVulkanFeatures::printStats();
         VkFormatProperties format_props = {};
@@ -1231,6 +1239,8 @@ void GEVulkanDriver::createDevice()
         device_features.depthClamp = VK_TRUE;
     if (m_features.depthBiasClamp == VK_TRUE)
         device_features.depthBiasClamp = VK_TRUE;
+    if (GEVulkanFeatures::supportsShaderClipDistance())
+        device_features.shaderClipDistance = VK_TRUE;
 
     VkDeviceCreateInfo create_info = {};
     create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -1972,7 +1982,9 @@ bool GEVulkanDriver::beginScene(bool backBuffer, bool zBuffer, SColor color,
     m_clear_color = color;
     PrimitivesDrawn = 0;
 
-    if (m_rtt_texture && !m_rtt_texture->useSwapChainOutput())
+    if (m_rtt_texture && !m_rtt_texture->useSwapChainOutput() &&
+        !(getGEConfig()->m_shadow_debug &&
+        (getShadowType() & GST_SUN) != 0 && getShadowSize() > 0))
     {
         draw2DImage(m_rtt_texture,core::recti(0, 0,
             ScreenSize.Width, ScreenSize.Height),
@@ -2775,6 +2787,9 @@ void GEVulkanDriver::buildCommandBuffers()
             GEVulkanShadowFBO* sfbo = p.first->getShadowFBO();
             if (sfbo)
                 sfbo->uploadDynamicData(getCurrentCommandBuffer(), has_indirect);
+            GEVulkanOmniShadowFBO* ofbo = p.first->getOmniShadowFBO();
+            if (ofbo)
+                ofbo->uploadDynamicData(getCurrentCommandBuffer(), has_indirect);
         }
     }
     insertBufferBarrier(getCurrentCommandBuffer(), has_indirect);
@@ -2785,6 +2800,9 @@ void GEVulkanDriver::buildCommandBuffers()
             GEVulkanShadowFBO* sfbo = p.first->getShadowFBO();
             if (sfbo)
                 sfbo->render(getCurrentCommandBuffer(), p.second);
+            GEVulkanOmniShadowFBO* ofbo = p.first->getOmniShadowFBO();
+            if (ofbo)
+                ofbo->render(getCurrentCommandBuffer(), p.second);
         }
     }
     // The TLAS of the ray traced reflection (the new BLAS and the dynamic
@@ -2964,7 +2982,23 @@ void GEVulkanDriver::buildCommandBuffers()
             VK_SUBPASS_CONTENTS_INLINE);
     }
 
-    GEVulkan2dRenderer::render();
+    // The depth layers of the sun shadow map instead of the scene, the 2D
+    // renderer draws it before the queued UIs (which stay visible)
+    VkImageView shadow_map_view = VK_NULL_HANDLE;
+    if (getGEConfig()->m_shadow_debug && default_group &&
+        (getShadowType() & GST_SUN) != 0 && getShadowSize() > 0)
+    {
+        for (auto& p : default_group->m_dcs)
+        {
+            GEVulkanShadowFBO* sfbo = p.first->getShadowFBO();
+            if (sfbo)
+            {
+                shadow_map_view = sfbo->getImageView();
+                break;
+            }
+        }
+    }
+    GEVulkan2dRenderer::render(shadow_map_view);
 
     vkCmdEndRenderPass(getCurrentCommandBuffer());
     vkEndCommandBuffer(getCurrentCommandBuffer());

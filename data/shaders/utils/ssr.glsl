@@ -283,8 +283,10 @@ bool isTooThick(float surfaceD, float rayD)
 // p            : Screen space position
 // v            : Screen space reflection direction
 // hitPointSS   : Returns screen space hit point
+// hitRayDepth  : Returns the depth (reverse depth) of the ray at the hit, the
+//                depth buffer can be behind it by less than the thickness
 // Return value : Whether RT actually hit a surface
-bool traceHiZ(vec3 p, vec3 v, out vec2 hitPointSS)
+bool traceHiZ(vec3 p, vec3 v, out vec2 hitPointSS, out float hitRayDepth)
 {
     const int maxLevel = min(HIZ_MAX_LEVEL, textureQueryLevels(u_hiz_depth) - 1); // Last mip level
     float maxTraceDistance = getMaxTraceDistance(p, v);
@@ -385,6 +387,7 @@ bool traceHiZ(vec3 p, vec3 v, out vec2 hitPointSS)
 
     // Results
     hitPointSS = ray.xy;
+    hitRayDepth = ray.z;
     bool traceHit = level < HIZ_STOP_LEVEL && iterations < u_hiz_iterations;
 #if SSR_DEBUG_MODE != 0
     dbg_iterations = iterations;
@@ -401,9 +404,11 @@ bool traceHiZ(vec3 p, vec3 v, out vec2 hitPointSS)
 
 // Traces the reflection of the view space position xpos, in the direction
 // reflected (view space) over the HiZ, hitPointSS is in the viewport (0 to 1),
-// startSS is the start of the trace (x, y, depth), for debugging
+// hitRayDepth is the depth of the ray at the hit, startSS is the start of the
+// trace (x, y, depth), for debugging
 bool traceHiZView(vec3 xpos, vec3 reflected, mat4 projection_matrix,
-                  out vec2 hitPointSS, out vec3 startSS)
+                  out vec2 hitPointSS, out float hitRayDepth,
+                  out vec3 startSS)
 {
     vec3 positionSS = CalcCoordFromPosition(xpos, projection_matrix,
         vec2(1.0), vec2(0.0));
@@ -414,6 +419,6 @@ bool traceHiZView(vec3 xpos, vec3 reflected, mat4 projection_matrix,
     vec3 position2SS = position2CS.xyz;
     position2SS.xy = vec2(0.5) + 0.5 * position2SS.xy;
     vec3 reflectionDirSS = normalize(position2SS - positionSS);
-    return traceHiZ(positionSS, reflectionDirSS, hitPointSS);
+    return traceHiZ(positionSS, reflectionDirSS, hitPointSS, hitRayDepth);
 }
 #endif

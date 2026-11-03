@@ -128,6 +128,10 @@ struct GERayTracingConfig
     // normal aware, never across the viewports of the splitscreen) to the full
     // resolution. Needs the render target to be created again if it changes
     float m_shadow_scale;
+    // Surfel based global illumination (GEVulkanSurfelGI): the indirect diffuse
+    // of the visible surfaces is ray traced and added to the ambient light of
+    // the lighting pass, see isSurfelGIEnabled()
+    bool m_surfel_gi;
     // ------------------------------------------------------------------------
     GERayTracingConfig()
     {
@@ -139,6 +143,7 @@ struct GERayTracingConfig
         m_grass = false;
         m_shadow = false;
         m_shadow_scale = 1.0f;
+        m_surfel_gi = false;
     }
 };
 enum GEShadowType : unsigned
@@ -159,12 +164,12 @@ bool m_pbr;
 bool m_ibl;
 unsigned m_deferred_split;
 bool m_glow_outline;
-// Light scattering of point lights in fog (needs the split deferred FBO and
-// compute in the main queue, see GEVulkanLightScatter)
+// Volumetric fog and light scattering of the sun and of the point lights
+// (needs the split deferred FBO and compute in the main queue, see
+// GEVulkanLightScatter)
 bool m_light_scatter;
-// Light shafts (god rays) of the sun of a track which has them (see
-// GEVulkanDriver::setGodRays), compute shaders in the split deferred FBO (see
-// GEVulkanGodRays)
+// Light shafts (god rays) of the sun of the track (needs the split deferred FBO
+// and compute in the main queue, see GEVulkanGodRays)
 bool m_god_rays;
 // Bloom of the finished hdr color (needs the split deferred FBO and compute in
 // the main queue, see GEVulkanBloom)
@@ -189,10 +194,33 @@ unsigned m_shadow_size;
 GEShadowType m_shadow_type;
 unsigned m_point_shadow_limit;
 unsigned m_max_pointlights;
-// Of GEVulkanSSAO (radius in world units), can be changed any time
+// Ambient occlusion, can be changed any time: the radius in world units (of
+// GEVulkanSSAO, which has no other parameter with VBAO, and of the OpenGL
+// renderer), and the power and intensity of the OpenGL renderer only
 float m_ssao_radius;
 float m_ssao_k;
 float m_ssao_sigma;
+// Debug view of GEVulkanSSAO (the "SSAO viz" of the debug menu, like the one
+// of the OpenGL renderer): deferred_convert_color.frag writes the ambient
+// occlusion to the final image instead of the tonemapped lighting. It's a push
+// constant of that shader, so it can be changed any time
+bool m_ssao_debug;
+// Same for GEVulkanSurfelGI (the "GI viz" of the debug menu): the irradiance of
+// the surfels and the indirect light of the ambient occlusion (if it's
+// enabled) are written to the final image, without bloom and tonemap, so it
+// shows exactly what is added to the ambient light. The images are half size,
+// so every 2x2 block of pixels has the same value
+bool m_gi_debug;
+// Debug view of the sun shadow map of GEVulkanShadowFBO (the "Shadow viz" of
+// the debug menu, like the one of the OpenGL renderer): the GEVulkan2dRenderer
+// draws the depth of the cascades in a 2x2 grid instead of the scene
+bool m_shadow_debug;
+// Debug view of the point lights and spot lights (the "Point light viz" of the
+// debug menu): deferred_pbr.frag writes only their lighting to the final image
+// (sun, ambient, fog, skybox and the post processing are skipped), so their
+// shadows can be seen alone. It's read from the camera UBO every frame, so it
+// can be changed any time
+bool m_point_light_debug;
 // See GEAntiAliasing, use isAntiAliasingEnabled() to know if it's used
 GEAntiAliasing m_anti_aliasing;
 // Depth of field of the final image (a stage of GEVulkanFinalChain which runs
@@ -241,6 +269,10 @@ bool isSolidRayTracing();
 // Same for the reflection of the displace materials (GERayTracingConfig::
 // m_displace_reflection)
 bool isDisplaceRayTracing();
+// True if the surfel based global illumination is on and the device supports it
+// (GERayTracingConfig::m_surfel_gi), needs the pbr shaders and the split
+// deferred FBO (which is used with ray tracing)
+bool isSurfelGIEnabled();
 // What the displace reflection is with isDisplaceRayTracing() taken into
 // account: GDRT_RT if it's ray traced, GEConfig::m_displace_reflection
 // otherwise. Everything which needs the displace reflection (the attachments

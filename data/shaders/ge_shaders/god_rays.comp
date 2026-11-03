@@ -20,6 +20,7 @@ layout(push_constant) uniform PushConstants
 } pc;
 
 #include "utils/camera.glsl"
+#include "utils/random.glsl"
 
 // Light shafts (god rays) of the sun. The same look as the OpenGL renderer
 // (godray.frag), but the sun is not drawn into an image first: the mask of the
@@ -44,11 +45,6 @@ float g_sun_radius_pixel;
 float g_sun_edge_min;
 // Reverse depth of the front of the sun
 float g_sun_depth;
-
-float interleavedGradientNoise(vec2 p)
-{
-    return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
-}
 
 // Soft disc of the sun, 0 where something is in front of it
 float sunMask(vec2 s)

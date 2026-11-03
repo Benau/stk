@@ -1,8 +1,8 @@
 // Ray traced shadow of the sun, the point lights and the spot lights
 // (GEVulkanRTShadow), between the g-buffer and the lighting pass: the
 // visibility (1.0 is lit) of every pixel of the viewport of a camera, which the
-// lighting pass (deferred_pbr.frag and deferred_pointlight.frag) uses instead
-// of the shadow map. The ray goes from the surface to the sun or the light in
+// lighting pass (deferred_pbr.frag) uses instead of the shadow map. The ray
+// goes from the surface to the sun or the light in
 // the ray traced scene (getSunShadow and getLightShadow of utils/rt_scene.glsl,
 // the first is the same as the one of the hits of the reflection), so it has no
 // range of a cascade, and a shadow of a node of the scene (karts, items, plants
@@ -83,7 +83,7 @@ void main()
         vec3 world_position = (u_camera.m_inverse_view_matrix *
             vec4(xpos, 1.0)).xyz;
         visibility = rtShadowLayerVisibility(layer, world_position,
-            world_normal, xpos.z);
+            world_normal, length(xpos));
     }
     // Every layer has the depth, so a tap of the filter of the lighting pass
     // is one fetch

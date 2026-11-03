@@ -27,7 +27,7 @@ private:
     GEVulkanArrayTexture *m_texture_cubemap, *m_diffuse_env_cubemap,
         *m_specular_env_cubemap, *m_dummy_env_cubemap;
 
-    GEVulkanShadowFBO* m_dummy_shadow_fbo;
+    GEVulkanShadowFBO *m_dummy_shadow_fbo, *m_dummy_omni_shadow_fbo;
 
     VkDescriptorSetLayout m_env_descriptor_layout;
 
@@ -76,8 +76,10 @@ public:
     // ------------------------------------------------------------------------
     std::shared_ptr<bool> getEnvObserver() const;
     // ------------------------------------------------------------------------
+    // sfbo is the sun cascades, ofbo the atlas of the point and spot lights
     void fillDescriptor(VkDescriptorSet ds, bool srgb,
-                        GEVulkanShadowFBO* sfbo) const;
+                        GEVulkanShadowFBO* sfbo,
+                        GEVulkanShadowFBO* ofbo) const;
 
 };   // GEVulkanSkyBoxRenderer
 

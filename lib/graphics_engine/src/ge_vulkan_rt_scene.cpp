@@ -330,6 +330,7 @@ GEVulkanRTScene::GEVulkanRTScene(GEVulkanDriver* vk)
     m_tlas_scratch_size = 0;
     m_cache_version = 0;
     m_frame_counter = 0;
+    m_build_counter = 0;
     m_warned_dynamic_limit = false;
     m_built_alphatest = false;
     m_grass_next_id = 0;
@@ -345,7 +346,7 @@ GEVulkanRTScene::GEVulkanRTScene(GEVulkanDriver* vk)
     m_geometry_count = 0;
     m_triangle_count = 0;
 
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings = {};
+    std::array<VkDescriptorSetLayoutBinding, 5> bindings = {};
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
     bindings[1].binding = 1;
@@ -355,6 +356,10 @@ GEVulkanRTScene::GEVulkanRTScene(GEVulkanDriver* vk)
     // The mesh cache of the driver
     bindings[3].binding = 3;
     bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    // The instances of the TLAS, the shaders read the transformation of the
+    // node of a surfel there (see GEVulkanSurfelGI)
+    bindings[4].binding = 4;
+    bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     for (auto& b : bindings)
     {
         b.descriptorCount = 1;
@@ -377,7 +382,7 @@ GEVulkanRTScene::GEVulkanRTScene(GEVulkanDriver* vk)
     const unsigned set_count = GEVulkanDriver::getMaxFrameInFlight() + 1;
     sizes[0].descriptorCount = set_count;
     sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    sizes[1].descriptorCount = set_count * 3;
+    sizes[1].descriptorCount = set_count * 4;
     VkDescriptorPoolCreateInfo pool_info = {};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool_info.poolSizeCount = sizes.size();
@@ -446,7 +451,10 @@ void GEVulkanRTScene::updateDescriptorSet()
         as_write.pAccelerationStructures = &m_top_levels[set].m_tlas;
         VkDescriptorBufferInfo geometry_info =
             { m_geometry_data->getHostBuffer()[set], 0, VK_WHOLE_SIZE };
-        std::array<VkWriteDescriptorSet, 4> writes = {};
+        // The buffer the TLAS of this index is built from
+        VkDescriptorBufferInfo instance_info =
+            { m_top_levels[set].m_instance_buffer, 0, VK_WHOLE_SIZE };
+        std::array<VkWriteDescriptorSet, 5> writes = {};
         for (unsigned i = 0; i < writes.size(); i++)
         {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -463,6 +471,8 @@ void GEVulkanRTScene::updateDescriptorSet()
         writes[2].pBufferInfo = &geometry_info;
         writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[3].pBufferInfo = &cache_info;
+        writes[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[4].pBufferInfo = &instance_info;
         vkUpdateDescriptorSets(m_vk->getDevice(), writes.size(),
             writes.data(), 0, NULL);
         m_top_levels[set].m_cache_version =
@@ -509,6 +519,9 @@ void GEVulkanRTScene::clear()
         m_data_buffer == VK_NULL_HANDLE && !m_geometry_data &&
         m_geometry_sources.empty())
         return;
+    // The triangles of the scene are gone, so the data which the effects have
+    // of them (the attachments of the surfels) is stale
+    m_build_counter++;
     m_vk->waitIdle();
     VmaAllocator allocator = m_vk->getVmaAllocator();
     // The device is idle, so the BLAS of the meshes can go too
@@ -556,6 +569,9 @@ void GEVulkanRTScene::clear()
         vmaDestroyBuffer(allocator, m_data_buffer, m_data_memory);
     // Destroys the buffers (it waits for the device too)
     m_geometry_data.reset();
+    m_node_keys.clear();
+    m_free_node_slots.clear();
+    m_node_slot_generation.clear();
     for (GeometrySource& source : m_geometry_sources)
         source.m_node->drop();
     m_geometry_sources.clear();
@@ -746,8 +762,12 @@ bool GEVulkanRTScene::buildAccelerationStructures(
         return false;
 
     // One TLAS (and instance buffer) for each buffer index, all with the same
-    // single instance of the BLAS for now
+    // single instance of the BLAS for now. The shaders read the buffer too, so
+    // every slot has a valid instance (the static BLAS), only the slot 0 can be
+    // hit
     VkAccelerationStructureInstanceKHR instance = getStaticInstance();
+    VkAccelerationStructureInstanceKHR empty_instance = instance;
+    empty_instance.mask = 0;
     const unsigned top_level_count = GEVulkanDriver::getMaxFrameInFlight() + 1;
     m_top_levels.resize(top_level_count);
     VmaAllocationCreateInfo instance_alloc = {};
@@ -763,7 +783,8 @@ bool GEVulkanRTScene::buildAccelerationStructures(
     {
         if (!m_vk->createBuffer(instance_bytes,
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
-            | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, instance_alloc,
+            | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
+            | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, instance_alloc,
             t.m_instance_buffer, t.m_instance_memory) ||
             vmaMapMemory(allocator, t.m_instance_memory,
             &t.m_instance_mapped) != VK_SUCCESS)
@@ -772,7 +793,11 @@ bool GEVulkanRTScene::buildAccelerationStructures(
             ok = false;
             break;
         }
-        memcpy(t.m_instance_mapped, &instance, sizeof(instance));
+        std::fill((VkAccelerationStructureInstanceKHR*)t.m_instance_mapped,
+            (VkAccelerationStructureInstanceKHR*)t.m_instance_mapped +
+            m_instance_capacity, empty_instance);
+        ((VkAccelerationStructureInstanceKHR*)t.m_instance_mapped)[0] =
+            instance;
         vmaFlushAllocation(allocator, t.m_instance_memory, 0, instance_bytes);
     }
 
@@ -872,6 +897,94 @@ bool GEVulkanRTScene::createGeometryData(
     }
     return true;
 }   // createGeometryData
+
+// ----------------------------------------------------------------------------
+void GEVulkanRTScene::createNodeKeys()
+{
+    static_assert(MAX_NODES == MAX_INSTANCES,
+        "the slot of a key is the index of its instance in the TLAS");
+    static_assert(MAX_NODES == 2048,
+        "the key packs the 11 bits of the slot and 13 of the generation");
+    m_node_keys.clear();
+    m_free_node_slots.clear();
+    m_node_slot_generation.assign(MAX_NODES, 0);
+    // The slot 0 is the static BLAS, the last slot of the list is the first
+    // which is used
+    for (uint32_t i = MAX_NODES - 1; i > 0; i--)
+        m_free_node_slots.push_back(i);
+}   // createNodeKeys
+
+// ----------------------------------------------------------------------------
+uint32_t GEVulkanRTScene::getNodeKey(irr::scene::ISceneNode* node,
+                                     irr::scene::IMesh* mesh,
+                                     uint64_t buffer_mask)
+{
+    auto it = m_node_keys.find(node);
+    if (it != m_node_keys.end())
+    {
+        if (it->second.m_mesh == mesh &&
+            it->second.m_buffer_mask == buffer_mask)
+        {
+            it->second.m_last_frame = m_frame_counter;
+            return it->second.m_key;
+        }
+        // The node uses other triangles: the surfels of the old ones must not
+        // follow the new mesh with the old key
+        freeNodeKey(it->second.m_key);
+        m_node_keys.erase(it);
+    }
+    if (m_free_node_slots.empty())
+        return 0;
+    const uint32_t slot = m_free_node_slots.back();
+    m_free_node_slots.pop_back();
+    uint32_t& generation = m_node_slot_generation[slot];
+    generation = (generation + 1) & 0x1FFFu;
+    if (generation == 0)
+        generation = 1;
+    // See the comment of MAX_NODES
+    const uint32_t key = (generation << 11) | slot;
+    m_node_keys[node] = { key, m_frame_counter, mesh, buffer_mask };
+    return key;
+}   // getNodeKey
+
+// ----------------------------------------------------------------------------
+uint32_t GEVulkanRTScene::allocateNodeKey()
+{
+    if (m_free_node_slots.empty())
+        return 0;
+    const uint32_t slot = m_free_node_slots.back();
+    m_free_node_slots.pop_back();
+    uint32_t& generation = m_node_slot_generation[slot];
+    generation = (generation + 1) & 0x1FFFu;
+    if (generation == 0)
+        generation = 1;
+    return (generation << 11) | slot;
+}   // allocateNodeKey
+
+// ----------------------------------------------------------------------------
+void GEVulkanRTScene::freeNodeKey(uint32_t key)
+{
+    if (key != 0)
+        m_free_node_slots.push_back(key & (MAX_NODES - 1));
+}   // freeNodeKey
+
+// ----------------------------------------------------------------------------
+void GEVulkanRTScene::freeUnusedNodeKeys()
+{
+    // The karts, the items and the plants are persistent, so a node which is
+    // not seen for some frames is gone (or hidden)
+    const uint64_t grace = 8;
+    for (auto it = m_node_keys.begin(); it != m_node_keys.end();)
+    {
+        if (m_frame_counter - it->second.m_last_frame <= grace)
+        {
+            it++;
+            continue;
+        }
+        m_free_node_slots.push_back(it->second.m_key & (MAX_NODES - 1));
+        it = m_node_keys.erase(it);
+    }
+}   // freeUnusedNodeKeys
 
 // ----------------------------------------------------------------------------
 GEVulkanRTScene::MeshBLAS* GEVulkanRTScene::getMeshBLAS(
@@ -1495,6 +1608,8 @@ void GEVulkanRTScene::destroySkinSet(SkinSet* set)
     set->m_blas = VK_NULL_HANDLE;
     set->m_blas_buffer = VK_NULL_HANDLE;
     set->m_allocation = VK_NULL_HANDLE;
+    freeNodeKey(set->m_key);
+    set->m_key = 0;
 }   // destroySkinSet
 
 // ----------------------------------------------------------------------------
@@ -1559,13 +1674,22 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
                 static_count * sizeof(GERTGeometry));
             t.m_geometry_static = true;
         }
-        // The static BLAS only (the grass is found with the dynamic nodes)
+        // The static BLAS only (the grass is found with the dynamic nodes), the
+        // other slots have the mask 0, so the surfels of the dynamic nodes are
+        // not followed anymore
         VkAccelerationStructureInstanceKHR* static_instances =
             (VkAccelerationStructureInstanceKHR*)t.m_instance_mapped;
         if (!t.m_instance_static)
         {
-            static_instances[0] = getStaticInstance();
+            const VkAccelerationStructureInstanceKHR instance =
+                getStaticInstance();
+            VkAccelerationStructureInstanceKHR empty_instance = instance;
+            empty_instance.mask = 0;
+            std::fill(static_instances,
+                static_instances + m_instance_capacity, empty_instance);
+            static_instances[0] = instance;
             vmaFlushAllocation(allocator, t.m_instance_memory, 0,
+                (VkDeviceSize)m_instance_capacity *
                 sizeof(VkAccelerationStructureInstanceKHR));
             t.m_dirty = true;
         }
@@ -1614,6 +1738,19 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
     }
     VkAccelerationStructureInstanceKHR* instances =
         (VkAccelerationStructureInstanceKHR*)t.m_instance_mapped;
+    // Every slot is written: the ones of the nodes of this frame with their
+    // instance, the others with a static instance which has the mask 0, so a
+    // slot which was used by a node which is gone (or hidden) is not hit and
+    // its key doesn't match the surfels of the node anymore. The key of the
+    // instance of a node is its slot (see the comment above)
+    const VkAccelerationStructureInstanceKHR static_instance =
+        getStaticInstance();
+    VkAccelerationStructureInstanceKHR empty_instance = static_instance;
+    empty_instance.mask = 0;
+    std::fill(instances, instances + m_instance_capacity, empty_instance);
+    instances[0] = static_instance;
+    // The highest slot which is used + 1, the holes have the not hittable
+    // instance (the TLAS is built with all of them)
     uint32_t instance_count = 1;
     size_t geometry_count = static_count;
     for (DynamicSource& s : sources)
@@ -1622,9 +1759,20 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
             s.m_shading_types, mesh_cache);
         if (blas->m_blas == VK_NULL_HANDLE)
             continue;
-        if (instance_count >= m_instance_capacity ||
-            geometry_count - static_count + blas->m_infos.size() >
+        if (geometry_count - static_count + blas->m_infos.size() >
             MAX_DYNAMIC_GEOMETRIES)
+        {
+            if (!m_warned_dynamic_limit)
+            {
+                m_warned_dynamic_limit = true;
+                GE::logMessage(GLL_WARNING, "GEVulkanRTScene: too many "
+                    "dynamic instances, the other ones are not traced");
+            }
+            break;
+        }
+        // The slot of the key of the node, 0 if there is no free slot
+        const uint32_t key = getNodeKey(s.m_node, s.m_mesh, s.m_buffer_mask);
+        if (key == 0)
         {
             if (!m_warned_dynamic_limit)
             {
@@ -1647,11 +1795,13 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
         }
         instance.instanceCustomIndex = (uint32_t)geometry_count;
         instance.mask = 0xFF;
-        instance.instanceShaderBindingTableRecordOffset = 0;
+        // The key of the node, see GEVulkanSurfelGI
+        instance.instanceShaderBindingTableRecordOffset = key;
         instance.flags = 0;
         instance.accelerationStructureReference = blas->m_address;
-        instances[instance_count++] = instance;
-
+        const uint32_t slot = key & (MAX_NODES - 1);
+        instances[slot] = instance;
+        instance_count = std::max(instance_count, slot + 1);
         for (unsigned g = 0; g < blas->m_infos.size(); g++)
         {
             GERTGeometry info = blas->m_infos[g];
@@ -1671,7 +1821,9 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
             mesh_cache);
         if (blas->m_blas == VK_NULL_HANDLE)
             continue;
-        if (instance_count >= m_instance_capacity)
+        // The slot of the key of the node, 0 if there is no free slot
+        const uint32_t key = getNodeKey(s.m_node, s.m_mesh, s.m_buffer_mask);
+        if (key == 0)
         {
             if (!m_warned_dynamic_limit)
             {
@@ -1738,10 +1890,13 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
         }
         instance.instanceCustomIndex = first_geometry;
         instance.mask = 0xFF;
-        instance.instanceShaderBindingTableRecordOffset = 0;
+        // The key of the node, see GEVulkanSurfelGI
+        instance.instanceShaderBindingTableRecordOffset = key;
         instance.flags = 0;
         instance.accelerationStructureReference = blas->m_address;
-        instances[instance_count++] = instance;
+        const uint32_t slot = key & (MAX_NODES - 1);
+        instances[slot] = instance;
+        instance_count = std::max(instance_count, slot + 1);
     }
 
     // The skinned nodes, all in the BLAS of the current set
@@ -1775,127 +1930,152 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
                 m_skin_failed_buffers = buffers;
         }
         if (m_skin_set && m_skin_set->m_buffers == buffers &&
-            instance_count < m_instance_capacity &&
             geometry_count - static_count + buffers.size() <=
             MAX_DYNAMIC_GEOMETRIES)
         {
-            // The joint matrices of every node (once for its geometries), in
-            // the buffer of this frame, the first one is the identity
-            irr::core::matrix4* matrices = (irr::core::matrix4*)
-                m_skinning_data->getMappedAddr()[buffer_idx];
-            unsigned matrix_count = 1;
-            bool matrices_ok = true;
-            std::vector<TopLevel::SkinDispatch> dispatches;
-            // The vertices are baked relative to this origin, with the
-            // translation of the instance as the origin, otherwise a node far
-            // from the world origin loses the precision of its 32 bit
-            // vertices (the small details are distorted). All the skinned
-            // nodes share a BLAS, so the origin is the position of the node
-            // nearest to the first camera, which is the one that should have
-            // the best precision (the order of the skins is not changed)
-            irr::core::vector3df skin_origin;
-            if (!skins.empty())
+            // The key of the set and the slot of its instance (the vertices
+            // are already in world space, only the origin of the skin moves
+            // them back)
+            if (m_skin_set->m_key == 0)
+                m_skin_set->m_key = allocateNodeKey();
+            const uint32_t key = m_skin_set->m_key;
+            if (key == 0)
             {
-                float nearest = -1.0f;
-                for (const SkinSource& s : skins)
+                if (!m_warned_dynamic_limit)
                 {
-                    const irr::core::vector3df pos =
-                        s.m_node->getAbsoluteTransformation().getTranslation();
-                    const float dist = cameras.empty() ? 0.0f :
-                        (float)pos.getDistanceFromSQ(cameras[0]);
-                    if (nearest < 0.0f || dist < nearest)
-                    {
-                        nearest = dist;
-                        skin_origin = pos;
-                    }
+                    m_warned_dynamic_limit = true;
+                    GE::logMessage(GLL_WARNING, "GEVulkanRTScene: too many "
+                        "dynamic instances, the other ones are not traced");
                 }
-            }
-            irr::scene::ISceneNode* last_node = NULL;
-            int last_offset = 0;
-            for (const SkinSource& s : skins)
-            {
-                if (s.m_node != last_node)
-                {
-                    GEVulkanAnimatedMeshSceneNode* node =
-                        static_cast<GEVulkanAnimatedMeshSceneNode*>(s.m_node);
-                    const unsigned joint_count = static_cast<GESPM*>(
-                        node->getMesh())->getJointCount();
-                    if (matrix_count + joint_count > MAX_SKINNING_MATRICES)
-                    {
-                        matrices_ok = false;
-                        break;
-                    }
-                    last_node = s.m_node;
-                    last_offset = (int)matrix_count;
-                    node->getSkinningMatrices(matrices + matrix_count);
-                    matrix_count += joint_count;
-                }
-                TopLevel::SkinDispatch dispatch;
-                memcpy(dispatch.m_world, s.m_node->getAbsoluteTransformation()
-                    .pointer(), sizeof(dispatch.m_world));
-                // Column major, the translation is the last column
-                dispatch.m_world[12] -= skin_origin.X;
-                dispatch.m_world[13] -= skin_origin.Y;
-                dispatch.m_world[14] -= skin_origin.Z;
-                dispatch.m_skinning_offset = last_offset;
-                dispatches.push_back(dispatch);
-            }
-            if (matrix_count > 1)
-            {
-                vmaFlushAllocation(allocator,
-                    m_skinning_data->getHostMemory()[buffer_idx], 0,
-                    matrix_count * sizeof(irr::core::matrix4));
-            }
-            if (!matrices_ok)
-            {
-                GE::logMessage(GLL_WARNING, "GEVulkanRTScene: too many "
-                    "joints (MAX_SKINNING_MATRICES), skinned nodes are not "
-                    "traced");
             }
             else
             {
-                m_skin_set->m_last_used_frame = m_frame_counter;
-                // World space with the origin of the skin removed (see
-                // skin_origin), the instance only moves it back. The shaders
-                // use the rotation part (identity) for the normals
-                VkAccelerationStructureInstanceKHR instance = {};
-                instance.transform.matrix[0][0] = 1.0f;
-                instance.transform.matrix[1][1] = 1.0f;
-                instance.transform.matrix[2][2] = 1.0f;
-                instance.transform.matrix[0][3] = skin_origin.X;
-                instance.transform.matrix[1][3] = skin_origin.Y;
-                instance.transform.matrix[2][3] = skin_origin.Z;
-                instance.instanceCustomIndex = (uint32_t)geometry_count;
-                instance.mask = 0xFF;
-                instance.instanceShaderBindingTableRecordOffset = 0;
-                instance.flags = 0;
-                instance.accelerationStructureReference = m_skin_set->m_address;
-                instances[instance_count++] = instance;
-                for (unsigned g = 0; g < skins.size(); g++)
+                // The joint matrices of every node (once for its geometries), in
+                // the buffer of this frame, the first one is the identity
+                irr::core::matrix4* matrices = (irr::core::matrix4*)
+                    m_skinning_data->getMappedAddr()[buffer_idx];
+                unsigned matrix_count = 1;
+                bool matrices_ok = true;
+                std::vector<TopLevel::SkinDispatch> dispatches;
+                // The vertices are baked relative to this origin, with the
+                // translation of the instance as the origin, otherwise a node
+                // far from the world origin loses the precision of its 32 bit
+                // vertices (the small details are distorted). All the skinned
+                // nodes share a BLAS, so the origin is the position of the
+                // node nearest to the first camera, which is the one that
+                // should have the best precision (the order of the skins is
+                // not changed)
+                irr::core::vector3df skin_origin;
+                if (!skins.empty())
                 {
-                    GERTGeometry info = m_skin_set->m_infos[g];
-                    setDynamicMaterial(info, skins[g].m_node,
-                        skins[g].m_material_index);
-                    mapped_addr[geometry_count++] = info;
+                    float nearest = -1.0f;
+                    for (const SkinSource& s : skins)
+                    {
+                        const irr::core::vector3df pos = s.m_node->
+                            getAbsoluteTransformation().getTranslation();
+                        const float dist = cameras.empty() ? 0.0f :
+                            (float)pos.getDistanceFromSQ(cameras[0]);
+                        if (nearest < 0.0f || dist < nearest)
+                        {
+                            nearest = dist;
+                            skin_origin = pos;
+                        }
+                    }
                 }
-                t.m_skin_dispatches = dispatches;
-                // Updated every frame, so the TLAS is built every frame too
-                t.m_skin_active = true;
+                irr::scene::ISceneNode* last_node = NULL;
+                int last_offset = 0;
+                for (const SkinSource& s : skins)
+                {
+                    if (s.m_node != last_node)
+                    {
+                        GEVulkanAnimatedMeshSceneNode* node =
+                            static_cast<GEVulkanAnimatedMeshSceneNode*>(
+                            s.m_node);
+                        const unsigned joint_count = static_cast<GESPM*>(
+                            node->getMesh())->getJointCount();
+                        if (matrix_count + joint_count > MAX_SKINNING_MATRICES)
+                        {
+                            matrices_ok = false;
+                            break;
+                        }
+                        last_node = s.m_node;
+                        last_offset = (int)matrix_count;
+                        node->getSkinningMatrices(matrices + matrix_count);
+                        matrix_count += joint_count;
+                    }
+                    TopLevel::SkinDispatch dispatch;
+                    memcpy(dispatch.m_world, s.m_node->
+                        getAbsoluteTransformation().pointer(),
+                        sizeof(dispatch.m_world));
+                    // Column major, the translation is the last column
+                    dispatch.m_world[12] -= skin_origin.X;
+                    dispatch.m_world[13] -= skin_origin.Y;
+                    dispatch.m_world[14] -= skin_origin.Z;
+                    dispatch.m_skinning_offset = last_offset;
+                    dispatches.push_back(dispatch);
+                }
+                if (matrix_count > 1)
+                {
+                    vmaFlushAllocation(allocator,
+                        m_skinning_data->getHostMemory()[buffer_idx], 0,
+                        matrix_count * sizeof(irr::core::matrix4));
+                }
+                if (!matrices_ok)
+                {
+                    GE::logMessage(GLL_WARNING, "GEVulkanRTScene: too many "
+                        "joints (MAX_SKINNING_MATRICES), skinned nodes are "
+                        "not traced");
+                }
+                else
+                {
+                    m_skin_set->m_last_used_frame = m_frame_counter;
+                    // World space with the origin of the skin removed (see
+                    // skin_origin), the instance only moves it back. The
+                    // shaders use the rotation part (identity) for the normals
+                    VkAccelerationStructureInstanceKHR instance = {};
+                    instance.transform.matrix[0][0] = 1.0f;
+                    instance.transform.matrix[1][1] = 1.0f;
+                    instance.transform.matrix[2][2] = 1.0f;
+                    instance.transform.matrix[0][3] = skin_origin.X;
+                    instance.transform.matrix[1][3] = skin_origin.Y;
+                    instance.transform.matrix[2][3] = skin_origin.Z;
+                    instance.instanceCustomIndex = (uint32_t)geometry_count;
+                    instance.mask = 0xFF;
+                    // The key of the set, see GEVulkanSurfelGI
+                    instance.instanceShaderBindingTableRecordOffset = key;
+                    instance.flags = 0;
+                    instance.accelerationStructureReference =
+                        m_skin_set->m_address;
+                    const uint32_t slot = key & (MAX_NODES - 1);
+                    instances[slot] = instance;
+                    instance_count = std::max(instance_count, slot + 1);
+                    for (unsigned g = 0; g < skins.size(); g++)
+                    {
+                        GERTGeometry info = m_skin_set->m_infos[g];
+                        setDynamicMaterial(info, skins[g].m_node,
+                            skins[g].m_material_index);
+                        mapped_addr[geometry_count++] = info;
+                    }
+                    t.m_skin_dispatches = dispatches;
+                    // Updated every frame, so the TLAS is built every frame too
+                    t.m_skin_active = true;
+                }
             }
         }
     }
+    // The shaders of this frame read the instances (the keys and the
+    // transformations of the nodes), every slot was written
+    vmaFlushAllocation(allocator, t.m_instance_memory, 0,
+        (VkDeviceSize)m_instance_capacity *
+        sizeof(VkAccelerationStructureInstanceKHR));
+    freeUnusedNodeKeys();
     vmaFlushAllocation(allocator, m_geometry_data->getHostMemory()[buffer_idx],
         0, geometry_count * sizeof(GERTGeometry));
 
     // Without dynamic instances the TLAS of the build (or the last restore)
     // is what it should be
     if (instance_count > 1 || !t.m_instance_static)
-    {
-        instances[0] = getStaticInstance();
-        vmaFlushAllocation(allocator, t.m_instance_memory, 0,
-            instance_count * sizeof(VkAccelerationStructureInstanceKHR));
         t.m_dirty = true;
-    }
     t.m_instance_count = instance_count;
     t.m_instance_static = instance_count == 1;
     destroyUnusedMeshBLAS();
@@ -2307,6 +2487,7 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
         clear();
         return false;
     }
+    createNodeKeys();
 
     const VkDeviceAddress base = getAddress(m_data_buffer);
     std::vector<VkAccelerationStructureGeometryKHR> geometries;

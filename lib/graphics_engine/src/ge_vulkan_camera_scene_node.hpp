@@ -20,6 +20,11 @@ irr::core::matrix4 m_projection_view_matrix;
 irr::core::matrix4 m_inverse_projection_view_matrix;
 irr::core::rectf   m_viewport;
 irr::core::rectf   m_screensize;
+// x != 0 renders the dual paraboloid shadow map (spm.vert), it is used
+// instead of a specialization constant so a shadow slot can switch between
+// a point light (per slot) and a spot light (perspective) without new
+// pipelines
+float              m_shadow_flags[4];
 };
 
 class GEVulkanDrawCall;

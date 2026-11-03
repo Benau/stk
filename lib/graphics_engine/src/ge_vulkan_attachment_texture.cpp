@@ -13,14 +13,16 @@ GEVulkanAttachmentTexture::GEVulkanAttachmentTexture(GEVulkanDriver* vk,
                                            const core::dimension2d<u32>& size,
                                            VkFormat format,
                                            VkImageUsageFlags iu,
-                                           VkImageAspectFlags ia)
+                                           VkImageAspectFlags ia,
+                                           bool mipmap)
                          : GEVulkanTexture()
 {
     m_vk = vk;
     m_vulkan_device = m_vk->getDevice();
     m_image = VK_NULL_HANDLE;
     m_vma_allocation = VK_NULL_HANDLE;
-    m_has_mipmaps = false;
+    // Before createImage and createImageView, they use it for the levels
+    m_has_mipmaps = mipmap;
     m_locked_data = NULL;
     m_size = m_orig_size = size;
     m_internal_format = format;

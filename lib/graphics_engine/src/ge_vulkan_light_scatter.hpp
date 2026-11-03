@@ -6,17 +6,27 @@
 namespace GE
 {
 
-// Light scattering of the point lights in the fog (the same look as the
-// OpenGL renderer, see light_scatter.comp), owned by GEVulkanDeferredFBOSplit.
-// All the compute shaders and the images of it are in GEVulkanLowResEffect:
+// Volumetric fog and light scattering of the sun, the point lights and the
+// spot lights, which replaces the light scattering of the OpenGL renderer
+// (see light_scatter.comp), owned by GEVulkanDeferredFBOSplit. All the compute
+// shaders and the images of it are in GEVulkanLowResEffect:
 //
 // 1. For each viewport (draw call) at half the size of it, light_scatter.comp
-//    marches the ray of every pixel in the fog lit by the lights, using the
-//    camera and light data of the draw call and the depth of the g-buffer.
+//    marches the ray of every pixel in the fog, using the camera and light
+//    data of the draw call, the depth of the g-buffer (the ray ends at the
+//    geometry) and the shadow map of the environment: the sun has the shadows
+//    of its cascades and the point lights and spot lights have the ones of
+//    their cube maps (the tiles of the omni atlas). The fog has the density of
+//    the exponential fog of the track, faded by its height
+//    (fog-start-height/fog-end-height).
+//    The light shaft of the track (GEVulkanDriver::setLightShaft) is the sun
+//    which the camera sees: it colors the scattering of the sun and gives the
+//    direction of its phase. The disc of the sun and its rays are rendered by
+//    GEVulkanGodRays.
 // 2. The blur (never reading outside of the rect of the viewport).
 // 3. The lighting pass adds it to hdr together with the glow outline (see
 //    lighting_composite.frag and GEVulkanDrawCall::renderLightingComposite),
-//    so it's above the fog of the lit geometry and the sky
+//    after the normal fog of the geometry and the skybox
 class GEVulkanLightScatter : public GEVulkanLowResEffect
 {
 protected:

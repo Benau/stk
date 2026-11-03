@@ -398,8 +398,9 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
                 if (anti_aliasing_changed)
                     need_recreate_swapchain = true;
                 if (need_recreate_swapchain || pbr_changed || ibl_changed ||
-                    glow_changed || light_scatter_changed || bloom_changed ||
-                    ssao_changed || god_rays_changed || dof_changed ||
+                    glow_changed || light_scatter_changed ||
+                    god_rays_changed || bloom_changed ||
+                    ssao_changed || dof_changed ||
                     prev_shadow_size != GE::getGEConfig()->m_shadow_size ||
                     prev_shadow_type != GE::getGEConfig()->m_shadow_type)
                     GE::getVKDriver()->updateDriver(need_recreate_swapchain, pbr_changed, ibl_changed);

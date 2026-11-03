@@ -45,9 +45,14 @@ GEConfig g_config =
     GST_NONE,
     8,
     32,
-    0.5f,
+    3.0f,
     3.0f,
     1.0f,
+    // The debug views are off until the debug menu turns one on
+    false,
+    false,
+    false,
+    false,
     GAA_NONE,
     false,
     72.0f,
@@ -293,6 +298,10 @@ void refreshDeferredSplit()
         g_config.m_deferred_split |= 1 << 1;
     if (g_config.m_bloom)
         g_config.m_deferred_split |= 1 << 2;
+    // The march of the rays samples the depth of the g-buffer in the compute
+    // shaders before the lighting pass
+    if (g_config.m_god_rays)
+        g_config.m_deferred_split |= 1 << 6;
     // The solid materials reflect the output of the tonemap pass of the
     // previous frame (the OpenGL renderer also needs the passes to be
     // separated), and the HiZ depth is generated after the g-buffer. The
@@ -309,10 +318,6 @@ void refreshDeferredSplit()
     // is rendered doesn't change the FBO
     if (isRayTracing())
         g_config.m_deferred_split |= 1 << 5;
-    // The march of the rays samples the depth of the g-buffer in the compute
-    // shaders before the lighting pass
-    if (g_config.m_god_rays)
-        g_config.m_deferred_split |= 1 << 6;
     // The depth of field reads the depth which the FBO keeps after its last
     // render pass (a regular sampled texture, not a transient attachment)
     if (isDepthOfFieldEnabled())
@@ -395,6 +400,12 @@ bool isSolidRayTracing()
 bool isDisplaceRayTracing()
 {
     return g_config.m_pbr && g_config.m_ray_tracing.m_displace_reflection &&
+        isRayTracing();
+}
+
+bool isSurfelGIEnabled()
+{
+    return g_config.m_pbr && g_config.m_ray_tracing.m_surfel_gi &&
         isRayTracing();
 }
 

@@ -1,4 +1,5 @@
 #include "utils/camera.glsl"
+#include "utils/constants_utils.glsl"
 #include "utils/get_vertex_color.glsl"
 #include "utils/spm_data.glsl"
 #include "utils/spm_layout.vert"
@@ -11,6 +12,8 @@ void main()
         u_object_buffer.m_objects[gl_InstanceIndex].m_rotation,
         u_object_buffer.m_objects[gl_InstanceIndex].m_scale, v_position);
     f_world_position = v_world_position;
+    // The perspective projection of a sun cascade, of a spot light cone or of
+    // a face of the cube map of a point light
     gl_Position = u_camera.m_projection_view_matrix * v_world_position;
     f_vertex_color = v_color.zyxw * getVertexColor(
         u_object_buffer.m_objects[gl_InstanceIndex].m_custom_vertex_color);

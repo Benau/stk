@@ -18,6 +18,8 @@ protected:
 private:
     const GEVulkanShadowCameraCascade m_cascade;
 
+    bool m_render_state;
+
     // ------------------------------------------------------------------------
     virtual bool isShadow() const                              { return true; }
     // ------------------------------------------------------------------------
@@ -56,9 +58,9 @@ public:
         return NULL;
     }
     // ------------------------------------------------------------------------
-    virtual void setRenderState(bool state)                                  {}
+    virtual void setRenderState(bool state)                     { m_render_state = state; }
     // ------------------------------------------------------------------------
-    virtual bool getRenderState() const                        { return true; }
+    virtual bool getRenderState() const                        { return m_render_state; }
 
 };   // GEVulkanShadowDrawCall
 

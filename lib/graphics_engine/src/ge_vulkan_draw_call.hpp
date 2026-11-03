@@ -87,12 +87,17 @@ enum GEVulkanPipelineType : unsigned
     GVPT_GLOW_OUTLINE,
     // Fullscreen draw in the lighting pass which adds the blurred glow
     GVPT_LIGHTING_COMPOSITE,
-    // Fullscreen draw in the lighting pass which blends the reflection of the
-    // solid materials over them, see solid_ssr.frag
+    // Fullscreen draw in the reflection pass (a reduced size target) which
+    // traces the reflection of the solid materials over the depth, see
+    // solid_ssr.frag
     GVPT_SOLID_SSR,
     // Same as above, but the reflection is traced in the ray traced scene,
     // see solid_rt.frag
     GVPT_SOLID_RT,
+    // Fullscreen draw in the reflection pass, at the size of the trace, which
+    // filters the stochastic target of GVPT_SOLID_SSR / GVPT_SOLID_RT before
+    // the lighting calculation samples it, see solid_reflection_resolve.frag
+    GVPT_SOLID_REFLECTION_RESOLVE,
     GVPT_BUBBLE,
 };
 
@@ -151,10 +156,16 @@ struct GlowOutlineDrawData
 };
 
 class GEVulkanHiZDepth;
+class GEVulkanOmniShadowFBO;
 class GEVulkanDrawCall
 {
 private:
+    // The sun cascades, NULL if the sun doesn't cast a shadow map
     GEVulkanShadowFBO* m_shadow_fbo;
+
+    // The atlas of the point and spot lights (one layer, a tile per face),
+    // NULL if the point lights have no shadow map
+    GEVulkanOmniShadowFBO* m_omni_shadow_fbo;
 
     // ------------------------------------------------------------------------
     virtual bool isShadow() const                             { return false; }
@@ -162,6 +173,10 @@ private:
     virtual bool skip(irr::scene::ISceneNode* node) const     { return false; }
     // ------------------------------------------------------------------------
     virtual bool useDepthClamp() const                        { return false; }
+    // ------------------------------------------------------------------------
+    // The shadow map is a dual paraboloid map: spm.vert projects it per vertex
+    // with the basis stored in the camera matrix, and it has no frustum
+    virtual bool useDPShadow() const                          { return false; }
     // ------------------------------------------------------------------------
     virtual bool ignoreMaterial(irr::video::E_MATERIAL_TYPE mt) const
                                                               { return false; }
@@ -394,6 +409,12 @@ public:
                          const irr::core::rect<irr::s32>& viewp,
                          VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
+    // Same for the reflection pass, which renders at a fraction of the size of
+    // the FBO (scale = 1 / GEVulkanDeferredFBOSplit::getSolidReflectionScale())
+    void prepareReflectionViewport(GEVulkanDriver* vk,
+                                   const irr::core::rect<irr::s32>& viewp,
+                                   VkCommandBuffer cmd, float scale);
+    // ------------------------------------------------------------------------
     // The viewport which prepareViewport sets, in pixels of the render target
     VkViewport getRenderViewport(GEVulkanDriver* vk,
                                  const irr::core::rect<irr::s32>& viewp) const;
@@ -426,12 +447,12 @@ public:
     // generate()), each camera of splitscreen has its own list
     bool hasGlowOutline() const       { return !m_glow_outline_draws.empty(); }
     // ------------------------------------------------------------------------
-    // True if the FBO has light scattering and this camera has fog and lights
-    // this frame (known after generate), see GEVulkanLightScatter
+    // True if the FBO has light scattering and this camera has fog this frame
+    // (known after generate), see GEVulkanLightScatter
     bool hasLightScatter() const;
     // ------------------------------------------------------------------------
-    // True if the FBO has light shafts and the track has a sun for them
-    // (GEVulkanDriver::setGodRays), the same for all the cameras
+    // True if the FBO has light shafts and the track has a sun (light shaft)
+    // this frame, see GEVulkanGodRays
     bool hasGodRays() const;
     // ------------------------------------------------------------------------
     // Creates a layout of the data descriptor set (camera, lights), all of
@@ -460,16 +481,24 @@ public:
                                  bool glow_outline, bool light_scatter,
                                  bool god_rays);
     // ------------------------------------------------------------------------
-    // Blends the reflection of the glossy solid materials (traced over the
-    // depth, or the HiZ depth, the color is the output of the previous frame)
-    // over the lit hdr, in the lighting pass, only if the FBO has it
-    // (GEVulkanDeferredFBOSplit::hasSolidSSR)
+    // Traces the reflection of the glossy solid materials in the render pass
+    // of the FBO (GEVulkanDeferredFBOSplit::getRenderPassForPipeline), the
+    // viewport is set by prepareReflectionViewport. The target stores the
+    // traced color premultiplied by its coverage and the coverage, which
+    // renderSolidReflectionResolve filters before the lighting calculation
+    // samples it (utils/handle_pbr.glsl)
     void renderSolidSSR(GEVulkanDriver* vk, VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
     // Same for the reflection of the ray traced scene (GVPT_SOLID_RT), only if
     // the FBO has it (GEVulkanDeferredFBOSplit::hasSolidRT) and the scene is
     // built
     void renderSolidRT(GEVulkanDriver* vk, VkCommandBuffer cmd);
+    // ------------------------------------------------------------------------
+    // Filters the target of the trace at its size (solid_reflection_resolve.frag,
+    // the spatial prefilter of the denoiser of FidelityFX SSSR) into the
+    // target which the lighting calculation samples, the viewport is set by
+    // prepareReflectionViewport, only if the FBO has solid reflection
+    void renderSolidReflectionResolve(GEVulkanDriver* vk, VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
     unsigned getPolyCount() const
     {
@@ -510,6 +539,14 @@ public:
     GEVulkanLightHandler* getLightHandler() const   { return m_light_handler; }
     // ------------------------------------------------------------------------
     GEVulkanShadowFBO* getShadowFBO() const            { return m_shadow_fbo; }
+    // ------------------------------------------------------------------------
+    GEVulkanOmniShadowFBO* getOmniShadowFBO() const
+                                                  { return m_omni_shadow_fbo; }
+    // ------------------------------------------------------------------------
+    bool hasShadowFBO() const
+    {
+        return m_shadow_fbo != NULL || m_omni_shadow_fbo != NULL;
+    }
     // ------------------------------------------------------------------------
     void setCameraUBOOffset(unsigned offset)  { m_camera_ubo_offset = offset; }
     // ------------------------------------------------------------------------

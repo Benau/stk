@@ -20,6 +20,7 @@ layout(set = 3, binding = 0) uniform samplerCube u_diffuse;
 layout(set = 3, binding = 1) uniform samplerCube u_specular;
 layout(set = 3, binding = 2) uniform samplerCube u_skybox_texture;
 layout(set = 3, binding = 3) uniform sampler2DArrayShadow u_shadow_map;
+layout(set = 3, binding = 5) uniform sampler2DShadow u_omni_shadow_map;
 
 #include "utils/sample_mesh_texture.glsl"
 #include "utils/pbr_utils.glsl"
@@ -47,7 +48,8 @@ void main()
         // Approximate gamma 1/2.2 with sqrt to avoid pow()
         reflection_color = sqrt(texture(u_skybox_texture, reflection_dir).rgb);
         vec3 hit_color;
-        if (traceReflection(f_world_position.xyz, reflection_dir, hit_color))
+        if (traceReflection(f_world_position.xyz, reflection_dir, 0.0,
+            hit_color))
             reflection_color = convertColor(hit_color);
     }
     o_color = finishBubble(bubble, f_world_position, reflection_color);

@@ -3,6 +3,7 @@
 
 #include "ge_vma.hpp"
 #include "vulkan_wrapper.h"
+#include "matrix4.h"
 #include "vector3d.h"
 
 namespace irr { namespace scene { class ISceneNode; } }
@@ -88,6 +89,19 @@ enum GERTGeometryFlag : uint32_t
     GRTGF_CACHE_INDEX = 2
 };
 
+// An effect which is attached to a triangle (the surfels of GEVulkanSurfelGI)
+// uses the key of the node of the triangle to follow it between the frames.
+// The key is the slot of the instance of the node in the TLAS: it's written in
+// the instanceShaderBindingTableRecordOffset of the instance (a ray query
+// doesn't use it for anything else), so a ray hit returns it directly and the
+// shaders read the transformation of the instance in the instance buffer.
+// Slot 0 is the static BLAS and its key is 0: the static geometry is in world
+// space and doesn't move. The skinned geometry is in world space too
+// (skin_rt.comp), its instance transform is only the translation of the origin
+// it was baked relative to. A key is (generation << 11) | slot, with 13 bits of
+// generation, so it fits the 24 bits of the field and a reused slot has a new
+// key
+//
 // All the static nodes (those with GRTT_STATIC in the render info of the
 // materials) are joined into a single bottom level acceleration structure of
 // world space triangles, which is shared by all cameras. The scene should be
@@ -142,7 +156,14 @@ public:
         // grass meshes, after the data of the static BLAS in the data buffer
         SKIN_DATA_BYTES = 4 * 1024 * 1024,
         // Joint matrices of all the skinned nodes of a frame
-        MAX_SKINNING_MATRICES = 1024
+        MAX_SKINNING_MATRICES = 1024,
+        // Slots of the keys of the nodes, the same as MAX_INSTANCES so the slot
+        // of a key is the index of the instance of the node in the TLAS, it has
+        // to be a power of two (the slot of a key is key & (MAX_NODES - 1)) and
+        // slot 0 is the static BLAS. The key is (generation << 11) | slot with
+        // 13 bits of generation, so it fits the 24 bits of
+        // instanceShaderBindingTableRecordOffset
+        MAX_NODES = 2048
     };
 private:
     GEVulkanDriver* m_vk;
@@ -173,6 +194,28 @@ private:
     // fence, like the ObjectData of GEVulkanDrawCall::generate
     std::unique_ptr<GEVulkanDynamicBuffer> m_geometry_data;
 
+    struct NodeKey
+    {
+        uint32_t m_key;
+        uint64_t m_last_frame;
+        // The mesh and the mesh buffers the key was allocated with, a new key
+        // is allocated when they change so a surfel of the old mesh is not
+        // attached to a triangle of another one
+        irr::scene::IMesh* m_mesh;
+        uint64_t m_buffer_mask;
+    };
+
+    // The key of every node in the scene, a node which is not seen for a few
+    // frames gives its slot to another one, with a new key (so a surfel which
+    // still has the old key doesn't match the new node)
+    std::map<irr::scene::ISceneNode*, NodeKey> m_node_keys;
+
+    std::vector<uint32_t> m_free_node_slots;
+
+    // Key of the next user of a slot (the generation of the slot is in the
+    // high bits of the key), so a reused slot never has the key it had
+    std::vector<uint32_t> m_node_slot_generation;
+
     // Set 0 of the ray traced pass: the TLAS, the data buffer and the geometry
     // buffer (see solid_rt.frag), one for each buffer of m_geometry_data and
     // updated after the scene is built
@@ -192,7 +235,10 @@ private:
     // flight + 1 of them, same as m_geometry_data), with the host visible
     // buffer of its VkAccelerationStructureInstanceKHR array which is written
     // directly (never read) before the fence is waited, so a frame never
-    // touches what the gpu is still reading
+    // touches what the gpu is still reading. The shaders read it too (see the
+    // comment above): the instance of the key of a node is at its slot, the
+    // slots which are not written of a frame have the static BLAS with the mask
+    // 0, so they can't be hit
     struct GrassBLAS;
 
     struct TopLevel
@@ -333,6 +379,8 @@ private:
         // Built once, then updated
         bool m_built;
         uint64_t m_last_used_frame;
+        // Key (and slot) of the instance of the set, a new one for every set
+        uint32_t m_key;
         // ------------------------------------------------------------------
         SkinSet()
         {
@@ -344,6 +392,7 @@ private:
             m_address = 0;
             m_built = false;
             m_last_used_frame = 0;
+            m_key = 0;
         }
     };
 
@@ -448,6 +497,11 @@ private:
 
     uint64_t m_frame_counter;
 
+    // Incremented every time the scene is cleared (and built again), so the
+    // effects which hold data of its triangles (GEVulkanSurfelGI) know when
+    // they are stale
+    uint32_t m_build_counter;
+
     bool m_warned_dynamic_limit;
     // See getBuiltAlphatest()
     bool m_built_alphatest;
@@ -474,6 +528,25 @@ private:
     // ------------------------------------------------------------------------
     // Keep infos (after all offsets are final) and write it to all buffers
     bool createGeometryData(const std::vector<GERTGeometry>& infos);
+    // ------------------------------------------------------------------------
+    // The slot of the key of every node, the slot 0 is not used (the static
+    // BLAS) and the rest are free at the start
+    void createNodeKeys();
+    // ------------------------------------------------------------------------
+    // The key of the node of this frame, 0 if there is no free slot (nothing
+    // which follows it is tracked). A new key is allocated if the mesh or the
+    // buffer mask of the node is not the one of its current key
+    uint32_t getNodeKey(irr::scene::ISceneNode* node, irr::scene::IMesh* mesh,
+                        uint64_t buffer_mask);
+    // ------------------------------------------------------------------------
+    // A key without a node, for a skinned set (its key is the one of its
+    // instance, written by update, and its slot is freed with the set)
+    uint32_t allocateNodeKey();
+    // ------------------------------------------------------------------------
+    void freeNodeKey(uint32_t key);
+    // ------------------------------------------------------------------------
+    // Frees the slots of the nodes which were not seen for a few frames
+    void freeUnusedNodeKeys();
     // ------------------------------------------------------------------------
     void setupTopLevelBuild(const TopLevel& top_level,
         VkAccelerationStructureGeometryKHR& geometry,
@@ -574,8 +647,10 @@ public:
     //   vertex color refreshed from the materials of the nodes, so animated
     //   textures and color changes are seen in the reflection
     // - the instances (the static BLAS, one for each node with GRTT_DYNAMIC
-    //   found under root, and the skinned BLAS), the BLAS of new meshes and
-    //   a new skinned BLAS are created (not built, see buildTopLevel)
+    //   found under root, and the skinned BLAS), every slot at a time: the one
+    //   of the key of the node, the slots of the nodes which are not written
+    //   get the static BLAS with the mask 0. The BLAS of new meshes and a new
+    //   skinned BLAS are created (not built, see buildTopLevel)
     // - the joint matrices of the skinned nodes
     // Only if GERayTracingConfig::m_dynamic_objects is true, otherwise the buffers
     // are restored (once) to what the build wrote. Nothing is written if not
@@ -591,6 +666,9 @@ public:
     void buildTopLevel(VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
     uint32_t getGeometryCount() const              { return m_geometry_count; }
+    // ------------------------------------------------------------------------
+    // Incremented every time the scene is cleared (and built again)
+    uint32_t getBuildCounter() const              { return m_build_counter; }
     // ------------------------------------------------------------------------
     uint32_t getTriangleCount() const              { return m_triangle_count; }
 };   // GEVulkanRTScene

@@ -43,6 +43,25 @@ layout (constant_id = 13) const uint u_rt_shadow_type = 0;
 layout (constant_id = 14) const float u_rt_shadow_scale = 1.0;
 // Of lighting_composite.frag, the light shafts (GEVulkanGodRays) are added
 layout (constant_id = 15) const bool u_god_rays = false;
+// Of deferred_pbr.frag, the ambient diffuse light of the deferred materials is
+// the indirect diffuse of the surfels (GEVulkanSurfelGI) instead of the
+// prefiltered environment and the flat ambient light
+layout (constant_id = 16) const bool u_surfel_gi = false;
+// Of deferred_convert_color.frag, the indirect light of the ambient occlusion
+// (SSIL, GEVulkanSSAO) is added to hdr. It's only used when both the ambient
+// occlusion (u_ssao) and the surfel global illumination (u_surfel_gi) are on
+layout (constant_id = 17) const bool u_ssil = false;
+// Of the point light and spot light shadow passes: the camera matrix of the
+// layer is a dual paraboloid basis instead of a projection (spm.vert)
+layout (constant_id = 18) const bool u_dpsm_shadow = false;
+// Of the reflection passes of the split deferred FBO (solid_ssr.frag,
+// solid_rt.frag and their spatial resolve, solid_reflection_resolve.frag) and
+// of the lighting calculation which samples their target
+// (utils/handle_pbr.glsl): the reflection is traced at a fraction of the size
+// of the FBO (4 = quarter size for the screen space reflection, 2 = half size
+// for the ray traced one) and the fullscreen draw of the lighting pass
+// upsamples the resolved target with the hardware bilinear filter
+layout (constant_id = 19) const uint u_reflection_scale = 1;
 
 vec3 convertColor(vec3 input_color)
 {

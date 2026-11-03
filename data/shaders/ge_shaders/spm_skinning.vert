@@ -1,4 +1,5 @@
 #include "utils/camera.glsl"
+#include "utils/constants_utils.glsl"
 #include "utils/get_vertex_color.glsl"
 #include "utils/spm_data.glsl"
 #include "utils/spm_layout.vert"
@@ -19,6 +20,7 @@ void main()
         u_object_buffer.m_objects[gl_InstanceIndex].m_scale,
         v_skinning_position.xyz);
     f_world_position = v_world_position;
+    // See spm.vert
     gl_Position = u_camera.m_projection_view_matrix * v_world_position;
     f_vertex_color = v_color.zyxw * getVertexColor(
         u_object_buffer.m_objects[gl_InstanceIndex].m_custom_vertex_color);

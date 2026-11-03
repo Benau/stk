@@ -45,6 +45,8 @@ layout (set = DISPLACE_ENV_SET, binding = 0) uniform samplerCube u_diffuse;
 layout (set = DISPLACE_ENV_SET, binding = 1) uniform samplerCube u_specular;
 layout (set = DISPLACE_ENV_SET, binding = 3) uniform sampler2DArrayShadow
     u_shadow_map;
+layout (set = DISPLACE_ENV_SET, binding = 5) uniform sampler2DShadow
+    u_omni_shadow_map;
 #include "utils/pbr_utils.glsl"
 #include "utils/get_vertex_color.glsl"
 #include "../utils/rgb_conversion.frag"
@@ -130,10 +132,13 @@ void main()
         // The hit is lit in hdr, the displace color is after the tonemap
         vec3 hdr;
         if (traceReflection(f_world_position.xyz, normalize(world_reflection),
-            hdr))
+            0.0, hdr))
         {
-            float fresnel = (1.0 - NdotV) * (1.0 - NdotV);
-            result = mix(fallback, vec4(convertColor(hdr), 1.0), fresnel);
+            // Schlick Fresnel of the dielectric surface (F0 0.04) like the
+            // lighting of the solid materials
+            float reflection_weight = fresnel(vec3(0.04), 1.0, NdotV).r;
+            result = mix(fallback, vec4(convertColor(hdr), 1.0),
+                reflection_weight);
         }
         else
             result = fallback;
@@ -154,13 +159,14 @@ void main()
         else
         {
             // Trace HiZ to find the hit point.
+            float hit_ray_depth;
 #if SSR_DEBUG_MODE != 0
             hit = traceHiZView(xpos, reflected, u_camera.m_projection_matrix,
-                coords, dbgStart);
+                coords, hit_ray_depth, dbgStart);
 #else
             vec3 startSS;
             hit = traceHiZView(xpos, reflected, u_camera.m_projection_matrix,
-                coords, startSS);
+                coords, hit_ray_depth, startSS);
 #endif
             coords = coords * viewport_scale + viewport_offset;
         }

@@ -31,6 +31,16 @@ GEVulkanDriver* g_vk;
 VkPipelineLayout g_pipeline_layout = VK_NULL_HANDLE;
 VkPipeline g_graphics_pipeline = VK_NULL_HANDLE;
 
+// Pipeline of the shadow viz of the debug menu, it samples the depth layers
+// of the sun shadow map with its own sampler (the 2D texture descriptor has
+// 2D images only)
+VkPipeline g_shadow_viz_pipeline = VK_NULL_HANDLE;
+VkPipelineLayout g_shadow_viz_pipeline_layout = VK_NULL_HANDLE;
+VkDescriptorSetLayout g_shadow_viz_descriptor_layout = VK_NULL_HANDLE;
+VkDescriptorPool g_shadow_viz_descriptor_pool = VK_NULL_HANDLE;
+std::vector<VkDescriptorSet> g_shadow_viz_descriptor_sets;
+VkSampler g_shadow_viz_sampler = VK_NULL_HANDLE;
+
 GEVulkanTextureDescriptor* g_texture_descriptor = NULL;
 
 GEVulkanDynamicBuffer* g_tris_buffer = NULL;
@@ -50,6 +60,9 @@ struct Tri
 std::vector<irr::core::recti> g_tris_clip;
 std::vector<Tri> g_tris_queue;
 std::vector<uint16_t> g_tris_index_queue;
+
+static void createShadowVizPipeline();
+static void drawShadowViz(VkImageView shadow_map_view);
 }   // GEVulkan2dRenderer
 
 // ============================================================================
@@ -63,6 +76,7 @@ void GEVulkan2dRenderer::init(GEVulkanDriver* vk)
     g_descriptor_set_layout = g_texture_descriptor->getDescriptorSetLayout();
     createPipelineLayout();
     createGraphicsPipeline();
+    createShadowVizPipeline();
     createTrisBuffers();
 }   // init
 
@@ -78,6 +92,31 @@ void GEVulkan2dRenderer::destroy()
     g_texture_descriptor = NULL;
     vkDestroyPipeline(g_vk->getDevice(), g_graphics_pipeline, NULL);
     vkDestroyPipelineLayout(g_vk->getDevice(), g_pipeline_layout, NULL);
+    if (g_shadow_viz_pipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(g_vk->getDevice(), g_shadow_viz_pipeline, NULL);
+    if (g_shadow_viz_pipeline_layout != VK_NULL_HANDLE)
+    {
+        vkDestroyPipelineLayout(g_vk->getDevice(),
+            g_shadow_viz_pipeline_layout, NULL);
+    }
+    if (g_shadow_viz_descriptor_pool != VK_NULL_HANDLE)
+    {
+        vkDestroyDescriptorPool(g_vk->getDevice(),
+            g_shadow_viz_descriptor_pool, NULL);
+    }
+    if (g_shadow_viz_sampler != VK_NULL_HANDLE)
+        vkDestroySampler(g_vk->getDevice(), g_shadow_viz_sampler, NULL);
+    if (g_shadow_viz_descriptor_layout != VK_NULL_HANDLE)
+    {
+        vkDestroyDescriptorSetLayout(g_vk->getDevice(),
+            g_shadow_viz_descriptor_layout, NULL);
+    }
+    g_shadow_viz_pipeline = VK_NULL_HANDLE;
+    g_shadow_viz_pipeline_layout = VK_NULL_HANDLE;
+    g_shadow_viz_descriptor_pool = VK_NULL_HANDLE;
+    g_shadow_viz_sampler = VK_NULL_HANDLE;
+    g_shadow_viz_descriptor_layout = VK_NULL_HANDLE;
+    g_shadow_viz_descriptor_sets.clear();
 }   // destroy
 
 // ----------------------------------------------------------------------------
@@ -94,6 +133,25 @@ void GEVulkan2dRenderer::createPipelineLayout()
     if (result != VK_SUCCESS)
         throw std::runtime_error("vkCreatePipelineLayout failed");
 }   // createPipelineLayout
+
+// ----------------------------------------------------------------------------
+namespace GEVulkan2dRenderer
+{
+// The render pass and subpass the 2D draws are recorded in: the swapchain
+// one, or the last pass of the swapchain output of the deferred FBO
+static VkRenderPass get2dRenderPass(uint32_t& subpass)
+{
+    GEVulkanFBOTexture* rtt = g_vk->getRTTTexture();
+    bool rpc1 = rtt && rtt->getRTTRenderPassCount() == 1;
+    bool sco = rtt && rtt->useSwapChainOutput();
+    subpass = sco && rpc1 ? 2 : 0;
+    if (!sco)
+        return g_vk->getRenderPass();
+    if (rpc1)
+        return rtt->getRTTRenderPass();
+    return rtt->getRTTRenderPass(rtt->getRTTRenderPassCount() - 1);
+}   // get2dRenderPass
+}   // namespace GEVulkan2dRenderer
 
 // ----------------------------------------------------------------------------
 void GEVulkan2dRenderer::createGraphicsPipeline()
@@ -238,19 +296,9 @@ void GEVulkan2dRenderer::createGraphicsPipeline()
     pipeline_info.pColorBlendState = &color_blending;
     pipeline_info.pDynamicState = &dynamic_state_info;
     pipeline_info.layout = g_pipeline_layout;
-    GEVulkanFBOTexture* rtt = g_vk->getRTTTexture();
-    bool rpc1 = rtt && rtt->getRTTRenderPassCount() == 1;
-    bool sco = rtt && rtt->useSwapChainOutput();
-    if (sco)
-    {
-        if (rpc1)
-            pipeline_info.renderPass = rtt->getRTTRenderPass();
-        else
-            pipeline_info.renderPass = rtt->getRTTRenderPass(rtt->getRTTRenderPassCount() - 1);
-    }
-    else
-        pipeline_info.renderPass = g_vk->getRenderPass();
-    pipeline_info.subpass = sco && rpc1 ? 2 : 0;
+    uint32_t subpass = 0;
+    pipeline_info.renderPass = get2dRenderPass(subpass);
+    pipeline_info.subpass = subpass;
     pipeline_info.basePipelineHandle = VK_NULL_HANDLE;
 
     VkResult result = vkCreateGraphicsPipelines(g_vk->getDevice(),
@@ -260,6 +308,188 @@ void GEVulkan2dRenderer::createGraphicsPipeline()
     if (result != VK_SUCCESS)
         throw std::runtime_error("vkCreateGraphicsPipelines failed");
 }   // createGraphicsPipeline
+
+// ----------------------------------------------------------------------------
+namespace GEVulkan2dRenderer
+{
+static void createShadowVizPipeline()
+{
+    VkDescriptorSetLayoutBinding binding = {};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layout_info = {};
+    layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layout_info.bindingCount = 1;
+    layout_info.pBindings = &binding;
+    if (vkCreateDescriptorSetLayout(g_vk->getDevice(), &layout_info, NULL,
+        &g_shadow_viz_descriptor_layout) != VK_SUCCESS)
+        throw std::runtime_error(
+            "vkCreateDescriptorSetLayout failed for the shadow viz");
+
+    VkPipelineLayoutCreateInfo pipeline_layout_info = {};
+    pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipeline_layout_info.setLayoutCount = 1;
+    pipeline_layout_info.pSetLayouts = &g_shadow_viz_descriptor_layout;
+    if (vkCreatePipelineLayout(g_vk->getDevice(), &pipeline_layout_info, NULL,
+        &g_shadow_viz_pipeline_layout) != VK_SUCCESS)
+        throw std::runtime_error(
+            "vkCreatePipelineLayout failed for the shadow viz");
+
+    const unsigned frame_count = GEVulkanDriver::getMaxFrameInFlight();
+    VkDescriptorPoolSize pool_size = {};
+    pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pool_size.descriptorCount = frame_count;
+    VkDescriptorPoolCreateInfo pool_info = {};
+    pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.maxSets = frame_count;
+    pool_info.poolSizeCount = 1;
+    pool_info.pPoolSizes = &pool_size;
+    if (vkCreateDescriptorPool(g_vk->getDevice(), &pool_info, NULL,
+        &g_shadow_viz_descriptor_pool) != VK_SUCCESS)
+        throw std::runtime_error(
+            "vkCreateDescriptorPool failed for the shadow viz");
+
+    std::vector<VkDescriptorSetLayout> layouts(frame_count,
+        g_shadow_viz_descriptor_layout);
+    VkDescriptorSetAllocateInfo alloc_info = {};
+    alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc_info.descriptorPool = g_shadow_viz_descriptor_pool;
+    alloc_info.descriptorSetCount = frame_count;
+    alloc_info.pSetLayouts = layouts.data();
+    g_shadow_viz_descriptor_sets.resize(frame_count);
+    if (vkAllocateDescriptorSets(g_vk->getDevice(), &alloc_info,
+        g_shadow_viz_descriptor_sets.data()) != VK_SUCCESS)
+        throw std::runtime_error(
+            "vkAllocateDescriptorSets failed for the shadow viz");
+
+    // The depth is read with texture() (not the reference value of a
+    // comparison texture()), so the sampler can't be a comparison one
+    VkSamplerCreateInfo sampler_info = {};
+    sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sampler_info.magFilter = VK_FILTER_NEAREST;
+    sampler_info.minFilter = VK_FILTER_NEAREST;
+    sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sampler_info.maxLod = 0.0f;
+    if (vkCreateSampler(g_vk->getDevice(), &sampler_info, NULL,
+        &g_shadow_viz_sampler) != VK_SUCCESS)
+        throw std::runtime_error(
+            "vkCreateSampler failed for the shadow viz");
+
+    VkPipelineShaderStageCreateInfo vert_shader_stage_info = {};
+    vert_shader_stage_info.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    vert_shader_stage_info.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vert_shader_stage_info.module =
+        GEVulkanShaderManager::getShader("fullscreen_quad.vert");
+    vert_shader_stage_info.pName = "main";
+
+    VkPipelineShaderStageCreateInfo frag_shader_stage_info = {};
+    frag_shader_stage_info.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    frag_shader_stage_info.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    frag_shader_stage_info.module =
+        GEVulkanShaderManager::getShader("shadow_viz.frag");
+    frag_shader_stage_info.pName = "main";
+
+    VkPipelineShaderStageCreateInfo shader_stages[] =
+    {
+        vert_shader_stage_info,
+        frag_shader_stage_info
+    };
+
+    // fullscreen_quad.vert generates the positions, there is no vertex input
+    VkPipelineVertexInputStateCreateInfo vertex_input_info = {};
+    vertex_input_info.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+    VkPipelineInputAssemblyStateCreateInfo input_assembly = {};
+    input_assembly.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkViewport viewport = {};
+    viewport.width = (float)g_vk->getSwapChainExtent().width;
+    viewport.height = (float)g_vk->getSwapChainExtent().height;
+    viewport.maxDepth = 1.0f;
+
+    VkRect2D scissor = {};
+    scissor.extent = g_vk->getSwapChainExtent();
+
+    VkPipelineViewportStateCreateInfo viewport_state = {};
+    viewport_state.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewport_state.viewportCount = 1;
+    viewport_state.pViewports = &viewport;
+    viewport_state.scissorCount = 1;
+    viewport_state.pScissors = &scissor;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer = {};
+    rasterizer.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.lineWidth = 1.0f;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+
+    VkPipelineMultisampleStateCreateInfo multisampling = {};
+    multisampling.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo depth_stencil = {};
+    depth_stencil.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+
+    VkPipelineColorBlendAttachmentState color_blend_attachment = {};
+    color_blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
+        VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+        VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo color_blending = {};
+    color_blending.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    color_blending.attachmentCount = 1;
+    color_blending.pAttachments = &color_blend_attachment;
+
+    std::array<VkDynamicState, 2> dynamic_state =
+    {
+        VK_DYNAMIC_STATE_SCISSOR,
+        VK_DYNAMIC_STATE_VIEWPORT
+    };
+    VkPipelineDynamicStateCreateInfo dynamic_state_info = {};
+    dynamic_state_info.sType =
+        VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamic_state_info.dynamicStateCount = dynamic_state.size();
+    dynamic_state_info.pDynamicStates = dynamic_state.data();
+
+    VkGraphicsPipelineCreateInfo pipeline_info = {};
+    pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipeline_info.stageCount = 2;
+    pipeline_info.pStages = shader_stages;
+    pipeline_info.pVertexInputState = &vertex_input_info;
+    pipeline_info.pInputAssemblyState = &input_assembly;
+    pipeline_info.pViewportState = &viewport_state;
+    pipeline_info.pRasterizationState = &rasterizer;
+    pipeline_info.pMultisampleState = &multisampling;
+    pipeline_info.pDepthStencilState = &depth_stencil;
+    pipeline_info.pColorBlendState = &color_blending;
+    pipeline_info.pDynamicState = &dynamic_state_info;
+    pipeline_info.layout = g_shadow_viz_pipeline_layout;
+    uint32_t subpass = 0;
+    pipeline_info.renderPass = get2dRenderPass(subpass);
+    pipeline_info.subpass = subpass;
+
+    if (vkCreateGraphicsPipelines(g_vk->getDevice(), g_vk->getPipelineCache(),
+        1, &pipeline_info, NULL, &g_shadow_viz_pipeline) != VK_SUCCESS)
+        throw std::runtime_error(
+            "vkCreateGraphicsPipelines failed for the shadow viz");
+}   // createShadowVizPipeline
+}   // namespace GEVulkan2dRenderer
 
 // ----------------------------------------------------------------------------
 void GEVulkan2dRenderer::createTrisBuffers()
@@ -283,8 +513,61 @@ void GEVulkan2dRenderer::uploadTrisBuffers()
 }   // uploadTrisBuffers
 
 // ----------------------------------------------------------------------------
-void GEVulkan2dRenderer::render()
+namespace GEVulkan2dRenderer
 {
+static void drawShadowViz(VkImageView shadow_map_view)
+{
+    const unsigned frame = g_vk->getCurrentFrame();
+    VkDescriptorImageInfo image_info = {};
+    image_info.imageView = shadow_map_view;
+    image_info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    image_info.sampler = g_shadow_viz_sampler;
+
+    VkWriteDescriptorSet write = {};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = g_shadow_viz_descriptor_sets[frame];
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &image_info;
+    vkUpdateDescriptorSets(g_vk->getDevice(), 1, &write, 0, NULL);
+
+    VkCommandBuffer cmd = g_vk->getCurrentCommandBuffer();
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        g_shadow_viz_pipeline);
+
+    core::recti clip = g_vk->getFullscreenClip();
+    VkViewport vp;
+    vp.x = clip.UpperLeftCorner.X;
+    vp.y = clip.UpperLeftCorner.Y;
+    vp.width = clip.getWidth();
+    vp.height = clip.getHeight();
+    vp.minDepth = 0;
+    vp.maxDepth = 1.0f;
+    g_vk->getRotatedViewport(&vp, false/*handle_rtt*/);
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+
+    VkRect2D scissor;
+    scissor.offset.x = clip.UpperLeftCorner.X;
+    scissor.offset.y = clip.UpperLeftCorner.Y;
+    scissor.extent.width = clip.getWidth();
+    scissor.extent.height = clip.getHeight();
+    g_vk->getRotatedRect2D(&scissor);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        g_shadow_viz_pipeline_layout, 0, 1,
+        &g_shadow_viz_descriptor_sets[frame], 0, NULL);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+}   // drawShadowViz
+}   // namespace GEVulkan2dRenderer
+
+// ----------------------------------------------------------------------------
+void GEVulkan2dRenderer::render(VkImageView shadow_map_view)
+{
+    if (shadow_map_view != VK_NULL_HANDLE)
+        drawShadowViz(shadow_map_view);
+
     if (g_tris_queue.empty())
         return;
 

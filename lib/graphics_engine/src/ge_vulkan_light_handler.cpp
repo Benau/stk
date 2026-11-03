@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <iterator>
 #include <limits>
@@ -56,11 +57,51 @@ struct GEGlobalLightBuffer
     irr::core::vector3df m_skytop_color;
     irr::u32             m_light_count;
     // Start and end of the linear fog of transparent materials
-    irr::f32             m_fog_start;
-    irr::f32             m_fog_end;
-    irr::f32             m_padding[2];
+    irr::f32             m_fog_range[4];
+    // View depth where each sun cascade starts (see setShadowSplit)
+    irr::f32             m_shadow_split[4];
+    // x: cosine of the largest angle between the view direction and a frustum
+    // ray (see setShadowSplit)
+    irr::f32             m_shadow_split_min_ray_cos[4];
     //std::array<GELight, MAX_RENDERING_LIGHT> m_rendering_lights;
 };
+
+// ----------------------------------------------------------------------------
+// Light clusters (same algorithm as the GEClusterDataGenerator of the
+// upstream commit, with the lights of a depth slice stored only once):
+// the screen is split in TILE_SIZE tiles on x and y, the view distance in
+// DEPTH_DIVISIONS slices uniform in sqrt(distance). A light is put in every
+// depth slice its sphere reaches, each slice stores the list of its lights and
+// a bit per light (not per global light) in the bitmaps of the x strips and y
+// strips. A tile tests the x strip and y strip bitmaps of its depth slice, so
+// their intersection is a conservative set of the lights of the tile.
+//
+// Mirrors the GLSL "LightClusterBuffer" of utils/light_cluster.glsl, the data
+// after the header is an array of u32: the light indices of every slice, then
+// for every slice the x strip words followed by the y strip words.
+static const irr::u32 CLUSTER_TILE_SIZE = 16;
+static const irr::u32 CLUSTER_DEPTH_DIVISIONS = 64;
+
+struct GELightClusterHeader
+{
+    irr::u32 m_depth_divisions;
+    irr::u32 m_x_tiles;
+    irr::u32 m_y_tiles;
+    irr::u32 m_light_index_count;
+    // slice = (sqrt(distance) - m_kernel_near) * m_kernel_scale
+    irr::f32 m_kernel_near;
+    irr::f32 m_kernel_scale;
+    irr::f32 m_kernel_far;
+    irr::u32 m_reserved;
+    // Offset of the light indices of a slice in the u32 data after the header
+    irr::u32 m_slice_light_offset[CLUSTER_DEPTH_DIVISIONS];
+    // Offset of the bitmap of a slice in the u32 data after the header
+    irr::u32 m_slice_bitmap_offset[CLUSTER_DEPTH_DIVISIONS];
+    // Words of each strip bitmap (x strips, then y strips) of a slice
+    irr::u32 m_slice_word_count[CLUSTER_DEPTH_DIVISIONS];
+};
+static_assert(sizeof(GELightClusterHeader) == 800,
+    "the header must match utils/light_cluster.glsl");
 
 // ----------------------------------------------------------------------------
 // Time to fade a light in or out, same rate as the OpenGL renderer fade-in
@@ -217,17 +258,21 @@ GELight* GEVulkanLightHandler::getRenderingLightsPtr() const
 }   // getRenderingLightsPtr
 
 // ----------------------------------------------------------------------------
-size_t GEVulkanLightHandler::getSize() const
-{
-    return sizeof(GEGlobalLightBuffer) + getLightCount() * sizeof(GELight);
-}   // getSize
-
-// ----------------------------------------------------------------------------
-size_t GEVulkanLightHandler::getMaxSize()
+size_t GEVulkanLightHandler::getMaxLightBlockSize()
 {
     return sizeof(GEGlobalLightBuffer) +
         sizeof(GELight) * getMaxRenderingLights();
-}   // getMaxSize
+}   // getMaxLightBlockSize
+
+// ----------------------------------------------------------------------------
+size_t GEVulkanLightHandler::getClusterOffset()
+{
+    // 256 is at least the storage and uniform buffer offset alignments of any
+    // device, so the light block and the cluster block after it are aligned
+    // for their dynamic offsets
+    return getMaxLightBlockSize() +
+        getPadding(getMaxLightBlockSize(), 256);
+}   // getClusterOffset
 
 // ----------------------------------------------------------------------------
 unsigned GEVulkanLightHandler::getMaxRenderingLights()
@@ -258,11 +303,24 @@ float GEVulkanLightHandler::getLightRadius(unsigned light_id) const
 }   // getLightRadius
 
 // ----------------------------------------------------------------------------
+// Upper bound of the cluster block: every slice can have all the lights, and
+// every strip bitmap of a slice needs a word per 32 lights
+static size_t getClusterMaxSize(unsigned x_tiles, unsigned y_tiles)
+{
+    const irr::u32 lights = std::max(
+        GEVulkanLightHandler::getMaxRenderingLights(), (unsigned)1);
+    const irr::u32 words = (lights + 31) / 32;
+    return sizeof(GELightClusterHeader) + sizeof(irr::u32) *
+        (CLUSTER_DEPTH_DIVISIONS * lights +
+         (x_tiles + y_tiles) * CLUSTER_DEPTH_DIVISIONS * words);
+}   // getClusterMaxSize
+
+// ----------------------------------------------------------------------------
 GEVulkanLightHandler::GEVulkanLightHandler(GEVulkanDriver* vk)
 {
     m_vk = vk;
     m_lights.reset(new GELightStorage);
-    prepare();
+    prepare(NULL);
     // The first real frame starts without fading, the lights that are
     // already in the scene should not all fade in
     m_lights->m_has_last_ms = false;
@@ -274,15 +332,342 @@ GEVulkanLightHandler::~GEVulkanLightHandler()
 }   // ~GEVulkanLightHandler
 
 // ----------------------------------------------------------------------------
-void GEVulkanLightHandler::prepare()
+void GEVulkanLightHandler::initClusterCamera(GEVulkanCamera* cam)
 {
-    m_buffer.resize(getMaxSize());
-    GEGlobalLightBuffer* buffer = getGlobalLightPtr();
-    *buffer = {};
+    const irr::scene::SViewFrustum* frustum = cam->getViewFrustum();
+    m_cluster_view_matrix = cam->getViewMatrix();
+    m_cluster_far_left_down = frustum->getFarLeftDown();
+    m_cluster_far_right_up = frustum->getFarRightUp();
+    m_cluster_view_matrix.transformVect(m_cluster_far_left_down);
+    m_cluster_view_matrix.transformVect(m_cluster_far_right_up);
+    m_cluster_near = cam->getNearValue();
+    const irr::core::rectf& viewport = cam->getUBOData()->m_viewport;
+    m_cluster_screen_size.X = viewport.getWidth();
+    m_cluster_screen_size.Y = viewport.getHeight();
+    // Orthographic cameras (the track graph) and the camera-snapshot warm-up
+    // have no perspective frustum to split into strips, they don't need
+    // clusters because nothing they draw is lit by point lights
+    if (m_cluster_screen_size.X < 1.0f || m_cluster_screen_size.Y < 1.0f ||
+        m_cluster_near <= 0.0f || m_cluster_far_left_down.Z <= 0.0f ||
+        m_cluster_far_right_up.Z <= 0.0f)
+        return;
+
+    const float width = m_cluster_screen_size.X;
+    const float height = m_cluster_screen_size.Y;
+    // The x strips go from the left of the screen to the right, the y strips
+    // from the bottom to the top (view space)
+    const unsigned x_tiles = (unsigned)ceilf(width / CLUSTER_TILE_SIZE);
+    const unsigned y_tiles = (unsigned)ceilf(height / CLUSTER_TILE_SIZE);
+    for (unsigned i = 0; i < x_tiles; i++)
+    {
+        // The frustum corners are in the order of vector3d::getInterpolated:
+        // d = 0 is the left, d = 1 the right
+        irr::core::vector3df ray =
+            m_cluster_far_right_up.getInterpolated(m_cluster_far_left_down,
+                (float)(i * CLUSTER_TILE_SIZE) / width);
+        irr::core::vector3df plane(-ray.Z, 0.0f, ray.X);
+        if (plane.getLengthSQ() <= 1e-12f)
+            return;
+        m_cluster_x_planes.push_back(plane.normalize());
+    }
+    irr::core::vector3df plane(-m_cluster_far_right_up.Z, 0.0f,
+        m_cluster_far_right_up.X);
+    if (plane.getLengthSQ() <= 1e-12f)
+        return;
+    m_cluster_x_planes.push_back(plane.normalize());
+
+    for (unsigned i = 0; i < y_tiles; i++)
+    {
+        // Only y and z are used, the z of the two far corners is the same so
+        // the ray moves from the bottom of the screen to the top
+        irr::core::vector3df ray =
+            m_cluster_far_right_up.getInterpolated(m_cluster_far_left_down,
+                (float)(i * CLUSTER_TILE_SIZE) / height);
+        irr::core::vector3df y_plane(0.0f, -ray.Z, ray.Y);
+        if (y_plane.getLengthSQ() <= 1e-12f)
+            return;
+        m_cluster_y_planes.push_back(y_plane.normalize());
+    }
+    plane.set(0.0f, -m_cluster_far_right_up.Z, m_cluster_far_right_up.Y);
+    if (plane.getLengthSQ() <= 1e-12f)
+        return;
+    m_cluster_y_planes.push_back(plane.normalize());
+
+    m_cluster_camera_valid = true;
+}   // initClusterCamera
+
+// ----------------------------------------------------------------------------
+void GEVulkanLightHandler::generateClusters()
+{
+    GELightClusterHeader* header =
+        (GELightClusterHeader*)(m_buffer.data() + m_cluster_offset);
+    *header = {};
+    header->m_depth_divisions = CLUSTER_DEPTH_DIVISIONS;
+    m_cluster_size = sizeof(GELightClusterHeader);
+
+    const unsigned light_count = getLightCount();
+    if (!m_cluster_camera_valid || light_count == 0)
+        return;
+
+    const unsigned x_tiles = (unsigned)m_cluster_x_planes.size() - 1;
+    const unsigned y_tiles = (unsigned)m_cluster_y_planes.size() - 1;
+    if (x_tiles == 0 || y_tiles == 0)
+        return;
+
+    GELight* lights = getRenderingLightsPtr();
+    std::vector<irr::core::vector3df> positions(light_count);
+    std::vector<float> distances(light_count);
+    float far = 0.0f;
+    for (unsigned i = 0; i < light_count; i++)
+    {
+        positions[i] = lights[i].m_position;
+        m_cluster_view_matrix.transformVect(positions[i]);
+        distances[i] = positions[i].getLength();
+        far = std::max(far, distances[i] + lights[i].m_radius);
+    }
+
+    const float near = std::max(m_cluster_near, 0.001f);
+    if (!(far > near) || !std::isfinite(far))
+        far = near + 1.0f;
+    // Slices are uniform in sqrt(distance), like the upstream generator
+    const float kernel_near = sqrtf(near);
+    const float kernel_scale =
+        (float)CLUSTER_DEPTH_DIVISIONS / (sqrtf(far) - kernel_near);
+
+    header->m_x_tiles = x_tiles;
+    header->m_y_tiles = y_tiles;
+    header->m_kernel_near = kernel_near;
+    header->m_kernel_scale = kernel_scale;
+    header->m_kernel_far = far;
+
+    auto get_slice_range = [&](float n, float f, int& first, int& last)
+    {
+        if (f < near || n > far)
+            return false;
+        n = std::max(n, near);
+        f = std::min(f, far);
+        first = (int)((sqrtf(std::max(n, 0.0f)) - kernel_near) *
+            kernel_scale);
+        last = (int)((sqrtf(std::max(f, 0.0f)) - kernel_near) *
+            kernel_scale);
+        first = std::min(std::max(first, 0),
+            (int)CLUSTER_DEPTH_DIVISIONS - 1);
+        last = std::min(std::max(last, 0),
+            (int)CLUSTER_DEPTH_DIVISIONS - 1);
+        return first <= last;
+    };
+
+    // 1. The lights of every slice, a light is in a slice if its sphere
+    // reaches the slice in the radial distance
+    std::vector<irr::u32> slice_counts(CLUSTER_DEPTH_DIVISIONS, 0);
+    std::vector<irr::u32> slice_lights(
+        CLUSTER_DEPTH_DIVISIONS * light_count, 0);
+    for (unsigned i = 0; i < light_count; i++)
+    {
+        int first, last;
+        if (!get_slice_range(distances[i] - lights[i].m_radius,
+            distances[i] + lights[i].m_radius, first, last))
+            continue;
+        for (int s = first; s <= last; s++)
+            slice_lights[s * light_count + slice_counts[s]++] = i;
+    }
+
+    // Position of a light in the compact list of a slice, 0xffffffff if the
+    // light isn't in the slice, the bitmaps of the slice only have a bit per
+    // light of the slice
+    std::vector<irr::u32> local_index(
+        CLUSTER_DEPTH_DIVISIONS * light_count, 0xffffffff);
+    for (unsigned s = 0; s < CLUSTER_DEPTH_DIVISIONS; s++)
+    {
+        for (unsigned k = 0; k < slice_counts[s]; k++)
+            local_index[s * light_count + slice_lights[s * light_count + k]] =
+                k;
+    }
+
+    std::vector<irr::u32> light_offsets(CLUSTER_DEPTH_DIVISIONS);
+    std::vector<irr::u32> bitmap_offsets(CLUSTER_DEPTH_DIVISIONS);
+    std::vector<irr::u32> word_counts(CLUSTER_DEPTH_DIVISIONS);
+    irr::u32 data_words = 0;
+    for (unsigned s = 0; s < CLUSTER_DEPTH_DIVISIONS; s++)
+    {
+        light_offsets[s] = data_words;
+        data_words += slice_counts[s];
+    }
+    const irr::u32 light_index_count = data_words;
+    for (unsigned s = 0; s < CLUSTER_DEPTH_DIVISIONS; s++)
+    {
+        word_counts[s] = (slice_counts[s] + 31) / 32;
+        bitmap_offsets[s] = data_words;
+        data_words += (x_tiles + y_tiles) * word_counts[s];
+    }
+
+    m_cluster_size = sizeof(GELightClusterHeader) +
+        sizeof(irr::u32) * data_words;
+    if (m_buffer.size() < m_cluster_offset + m_cluster_size)
+        m_buffer.resize(m_cluster_offset + m_cluster_size);
+    header = (GELightClusterHeader*)(m_buffer.data() + m_cluster_offset);
+    irr::u32* data = (irr::u32*)(m_buffer.data() + m_cluster_offset +
+        sizeof(GELightClusterHeader));
+
+    for (unsigned s = 0; s < CLUSTER_DEPTH_DIVISIONS; s++)
+    {
+        header->m_slice_light_offset[s] = light_offsets[s];
+        header->m_slice_bitmap_offset[s] = bitmap_offsets[s];
+        header->m_slice_word_count[s] = word_counts[s];
+        for (unsigned k = 0; k < slice_counts[s]; k++)
+            data[light_offsets[s] + k] =
+                slice_lights[s * light_count + k];
+    }
+    header->m_light_index_count = light_index_count;
+    memset(data + light_index_count, 0,
+        sizeof(irr::u32) * (data_words - light_index_count));
+
+    // Set the bit of a light in the bitmap of a strip for the slices
+    auto mark = [&](bool x_axis, unsigned light, unsigned strip, int first,
+                    int last)
+    {
+        for (int s = first; s <= last; s++)
+        {
+            const irr::u32 index =
+                local_index[s * light_count + light];
+            // Possible with the rounding of a chord touching the border of a
+            // slice the light isn't in
+            if (index == 0xffffffff)
+                continue;
+            const irr::u32 offset = bitmap_offsets[s] +
+                (x_axis ? 0 : x_tiles * word_counts[s]) +
+                strip * word_counts[s];
+            data[offset + (index >> 5)] |= 1u << (index & 31);
+        }
+    };
+    // Mark the slices of a chord of the sphere through a plane of the strip
+    auto mark_chord = [&](bool x_axis, unsigned light,
+                          const irr::core::vector3df& point, float distance,
+                          float radius, unsigned strip,
+                          const irr::core::vector3df& plane)
+    {
+        const float plane_distance = fabsf(plane.dotProduct(point));
+        if (plane_distance > radius)
+            return;
+        const float chord_distance = sqrtf(std::max(
+            distance * distance - plane_distance * plane_distance, 0.0f));
+        const float chord_radius = sqrtf(std::max(
+            radius * radius - plane_distance * plane_distance, 0.0f));
+        int first, last;
+        if (get_slice_range(chord_distance - chord_radius,
+            chord_distance + chord_radius, first, last))
+            mark(x_axis, light, strip, first, last);
+    };
+
+    // 2. The strips of every light, along x or y. The strips of the
+    // projection of the center use the whole radial range of the sphere, the
+    // strips next to it the chord of the sphere through their closest plane
+    auto fill_axis = [&](bool x_axis,
+                         const std::vector<irr::core::vector3df>& planes)
+    {
+        const unsigned strips = x_axis ? x_tiles : y_tiles;
+        const float far_size = x_axis ?
+            m_cluster_far_right_up.X - m_cluster_far_left_down.X :
+            m_cluster_far_right_up.Y - m_cluster_far_left_down.Y;
+        const float far_min = x_axis ?
+            m_cluster_far_left_down.X : m_cluster_far_left_down.Y;
+        const float far_z = m_cluster_far_left_down.Z;
+        for (unsigned i = 0; i < light_count; i++)
+        {
+            const irr::core::vector3df& point = positions[i];
+            const float radius = lights[i].m_radius;
+            const float distance = distances[i];
+            int first, last;
+            // The camera is inside the sphere, it reaches every strip
+            if (distance <= radius)
+            {
+                if (get_slice_range(distance - radius, distance + radius,
+                    first, last))
+                {
+                    for (unsigned s = 0; s < strips; s++)
+                        mark(x_axis, i, s, first, last);
+                }
+                continue;
+            }
+            if (point.Z > 0.0f &&
+                planes.front().dotProduct(point) < 0.0f &&
+                planes.back().dotProduct(point) > 0.0f)
+            {
+                // The center is in the frustum, project it to the far plane
+                const float center_coord = (x_axis ? point.X : point.Y) *
+                    (far_z / point.Z);
+                const float t = (center_coord - far_min) / far_size;
+                const int center = std::min(std::max(
+                    (int)(t * (float)strips), 0), (int)strips - 1);
+                if (get_slice_range(distance - radius, distance + radius,
+                    first, last))
+                    mark(x_axis, i, center, first, last);
+                for (int s = center - 1; s >= 0; s--)
+                    mark_chord(x_axis, i, point, distance, radius, s,
+                        planes[s + 1]);
+                for (int s = center + 1; s < (int)strips; s++)
+                    mark_chord(x_axis, i, point, distance, radius, s,
+                        planes[s]);
+            }
+            else
+            {
+                // The center is out of the frustum, it can only reach the
+                // strips of the boundary plane it is close enough to
+                const bool left =
+                    fabsf(planes.front().dotProduct(point)) < radius;
+                const bool right =
+                    fabsf(planes.back().dotProduct(point)) < radius;
+                if (left)
+                {
+                    for (int s = 0; s < (int)strips; s++)
+                        mark_chord(x_axis, i, point, distance, radius, s,
+                            planes[s]);
+                }
+                else if (right)
+                {
+                    for (int s = (int)strips - 1; s >= 0; s--)
+                        mark_chord(x_axis, i, point, distance, radius, s,
+                            planes[s + 1]);
+                }
+            }
+        }
+    };
+    fill_axis(true, m_cluster_x_planes);
+    fill_axis(false, m_cluster_y_planes);
+}   // generateClusters
+
+// ----------------------------------------------------------------------------
+void GEVulkanLightHandler::prepare(GEVulkanCamera* cam)
+{
     m_lights->m_data.clear();
     m_lights->beginFrame();
     m_fullscreen_light_count = 0;
     m_non_occluded_lights = 0;
+
+    m_cluster_camera_valid = false;
+    m_cluster_x_planes.clear();
+    m_cluster_y_planes.clear();
+    m_cluster_offset = getClusterOffset();
+    m_cluster_size = sizeof(GELightClusterHeader);
+    size_t buffer_size = m_cluster_offset + getClusterMaxSize(0, 0);
+    if (cam)
+    {
+        initClusterCamera(cam);
+        const unsigned x_tiles = m_cluster_x_planes.empty() ? 0 :
+            (unsigned)m_cluster_x_planes.size() - 1;
+        const unsigned y_tiles = m_cluster_y_planes.empty() ? 0 :
+            (unsigned)m_cluster_y_planes.size() - 1;
+        buffer_size = m_cluster_offset + getClusterMaxSize(x_tiles, y_tiles);
+    }
+    m_buffer.resize(buffer_size);
+    // No lights yet, the shader has nothing to loop
+    GELightClusterHeader* cluster =
+        (GELightClusterHeader*)(m_buffer.data() + m_cluster_offset);
+    *cluster = {};
+    cluster->m_depth_divisions = CLUSTER_DEPTH_DIVISIONS;
+
+    GEGlobalLightBuffer* buffer = getGlobalLightPtr();
+    *buffer = {};
     video::SColorf c = m_vk->getIrrlichtDevice()->getSceneManager()
         ->getAmbientLight();
     buffer->m_ambient_color.X = c.r * c.a;
@@ -312,8 +697,14 @@ void GEVulkanLightHandler::prepare()
         buffer->m_fog_color.g = fog_color.getGreen() / 255.0f;
         buffer->m_fog_color.b = fog_color.getBlue() / 255.0f;
         buffer->m_fog_color.a = max_fog;
-        buffer->m_fog_start = start;
-        buffer->m_fog_end = end;
+        buffer->m_fog_range[0] = start;
+        buffer->m_fog_range[1] = end;
+        // The height fog of the volumetric light scattering
+        // (light_scatter.comp): the density is faded from 1 at this start
+        // height to 0 at the end height, it's constant if the end is not above
+        // the start (the default of the tracks without height fog)
+        buffer->m_fog_range[2] = m_vk->getFogHeightStart();
+        buffer->m_fog_range[3] = m_vk->getFogHeightEnd();
     }
 }   // prepare
 
@@ -509,6 +900,7 @@ void GEVulkanLightHandler::generate(const irr::core::vector3df& cam_pos,
     getGlobalLightPtr()->m_light_count = (unsigned)data.size();
     if (cull_in_cpu || !set_occluded_light)
         m_non_occluded_lights = getLightCount();
+    generateClusters();
 }   // generate
 
 // ----------------------------------------------------------------------------
@@ -573,6 +965,16 @@ void GEVulkanLightHandler::setShadowMatrices(GEVulkanCameraUBO* ubo,
     buffer->m_shadow_projection_view_matrix[cc] =
         ubo->m_projection_view_matrix;
 }   // setShadowMatrices
+
+// ----------------------------------------------------------------------------
+void GEVulkanLightHandler::setShadowSplit(
+    const float* near_depths, float min_ray_cos)
+{
+    GEGlobalLightBuffer* buffer = getGlobalLightPtr();
+    for (unsigned i = 0; i < 4; i++)
+        buffer->m_shadow_split[i] = near_depths[i];
+    buffer->m_shadow_split_min_ray_cos[0] = min_ray_cos;
+}   // setShadowSplit
 
 // ----------------------------------------------------------------------------
 void GEVulkanLightHandler::setLightShadowMatrices(GEVulkanCameraUBO* ubo,

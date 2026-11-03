@@ -6,7 +6,7 @@
 namespace GE
 {
 
-// Light shafts (god rays) of the sun of the track (GEVulkanDriver::setGodRays),
+// Light shafts (god rays) of the sun of the track (GEVulkanDriver::setLightShaft),
 // the same look as the OpenGL renderer, owned by GEVulkanDeferredFBOSplit. The
 // OpenGL renderer draws a sphere for the sun, here there is no mesh, graphics
 // pipeline or render pass of its own, it's all compute shaders (see

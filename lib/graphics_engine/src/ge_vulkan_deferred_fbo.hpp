@@ -40,6 +40,12 @@ enum GEVulkanDeferredFBOPass : unsigned
     // HiZ depth, see GEVulkanHiZDepth::getRenderingDescriptorSet, or
     // GVDFP_DISPLACE_MASK if there is no HiZ) and set 2 is GVDFP_HDR
     GVDFP_SOLID_SSR,
+    // Only used by GEVulkanDeferredFBOSplit if solid reflection is enabled
+    // (GEVulkanDrawCall::renderSolidReflectionResolve): the combined image
+    // sampler of the target of the trace, which solid_reflection_resolve.frag
+    // filters at the size of the trace, set 1 is the data of the draw call
+    // and set 2 is GVDFP_HDR
+    GVDFP_SOLID_REFLECTION_RESOLVE,
     GVDFP_COUNT,
 };
 

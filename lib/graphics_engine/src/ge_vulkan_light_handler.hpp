@@ -20,6 +20,7 @@ namespace irr
 
 namespace GE
 {
+class GEVulkanCamera;
 class GEVulkanDriver;
 class GEVulkanSkyBoxRenderer;
 struct GEVulkanCameraUBO;
@@ -40,6 +41,21 @@ private:
 
     unsigned m_non_occluded_lights;
 
+    // Snapshot of the camera for the light clusters (GEClusterDataGenerator of
+    // the upstream commit), taken in prepare so generate only needs the buffer
+    irr::core::matrix4 m_cluster_view_matrix;
+    irr::core::vector3df m_cluster_far_left_down;
+    irr::core::vector3df m_cluster_far_right_up;
+    irr::core::vector2df m_cluster_screen_size;
+    std::vector<irr::core::vector3df> m_cluster_x_planes;
+    std::vector<irr::core::vector3df> m_cluster_y_planes;
+    float m_cluster_near;
+    bool m_cluster_camera_valid;
+    // Offset of the cluster block in m_buffer and its size in the last
+    // generated frame
+    size_t m_cluster_offset;
+    size_t m_cluster_size;
+
     // ------------------------------------------------------------------------
     // Typed pointers into m_buffer (private helpers, defined in .cpp).
     GEGlobalLightBuffer* getGlobalLightPtr() const;
@@ -50,6 +66,10 @@ private:
     void selectLights(const irr::core::vector3df& cam_pos);
     // ------------------------------------------------------------------------
     static unsigned getFadeExtraSlot();
+    // ------------------------------------------------------------------------
+    void initClusterCamera(GEVulkanCamera* cam);
+    // ------------------------------------------------------------------------
+    void generateClusters();
 
 public:
     // ------------------------------------------------------------------------
@@ -57,7 +77,9 @@ public:
     // ------------------------------------------------------------------------
     ~GEVulkanLightHandler();
     // ------------------------------------------------------------------------
-    void prepare();
+    // cam is the camera of the view that collects the UBO, it is used to
+    // generate the light clusters (NULL only from the constructor)
+    void prepare(GEVulkanCamera* cam = NULL);
     // ------------------------------------------------------------------------
     void generate(const irr::core::vector3df& cam_pos,
                   GEVulkanSkyBoxRenderer* skybox);
@@ -68,15 +90,26 @@ public:
     // so their fade state is kept and keeps advancing
     void touchLightNode(irr::scene::ILightSceneNode* node);
     // ------------------------------------------------------------------------
-    // Raw GPU buffer pointer – only the first getSize() bytes are valid data.
+    // Raw GPU buffer pointer – only the first getUploadSize() bytes are valid
+    // data.
     void* getData()                                 { return m_buffer.data(); }
     // ------------------------------------------------------------------------
-    // Bytes of active data to upload (header + active lights only).
-    size_t getSize() const;
+    // Bytes to upload for the current frame: the light block and the cluster
+    // block after it
+    size_t getUploadSize() const
+                          { return m_cluster_offset + m_cluster_size; }
     // ------------------------------------------------------------------------
-    // Total allocated buffer size – use this for Vulkan descriptor ranges and
-    // dynamic-buffer allocation so the full max-light slot is always reserved.
-    static size_t getMaxSize();
+    // Total allocated buffer size – use this for the dynamic-buffer allocation
+    // so the cluster block always fits
+    size_t getMaxSize() const                             { return m_buffer.size(); }
+    // ------------------------------------------------------------------------
+    // Size of the light block only (header + MAX_RENDERING_LIGHT slots), the
+    // range of the uniform buffer binding 3
+    static size_t getMaxLightBlockSize();
+    // ------------------------------------------------------------------------
+    // Offset of the light cluster block in the buffer of the light handler,
+    // used as the dynamic offset of the storage buffer binding 5
+    static size_t getClusterOffset();
     // ------------------------------------------------------------------------
     // Size of the light array in the GPU buffer and MAX_RENDERING_LIGHT in
     // the shaders: m_max_pointlights plus a few extra slots so lights that
@@ -93,6 +126,11 @@ public:
     // ------------------------------------------------------------------------
     void setShadowMatrices(GEVulkanCameraUBO* ubo,
                            GEVulkanShadowCameraCascade cc);
+    // ------------------------------------------------------------------------
+    // View depth where each sun cascade starts (an array of one value per
+    // cascade) and the cosine of the largest angle between the view direction
+    // and a frustum ray, see GEVulkanShadowFBO::prepare
+    void setShadowSplit(const float* near_depths, float min_ray_cos);
     // ------------------------------------------------------------------------
     void setLightShadowMatrices(GEVulkanCameraUBO* ubo, unsigned light,
                                 unsigned face);

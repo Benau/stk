@@ -23,8 +23,6 @@ void GECullingTool::initShadow(const GEVulkanShadowFBO* sfbo, unsigned layer)
 {
     if (!m_skip_near_plane)
         m_skip_near_plane = true;
-    mathPlaneFrustumf(&m_frustum[0].X,
-        sfbo->getShadowProjectionViewMatrix(layer));
     m_omni_sfbo = dynamic_cast<const GEVulkanOmniShadowFBO*>(sfbo);
     const int pointlight_layer = (int)layer - (int)sfbo->getLayerOffset();
     if (m_omni_sfbo && pointlight_layer >= 0)
@@ -35,18 +33,32 @@ void GECullingTool::initShadow(const GEVulkanShadowFBO* sfbo, unsigned layer)
         m_bucket_light_end = std::min(
             (layer_owner + sfbo->getSharingDrawCallCount()) /
             OMNI_FACES_PER_LIGHT, (unsigned)m_omni_sfbo->getLights().size());
+        // The paraboloid matrix is a basis, not a projection, so the layers
+        // of a light have no frustum: isCulled uses the light spheres.
+        return;
     }
-    else
-    {
-        m_omni_sfbo          = NULL;
-        m_bucket_light_start = 0;
-        m_bucket_light_end   = 0;
-    }
+    m_omni_sfbo          = NULL;
+    m_bucket_light_start = 0;
+    m_bucket_light_end   = 0;
+    mathPlaneFrustumf(&m_frustum[0].X,
+        sfbo->getShadowProjectionViewMatrix(layer));
 }   // initShadow
 
 // ----------------------------------------------------------------------------
 bool GECullingTool::isCulled(const irr::core::vector3df& center, float radius)
 {
+    if (m_omni_sfbo)
+    {
+        auto& lights = m_omni_sfbo->getLights();
+        for (unsigned i = m_bucket_light_start; i < m_bucket_light_end; i++)
+        {
+            const float r = radius + lights[i].m_radius;
+            if ((center - lights[i].m_position).getLengthSQ() <= r * r)
+                return false;
+        }
+        return true;
+    }
+
     for (int i = m_skip_near_plane ? 1 : 0; i < 6; i++)
     {
         irr::core::quaternion q(center.X, center.Y, center.Z, 1.0f);

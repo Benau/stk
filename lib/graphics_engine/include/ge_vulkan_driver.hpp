@@ -242,32 +242,52 @@ namespace GE
 
         bool isFogEnabled() const                     { return m_fog_enabled; }
 
-        //! Sun of the light shafts (god rays, GEConfig::m_god_rays) of the
-        //! current track: the position in world space and the radius of the
-        //! sun, the color is multiplied by the opacity (linear). They are
-        //! read every frame by the draw calls and it's disabled by default
-        //! and until the next call of setGodRays (enabled = false removes it)
-        void setGodRays(bool enabled, const core::vector3df& position = {},
-                        float radius = 20.0f,
-                        const core::vector3df& color = {1.0f, 1.0f, 1.0f},
-                        float opacity = 1.0f)
+        //! Height fog of the volumetric light scattering: the density of the
+        //! exponential fog of setFog is multiplied by a factor from 1 below
+        //! start to 0 above end (fog-start-height/fog-end-height of
+        //! scene.xml), there is no height fog if end is not above start. It's
+        //! read every frame like setFog, see GEVulkanLightHandler::prepare
+        void setFogHeight(f32 start, f32 end)
         {
-            m_god_rays_enabled = enabled;
-            m_god_rays_position = position;
-            m_god_rays_radius = radius;
-            m_god_rays_color = color * opacity;
+            m_fog_height_start = start;
+            m_fog_height_end = end;
         }
 
-        bool isGodRaysEnabled() const            { return m_god_rays_enabled; }
+        f32 getFogHeightStart() const                { return m_fog_height_start; }
 
-        const core::vector3df& getGodRaysPosition() const
-                                                { return m_god_rays_position; }
+        f32 getFogHeightEnd() const                    { return m_fog_height_end; }
 
-        float getGodRaysRadius() const            { return m_god_rays_radius; }
+        //! Sun of the light shafts of the current track (the lightshaft node
+        //! of scene.xml): the position in world space, the radius, the color
+        //! and the opacity of the sun. The light shafts pass (GEVulkanGodRays)
+        //! draws the disc of the sun and its rays, and the volumetric light
+        //! scattering (GEVulkanLightScatter) uses it to color its sun and to
+        //! glow toward it. It's read every frame by the draw calls, disabled
+        //! by default and until the next call of setLightShaft (enabled = false
+        //! removes it)
+        void setLightShaft(bool enabled, const core::vector3df& position = {},
+                           float radius = 20.0f,
+                           const core::vector3df& color = {1.0f, 1.0f, 1.0f},
+                           float opacity = 1.0f)
+        {
+            m_light_shaft_enabled = enabled;
+            m_light_shaft_position = position;
+            m_light_shaft_radius = radius;
+            m_light_shaft_color = color;
+            m_light_shaft_opacity = opacity;
+        }
 
-        //! Already multiplied by the opacity
-        const core::vector3df& getGodRaysColor() const
-                                                   { return m_god_rays_color; }
+        bool isLightShaftEnabled() const        { return m_light_shaft_enabled; }
+
+        const core::vector3df& getLightShaftPosition() const
+                                            { return m_light_shaft_position; }
+
+        float getLightShaftRadius() const        { return m_light_shaft_radius; }
+
+        const core::vector3df& getLightShaftColor() const
+                                             { return m_light_shaft_color; }
+
+        float getLightShaftOpacity() const     { return m_light_shaft_opacity; }
 
         //! Only used by the internal engine. Used to notify the driver that
         //! the window was resized.
@@ -580,11 +600,14 @@ namespace GE
         bool m_disable_wait_idle;
 
         bool m_fog_enabled;
+        f32 m_fog_height_start;
+        f32 m_fog_height_end;
 
-        bool m_god_rays_enabled;
-        core::vector3df m_god_rays_position;
-        float m_god_rays_radius;
-        core::vector3df m_god_rays_color;
+        bool m_light_shaft_enabled;
+        core::vector3df m_light_shaft_position;
+        float m_light_shaft_radius;
+        core::vector3df m_light_shaft_color;
+        float m_light_shaft_opacity;
 
         IrrlichtDevice* m_irrlicht_device;
         GEVulkanAttachmentTexture* m_depth_texture;

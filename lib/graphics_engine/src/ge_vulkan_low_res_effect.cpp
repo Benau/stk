@@ -7,8 +7,10 @@
 #include "ge_vulkan_features.hpp"
 #include "ge_main.hpp"
 #include "ge_vulkan_shader_manager.hpp"
+#include "ge_vulkan_skybox_renderer.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <stdexcept>
 #include <string>
 
@@ -167,11 +169,13 @@ void GEVulkanLowResEffect::createPipeline()
     push_constant.offset = 0;
     push_constant.size = m_params.m_push_constant_size;
     // The data descriptor set layout of draw calls are all defined the same,
-    // so the sets of any draw call are compatible
-    std::array<VkDescriptorSetLayout, 2> layouts =
+    // so the sets of any draw call are compatible. Set 2 is the environment of
+    // the draw call (the shadow map for the volumetric light scattering)
+    std::array<VkDescriptorSetLayout, 3> layouts =
     {{
         m_layout,
-        m_data_layout
+        m_data_layout,
+        m_vk->getSkyBoxRenderer()->getEnvDescriptorSetLayout()
     }};
     VkPipelineLayoutCreateInfo pipeline_layout_info = {};
     pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -186,6 +190,36 @@ void GEVulkanLowResEffect::createPipeline()
             "for ") + m_params.m_name);
     }
 
+    // The same shadow specialization constants as the deferred lighting (the
+    // march uses the shadow map of the environment of the draw call, see
+    // pbr_light.glsl). The constants which the shader doesn't declare are
+    // ignored
+    struct Constants
+    {
+        uint32_t m_shadow_size;
+        uint32_t m_shadow_type;
+        uint32_t m_point_shadow_limit;
+    };
+    Constants constants = {};
+    constants.m_shadow_size = getShadowSize();
+    constants.m_shadow_type = (uint32_t)getShadowType();
+    constants.m_point_shadow_limit = getGEConfig()->m_point_shadow_limit;
+    std::array<VkSpecializationMapEntry, 3> entries = {};
+    entries[0].constantID = 5;
+    entries[0].offset = offsetof(Constants, m_shadow_size);
+    entries[0].size = sizeof(uint32_t);
+    entries[1].constantID = 6;
+    entries[1].offset = offsetof(Constants, m_shadow_type);
+    entries[1].size = sizeof(uint32_t);
+    entries[2].constantID = 7;
+    entries[2].offset = offsetof(Constants, m_point_shadow_limit);
+    entries[2].size = sizeof(uint32_t);
+    VkSpecializationInfo specialization = {};
+    specialization.mapEntryCount = entries.size();
+    specialization.pMapEntries = entries.data();
+    specialization.dataSize = sizeof(Constants);
+    specialization.pData = &constants;
+
     VkComputePipelineCreateInfo pipeline_info = {};
     pipeline_info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     pipeline_info.stage.sType =
@@ -194,6 +228,7 @@ void GEVulkanLowResEffect::createPipeline()
     pipeline_info.stage.module =
         GEVulkanShaderManager::getShader(m_params.m_shader);
     pipeline_info.stage.pName = "main";
+    pipeline_info.stage.pSpecializationInfo = &specialization;
     pipeline_info.layout = m_pipeline_layout;
     if (vkCreateComputePipelines(device, m_vk->getPipelineCache(), 1,
         &pipeline_info, NULL, &m_pipeline) != VK_SUCCESS)
@@ -243,6 +278,12 @@ bool GEVulkanLowResEffect::render(VkCommandBuffer cmd,
     {
         vp.m_draw_call->bindDataDescriptorSet(m_vk, cmd,
             VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline_layout, 1);
+        // The environment of the viewport (the shadow map of the volumetric
+        // light scattering)
+        const VkDescriptorSet* env =
+            vp.m_draw_call->getEnvDescriptorSet(m_vk);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            m_pipeline_layout, 2, 1, env, 0, NULL);
         pushConstants(cmd, vp);
         // The area in the image, covers all the pixels of the rect
         const std::array<int32_t, 4> r =

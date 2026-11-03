@@ -24,7 +24,9 @@ void createTrisBuffers();
 // ----------------------------------------------------------------------------
 void uploadTrisBuffers();
 // ----------------------------------------------------------------------------
-void render();
+// shadow_map_view is the 2D array of the sun shadow map when the shadow viz
+// of the debug menu is on, it's drawn before the queued 2D triangles
+void render(VkImageView shadow_map_view = VK_NULL_HANDLE);
 // ----------------------------------------------------------------------------
 void clear();
 // ----------------------------------------------------------------------------

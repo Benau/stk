@@ -332,7 +332,7 @@ void Track::cleanup()
     {
         GE::GEVulkanDriver* vk = GE::getVKDriver();
         vk->setFogEnabled(false);
-        vk->setGodRays(false);
+        vk->setLightShaft(false);
         // Clear the RT scene before STK does its mesh cleanup
         vk->clearRTScene();
     }
@@ -563,7 +563,7 @@ void Track::loadTrackInfo()
     m_sun_specular_color    = video::SColor(255, 255, 255, 255);
     m_sun_diffuse_color     = video::SColor(255, 255, 255, 255);
     m_sun_position          = core::vector3df(0, 10, 10);
-    irr_driver->setSSAORadius(0.5);
+    irr_driver->setSSAORadius(3.0);
     irr_driver->setSSAOK(3.);
     irr_driver->setSSAOSigma(1.);
     XMLNode *root           = file_manager->createXMLTree(m_filename);
@@ -1782,24 +1782,31 @@ void Track::updateDriverFog()
     {
         GE::GEVulkanDriver* vk = GE::getVKDriver();
         vk->setFogEnabled(fog);
-        // The sun of the light shafts (GEConfig::m_god_rays), the same sphere
-        // as the OpenGL renderer (radius 1 scaled by 20) but it's not a mesh
-        // in the scene. The color is multiplied by the opacity.
+        // The height fog of the volumetric light scattering (see
+        // light_scatter.comp), the fog is not limited to a height if the end
+        // is not above the start
+        vk->setFogHeight(m_fog_height_start, m_fog_height_end);
+        // The sun of the light shafts (the lightshaft node of scene.xml),
+        // which the light shafts pass renders as the disc of the sun and its
+        // rays (see god_rays.comp and GEVulkanGodRays), and which colors the
+        // scattering of the volumetric light (see light_scatter.comp): the
+        // same sphere as the OpenGL renderer (radius 1 scaled by 20) but it's
+        // not a mesh in the scene.
         // The color is not converted to linear on purpose (unlike the other
         // colors in GE): the OpenGL renderer uses the value of scene.xml as it
         // is (SColorf, see PostProcessing::renderGodRays) and adds the rays to
         // its linear hdr color buffer (before the tonemap and the bloom), so
         // it is treated as linear there. It's the same here for the same
-        // look, converting it makes the rays darker than the OpenGL renderer
+        // look, converting it makes the shafts darker than the OpenGL renderer
         if (m_godrays)
         {
             const video::SColorf c(m_godrays_color);
-            vk->setGodRays(true, m_godrays_position, 20.0f,
+            vk->setLightShaft(true, m_godrays_position, 20.0f,
                 core::vector3df(c.getRed(), c.getGreen(), c.getBlue()),
                 m_godrays_opacity);
         }
         else
-            vk->setGodRays(false);
+            vk->setLightShaft(false);
     }
 #endif
 }   // updateDriverFog
@@ -2339,7 +2346,10 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
     }
 
     const video::SColorf tmpf(m_sun_diffuse_color);
-    m_sun = irr_driver->addLight(m_sun_position, 0., 0., tmpf.r, tmpf.g, tmpf.b, true);
+    // 2 times brighter than the color of the track. SColorf keeps values above
+    // 1 and the hdr color buffer has the range
+    m_sun = irr_driver->addLight(m_sun_position, 0., 0., tmpf.r * 2.0f,
+        tmpf.g * 2.0f, tmpf.b * 2.0f, true);
 
 #ifndef SERVER_ONLY
     if (!CVS->isGLSL())

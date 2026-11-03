@@ -7,6 +7,7 @@
 #include "ge_vulkan_dynamic_buffer.hpp"
 #include "ge_vulkan_fbo_texture.hpp"
 #include "ge_vulkan_light_handler.hpp"
+#include "ge_vulkan_omni_shadow_fbo.hpp"
 #include "ge_vulkan_scene_manager.hpp"
 #include "ge_vulkan_shadow_fbo.hpp"
 
@@ -41,7 +42,8 @@ GEVulkanCamera::GEVulkanCamera()
                 minUniformBufferOffsetAlignment))
 {
     m_camera_ubo = new GEVulkanDynamicBuffer(
-        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         0/*will be grown later so forceUpdateDataDescriptorSets works*/,
         GEVulkanDriver::getMaxFrameInFlight() + 1,
         GEVulkanDynamicBuffer::supportsHostTransfer() ? 0 :
@@ -109,6 +111,15 @@ void GEVulkanCamera::update(GEVulkanCameraSceneNode* node)
     m_ubo_data.m_projection_view_matrix.getInverse(
         m_ubo_data.m_inverse_projection_view_matrix);
 
+    // Only w is read for the main camera: the debug view of the point lights
+    // and spot lights of deferred_pbr.frag. The other flags are for the
+    // shadow passes (spm.vert), which use their own camera UBOs
+    m_ubo_data.m_shadow_flags[0] = 0.0f;
+    m_ubo_data.m_shadow_flags[1] = 0.0f;
+    m_ubo_data.m_shadow_flags[2] = 0.0f;
+    m_ubo_data.m_shadow_flags[3] =
+        getGEConfig()->m_point_light_debug ? 1.0f : 0.0f;
+
     VkViewport vp = {};
     float scale = getGEConfig()->m_render_scale;
     if (vk->getSeparateRTTTexture())
@@ -161,16 +172,22 @@ void GEVulkanCamera::collectUBO(GEVulkanDriver* vk,
 
     GEVulkanLightHandler* lh = dc->getLightHandler();
     GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
+    GEVulkanOmniShadowFBO* ofbo = dc->getOmniShadowFBO();
 
     unsigned max_size = getPaddedCameraUBOSize();
     m_camera_ubo_count = 1;
 
     if (lh)
-        max_size += GEVulkanLightHandler::getMaxSize();
+        max_size += lh->getMaxSize() + 256;
     if (sfbo)
     {
         m_camera_ubo_count += sfbo->getDrawCallCount();
         max_size += getPaddedCameraUBOSize() * sfbo->getDrawCallCount();
+    }
+    if (ofbo)
+    {
+        m_camera_ubo_count += ofbo->getDrawCallCount();
+        max_size += getPaddedCameraUBOSize() * ofbo->getDrawCallCount();
     }
     m_camera_ubo->resizeIfNeeded(max_size);
 
@@ -202,10 +219,35 @@ void GEVulkanCamera::collectUBO(GEVulkanDriver* vk,
             offset += getPaddedCameraUBOSize();
         }
     }
+    if (ofbo)
+    {
+        for (unsigned i = 0; i < ofbo->getDrawCallCount(); i++)
+        {
+            GEVulkanDrawCall* sdc = ofbo->getDrawCall(i);
+            sdc->setCameraUBOOffset(offset);
+            data_uploading.emplace_back(ofbo->getCameraUBO(i),
+                sizeof(GEVulkanCameraUBO));
+#ifdef GPU_CULLING
+            data_uploading.emplace_back(
+                sdc->getCullingTool()->getFrustumData(), getFrustumSize());
+#endif
+            if (m_ubo_padding > 0)
+                data_uploading.emplace_back((void*)NULL, m_ubo_padding);
+            offset += getPaddedCameraUBOSize();
+        }
+    }
 
     if (lh)
     {
-        data_uploading.emplace_back(lh->getData(), lh->getSize());
+        // The clusters after the light block are bound as a storage buffer in
+        // the same camera buffer, align the start for the dynamic offsets
+        size_t light_padding = getPadding(offset, 256);
+        if (light_padding > 0)
+        {
+            data_uploading.emplace_back((void*)NULL, light_padding);
+            offset += light_padding;
+        }
+        data_uploading.emplace_back(lh->getData(), lh->getUploadSize());
         dc->setLightDataOffset(offset);
     }
     else

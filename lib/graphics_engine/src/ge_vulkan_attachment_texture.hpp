@@ -10,10 +10,12 @@ class GEVulkanAttachmentTexture : public GEVulkanTexture
 {
 public:
     // ------------------------------------------------------------------------
+    // mipmap creates the whole mip chain of the image (the view has all of
+    // them), for a target which is sampled at a level instead of the base one
     GEVulkanAttachmentTexture(GEVulkanDriver* vk,
                               const core::dimension2d<u32>& size,
                               VkFormat format, VkImageUsageFlags iu,
-                              VkImageAspectFlags ia);
+                              VkImageAspectFlags ia, bool mipmap = false);
     // ------------------------------------------------------------------------
     virtual ~GEVulkanAttachmentTexture()                                     {}
     // ------------------------------------------------------------------------

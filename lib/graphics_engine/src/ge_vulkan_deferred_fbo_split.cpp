@@ -4,17 +4,20 @@
 #include "ge_vulkan_attachment_texture.hpp"
 #include "ge_vulkan_bloom.hpp"
 #include "ge_vulkan_camera_scene_node.hpp"
+#include "ge_vulkan_command_loader.hpp"
 #include "ge_vulkan_draw_call.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_features.hpp"
 #include "ge_vulkan_glow_outline.hpp"
-#include "ge_vulkan_hiz_depth.hpp"
 #include "ge_vulkan_god_rays.hpp"
+#include "ge_vulkan_hiz_depth.hpp"
 #include "ge_vulkan_light_scatter.hpp"
 #include "ge_vulkan_skybox_renderer.hpp"
 #include "ge_vulkan_rt_shadow.hpp"
 #include "ge_vulkan_ssao.hpp"
+#include "ge_vulkan_surfel_gi.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <stdexcept>
@@ -236,6 +239,13 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
                                           bool swapchain_output)
                         : GEVulkanDeferredFBO(vk, size,
                           resolveSwapchainOutput(vk, size, swapchain_output)),
+                          m_reflection_target(NULL),
+                          m_reflection_target_view(VK_NULL_HANDLE),
+                          m_reflection_resolved_target(NULL),
+                          m_reflection_size(0, 0),
+                          m_reflection_render_pass(VK_NULL_HANDLE),
+                          m_reflection_framebuffer(VK_NULL_HANDLE),
+                          m_reflection_resolve_framebuffer(VK_NULL_HANDLE),
                           m_bloom_blend_texture(NULL),
                           m_solid_ssr(needsSolidSSR()),
                           m_solid_rt(needsSolidRT()),
@@ -253,7 +263,7 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
         try
         {
             m_ssao.reset(new GEVulkanSSAO(vk, getSize(), m_depth_texture,
-                m_attachments[GVDFT_NORMAL]));
+                m_attachments[GVDFT_NORMAL], m_attachments[GVDFT_HDR]));
         }
         catch (const std::exception& e)
         {
@@ -282,6 +292,27 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
                 m_depth_texture, m_attachments[GVDFT_NORMAL], false));
         }
     }
+    // The surfel based global illumination, also sampled by the lighting pass
+    if (supports_compute && isSurfelGIEnabled())
+    {
+        try
+        {
+            m_surfel_gi.reset(new GEVulkanSurfelGI(vk, getSize(),
+                m_depth_texture, m_attachments[GVDFT_NORMAL]));
+        }
+        catch (const std::exception& e)
+        {
+            GE::logMessage(GE::GLL_ERROR,
+                "Failed to initialize surfel global illumination: %s",
+                e.what());
+            m_surfel_gi.reset();
+        }
+    }
+    // Before the descriptor of the g-buffer, which has its target (the
+    // lighting pass samples it), and before the pipelines of the draw calls,
+    // which need its render pass
+    if (m_solid_ssr || m_solid_rt)
+        initSolidReflection(vk);
     initSplitGBufferDescriptor(vk);
     if (supports_compute && getGEConfig()->m_glow_outline)
     {
@@ -350,9 +381,322 @@ GEVulkanDeferredFBOSplit::~GEVulkanDeferredFBOSplit()
 {
     // They have descriptor sets with the images of this FBO
     m_hiz_depth.clear();
+    if (m_reflection_framebuffer != VK_NULL_HANDLE)
+    {
+        vkDestroyFramebuffer(m_vk->getDevice(), m_reflection_framebuffer,
+            NULL);
+    }
+    if (m_reflection_resolve_framebuffer != VK_NULL_HANDLE)
+    {
+        vkDestroyFramebuffer(m_vk->getDevice(),
+            m_reflection_resolve_framebuffer, NULL);
+    }
+    if (m_reflection_render_pass != VK_NULL_HANDLE)
+    {
+        vkDestroyRenderPass(m_vk->getDevice(), m_reflection_render_pass,
+            NULL);
+    }
+    if (m_reflection_target_view != VK_NULL_HANDLE)
+    {
+        vkDestroyImageView(m_vk->getDevice(), m_reflection_target_view, NULL);
+    }
+    delete m_reflection_target;
+    delete m_reflection_resolved_target;
     if (m_bloom_blend_texture)
         m_bloom_blend_texture->drop();
 }   // ~GEVulkanDeferredFBOSplit
+
+// ----------------------------------------------------------------------------
+unsigned GEVulkanDeferredFBOSplit::getSolidReflectionScale() const
+{
+    // The screen space reflection is traced at a quarter of the size of the
+    // FBO, the ray traced one at half (it's more expensive per pixel and has
+    // less noise)
+    return m_solid_ssr ? 4 : 2;
+}   // getSolidReflectionScale
+
+// ----------------------------------------------------------------------------
+void GEVulkanDeferredFBOSplit::initSolidReflection(GEVulkanDriver* vk)
+{
+    const unsigned scale = getSolidReflectionScale();
+    m_reflection_size = core::dimension2d<u32>(
+        std::max(1u, getSize().Width / scale),
+        std::max(1u, getSize().Height / scale));
+    const VkFormat format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    // The trace of the solid materials writes the stochastic samples of the
+    // lobe there (solid_ssr.frag or solid_rt.frag), the spatial resolve reads
+    // it and writes the resolved target (solid_reflection_resolve.frag). The
+    // lighting pass samples the resolved target at its base level with the
+    // hardware bilinear filter (utils/handle_pbr.glsl), so it has no mips: a
+    // level would average the reflections of different surfaces. The taps of
+    // the spatial resolve read the mip chain of the trace target at a level
+    // chosen by their distance (see generateReflectionMipmaps)
+    VkFormatProperties format_props = {};
+    vkGetPhysicalDeviceFormatProperties(vk->getPhysicalDevice(), format,
+        &format_props);
+    const VkFormatFeatureFlags blit_features = VK_FORMAT_FEATURE_BLIT_SRC_BIT |
+        VK_FORMAT_FEATURE_BLIT_DST_BIT;
+    const bool mipmap = (format_props.optimalTilingFeatures & blit_features) ==
+        blit_features;
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+        VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (mipmap)
+    {
+        usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+            VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    }
+    m_reflection_target = new GEVulkanAttachmentTexture(vk,
+        m_reflection_size, format, usage, VK_IMAGE_ASPECT_COLOR_BIT,
+        mipmap);
+    m_reflection_resolved_target = new GEVulkanAttachmentTexture(vk,
+        m_reflection_size, format, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+        VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
+        false/*mipmap*/);
+
+    // The trace renders into the base level only (the view of the texture has
+    // all of them for the taps of the resolve)
+    VkImageViewCreateInfo view_info = {};
+    view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_info.image = m_reflection_target->getImage();
+    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.format = format;
+    view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view_info.subresourceRange.baseMipLevel = 0;
+    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.baseArrayLayer = 0;
+    view_info.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(vk->getDevice(), &view_info, NULL,
+        &m_reflection_target_view) != VK_SUCCESS)
+    {
+        throw std::runtime_error("vkCreateImageView failed for the reflection "
+            "target in GEVulkanDeferredFBOSplit");
+    }
+
+    VkAttachmentDescription desc = makeAttachment(format,
+        VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    VkAttachmentReference color_reference =
+        { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
+    VkSubpassDescription subpass = {};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &color_reference;
+
+    std::vector<VkSubpassDependency> deps =
+    {
+        // The previous frame which sampled it (the lighting pass)
+        makeExternalDependency(
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_ACCESS_SHADER_READ_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT),
+        // Sampled by the lighting pass (the resolved target) or by the
+        // spatial resolve (the trace target)
+        makeExternalDependency(
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            VK_ACCESS_SHADER_READ_BIT,
+            false/*from_external*/)
+    };
+    m_reflection_render_pass = createRenderPass(vk->getDevice(),
+        std::vector<VkAttachmentDescription>(1, desc), subpass, deps,
+        "GVPT_SOLID_SSR, GVPT_SOLID_RT and GVPT_SOLID_REFLECTION_RESOLVE");
+
+    m_reflection_framebuffer = createFramebuffer(vk->getDevice(),
+        m_reflection_render_pass,
+        { m_reflection_target_view },
+        m_reflection_size, "GVPT_SOLID_SSR and GVPT_SOLID_RT");
+    m_reflection_resolve_framebuffer = createFramebuffer(vk->getDevice(),
+        m_reflection_render_pass,
+        { (VkImageView)m_reflection_resolved_target->getTextureHandler() },
+        m_reflection_size, "GVPT_SOLID_REFLECTION_RESOLVE");
+
+    // The lighting pass samples the resolved target from the first frame, even
+    // before the reflection pass of it (which is skipped when there is no
+    // history to reflect, and when no glossy mesh of the frame is visible):
+    // clear it to no coverage so the lit color keeps the specular IBL of the
+    // environment, and put it in the layout the lighting pass samples it in.
+    // The trace target is always written before the spatial resolve reads it,
+    // its render pass clears it
+    {
+        VkCommandBuffer cmd = GEVulkanCommandLoader::beginSingleTimeCommands();
+        VkImageMemoryBarrier barrier = {};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = m_reflection_resolved_target->getImage();
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1,
+            &barrier);
+        VkClearColorValue clear = {};
+        vkCmdClearColorImage(cmd, m_reflection_resolved_target->getImage(),
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1,
+            &barrier.subresourceRange);
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1,
+            &barrier);
+        GEVulkanCommandLoader::endSingleTimeCommands(cmd);
+    }
+
+    // The spatial resolve samples the target of the trace linearly and at a
+    // level: the taps of its filter are scaled by the size of the target, they
+    // can be between its texels, and they read the level chosen by their
+    // distance (solid_reflection_resolve.frag)
+    VkDescriptorImageInfo image_info = {};
+    image_info.sampler = vk->getSampler(GVS_SKYBOX);
+    image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    image_info.imageView =
+        (VkImageView)m_reflection_target->getTextureHandler();
+    createSamplerDescriptor(vk, 1,
+        &m_descriptor_layout[GVDFP_SOLID_REFLECTION_RESOLVE],
+        &m_descriptor_pool[GVDFP_SOLID_REFLECTION_RESOLVE],
+        &m_descriptor_set[GVDFP_SOLID_REFLECTION_RESOLVE], &image_info,
+        "GVDFP_SOLID_REFLECTION_RESOLVE");
+}   // initSolidReflection
+
+// ----------------------------------------------------------------------------
+void GEVulkanDeferredFBOSplit::beginReflectionPass(VkCommandBuffer cmd) const
+{
+    VkClearValue clear = {};
+    VkRenderPassBeginInfo render_pass_info = {};
+    render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    render_pass_info.renderPass = m_reflection_render_pass;
+    render_pass_info.framebuffer = m_reflection_framebuffer;
+    render_pass_info.renderArea.offset = {0, 0};
+    render_pass_info.renderArea.extent =
+        { m_reflection_size.Width, m_reflection_size.Height };
+    render_pass_info.clearValueCount = 1;
+    render_pass_info.pClearValues = &clear;
+    vkCmdBeginRenderPass(cmd, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+}   // beginReflectionPass
+
+// ----------------------------------------------------------------------------
+void GEVulkanDeferredFBOSplit::beginReflectionResolvePass(VkCommandBuffer cmd)
+                                                                         const
+{
+    VkClearValue clear = {};
+    VkRenderPassBeginInfo render_pass_info = {};
+    render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    render_pass_info.renderPass = m_reflection_render_pass;
+    render_pass_info.framebuffer = m_reflection_resolve_framebuffer;
+    render_pass_info.renderArea.offset = {0, 0};
+    render_pass_info.renderArea.extent =
+        { m_reflection_size.Width, m_reflection_size.Height };
+    render_pass_info.clearValueCount = 1;
+    render_pass_info.pClearValues = &clear;
+    vkCmdBeginRenderPass(cmd, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+}   // beginReflectionResolvePass
+
+// ----------------------------------------------------------------------------
+// The taps of the spatial resolve read a level of the target of the trace
+// chosen by their distance on the screen (solid_reflection_resolve.frag), so
+// its mip chain is generated here, between the trace and the resolve: the base
+// level is the result of the trace, every next level is a box filter of the
+// previous one (the radiance is premultiplied by its coverage, so the average
+// is the average of the radiance weighted by the coverage)
+void GEVulkanDeferredFBOSplit::generateReflectionMipmaps(VkCommandBuffer cmd)
+                                                                         const
+{
+    const unsigned mip_levels = m_reflection_target->getMipmapLevels();
+    if (mip_levels <= 1)
+        return;
+    const VkImage image = m_reflection_target->getImage();
+    VkImageMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+
+    // The trace wrote the base level, and the render pass left it in the
+    // layout of the sampling. It's the first source of the chain, like the
+    // other levels, which no rendering or sampling has touched this frame
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
+    barrier.subresourceRange.baseMipLevel = 1;
+    barrier.subresourceRange.levelCount = mip_levels - 1;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.srcAccessMask = 0;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
+
+    VkImageBlit blit = {};
+    blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    blit.srcSubresource.baseArrayLayer = 0;
+    blit.srcSubresource.layerCount = 1;
+    blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    blit.dstSubresource.baseArrayLayer = 0;
+    blit.dstSubresource.layerCount = 1;
+    blit.srcOffsets[0] = {0, 0, 0};
+    blit.dstOffsets[0] = {0, 0, 0};
+    unsigned width = m_reflection_size.Width;
+    unsigned height = m_reflection_size.Height;
+    for (unsigned i = 1; i < mip_levels; i++)
+    {
+        // The source was left as the destination of a write by the previous
+        // iteration (or by the barrier above)
+        barrier.subresourceRange.baseMipLevel = i - 1;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1,
+            &barrier);
+
+        blit.srcSubresource.mipLevel = i - 1;
+        blit.srcOffsets[1] = { (int)width, (int)height, 1 };
+        width = std::max(1u, width / 2);
+        height = std::max(1u, height / 2);
+        blit.dstSubresource.mipLevel = i;
+        blit.dstOffsets[1] = { (int)width, (int)height, 1 };
+        vkCmdBlitImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+
+        // Back to the layout of a destination, the final barrier below
+        // transitions every level to the one the spatial resolve samples
+        barrier.subresourceRange.baseMipLevel = i - 1;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1,
+            &barrier);
+    }
+
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = mip_levels;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1,
+        &barrier);
+}   // generateReflectionMipmaps
 
 // ----------------------------------------------------------------------------
 void GEVulkanDeferredFBOSplit::initLightingCompositeDescriptor(
@@ -405,14 +749,18 @@ float GEVulkanDeferredFBOSplit::getRTShadowScale() const
 // ----------------------------------------------------------------------------
 void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
 {
-    // Same bindings as the input attachments in deferred_pbr.frag and
-    // deferred_pointlight.frag: 0 = color, 1 = normal (with pbr data), 2 = depth
-    // and 3 = ambient occlusion (only deferred_pbr.frag, a transparent texture
+    // Same bindings as the input attachments in deferred_pbr.frag:
+    // 0 = color, 1 = normal (with pbr data), 2 = depth
+    // and 3 = ambient occlusion (a transparent texture
     // which is not used if there is none, specialization constant u_ssao), 4 =
     // the array of the visibility of the ray traced shadows (only
     // deferred_pbr.frag, specialization constant u_rt_shadow_type, a dummy one
-    // if it's not used)
-    std::array<VkDescriptorImageInfo, 5> image_infos = {};
+    // if it's not used), 5 = the irradiance of the surfels (only
+    // deferred_pbr.frag, specialization constant u_surfel_gi, a transparent
+    // texture if it's not used) and 6 = the reflection of the solid materials
+    // (only deferred_pbr.frag, specialization constant u_reflection_scale, a
+    // transparent texture if the FBO has no reflection)
+    std::array<VkDescriptorImageInfo, 7> image_infos = {};
     image_infos[0].sampler = vk->getSampler(GVS_NEAREST);
     image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     image_infos[0].imageView =
@@ -445,6 +793,37 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
     image_infos[4].sampler = vk->getSampler(GVS_NEAREST);
     image_infos[4].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     image_infos[4].imageView = m_rt_shadow->getImageView();
+    // The surfel irradiance is half size, the lighting pass samples it with
+    // bilinear filtering
+    image_infos[5].sampler = vk->getSampler(GVS_SKYBOX);
+    if (m_surfel_gi)
+    {
+        image_infos[5].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[5].imageView = m_surfel_gi->getImageView();
+    }
+    else
+    {
+        image_infos[5].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        if (vk->getTransparentTexture())
+        {
+            image_infos[5].imageView =
+                (VkImageView)vk->getTransparentTexture()->getTextureHandler();
+        }
+    }
+    // Bilinear, the lighting pass upsamples the resolved target at its base
+    // level
+    image_infos[6].sampler = vk->getSampler(GVS_SKYBOX);
+    image_infos[6].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    if (m_reflection_resolved_target)
+    {
+        image_infos[6].imageView =
+            (VkImageView)m_reflection_resolved_target->getTextureHandler();
+    }
+    else if (vk->getTransparentTexture())
+    {
+        image_infos[6].imageView =
+            (VkImageView)vk->getTransparentTexture()->getTextureHandler();
+    }
     createSamplerDescriptor(vk, image_infos.size(),
         &m_descriptor_layout[GVDFP_HDR], &m_descriptor_pool[GVDFP_HDR],
         &m_descriptor_set[GVDFP_HDR], image_infos.data(), "GVDFP_HDR");
@@ -454,7 +833,14 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
 void GEVulkanDeferredFBOSplit::initSplitConvertColorDescriptor(
                                                             GEVulkanDriver* vk)
 {
-    std::array<VkDescriptorImageInfo, 4> image_infos = {};
+    // 0 = hdr, 1 = the first level of the bloom, 2 = the widest level of it,
+    // 3 = the blend texture of it, 4 = the ambient occlusion and 5 = the
+    // irradiance of the surfels (4 and 5 are only read by the debug views of
+    // deferred_convert_color.frag), 6 = the indirect light of the ambient
+    // occlusion (SSIL, added to hdr and to the GI debug view) and 7 = the
+    // albedo of the g-buffer (6 is multiplied by it and added to hdr, only if
+    // u_ssil)
+    std::array<VkDescriptorImageInfo, 8> image_infos = {};
     image_infos[0].sampler = vk->getSampler(GVS_NEAREST);
     image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     image_infos[0].imageView =
@@ -483,7 +869,7 @@ void GEVulkanDeferredFBOSplit::initSplitConvertColorDescriptor(
     VkImageView unused = VK_NULL_HANDLE;
     if (vk->getTransparentTexture())
         unused = (VkImageView)vk->getTransparentTexture()->getTextureHandler();
-    for (unsigned i = 2; i < image_infos.size(); i++)
+    for (unsigned i = 2; i < 6; i++)
     {
         image_infos[i].sampler = vk->getSampler(GVS_SKYBOX);
         image_infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -514,12 +900,71 @@ void GEVulkanDeferredFBOSplit::initSplitConvertColorDescriptor(
                 image_infos[3].imageView = view;
         }
     }
+    // The ambient occlusion is in general layout all the time, the debug view
+    // of the tonemap pass reads it (deferred_convert_color.frag)
+    image_infos[4].sampler = vk->getSampler(GVS_NEAREST);
+    if (m_ssao)
+    {
+        image_infos[4].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[4].imageView = m_ssao->getImageView();
+    }
+    else
+    {
+        image_infos[4].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        image_infos[4].imageView = unused;
+    }
+    // Same for the surfels, which are also in general layout
+    // The surfel irradiance is half size, the lighting pass samples it with
+    // bilinear filtering
+    image_infos[5].sampler = vk->getSampler(GVS_SKYBOX);
+    if (m_surfel_gi)
+    {
+        image_infos[5].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[5].imageView = m_surfel_gi->getImageView();
+    }
+    else
+    {
+        image_infos[5].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        image_infos[5].imageView = unused;
+    }
+    // The indirect light of the ambient occlusion is half size and blurred, a
+    // bilinear sample is enough
+    image_infos[6].sampler = vk->getSampler(GVS_SKYBOX);
+    if (hasSSIL())
+    {
+        image_infos[6].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[6].imageView = m_ssao->getSSILImageView();
+    }
+    else
+    {
+        image_infos[6].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        image_infos[6].imageView = unused;
+    }
+    // The albedo of the g-buffer which it's multiplied by, in read only layout
+    // since the g-buffer pass
+    image_infos[7].sampler = vk->getSampler(GVS_NEAREST);
+    image_infos[7].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    image_infos[7].imageView =
+        (VkImageView)m_attachments[GVDFT_COLOR]->getTextureHandler();
     createSamplerDescriptor(vk, image_infos.size(),
         &m_descriptor_layout[GVDFP_CONVERT_COLOR],
         &m_descriptor_pool[GVDFP_CONVERT_COLOR],
         &m_descriptor_set[GVDFP_CONVERT_COLOR], image_infos.data(),
         "GVDFP_CONVERT_COLOR");
 }   // initSplitConvertColorDescriptor
+
+// ----------------------------------------------------------------------------
+VkImageView GEVulkanDeferredFBOSplit::getImageView(bool srgb,
+                                                  bool load_ondemand) const
+{
+    // The tonemap pass writes to the swapchain image directly when it's the
+    // output, there is no image of this FBO to read then (and it's drawn
+    // without the 2D renderer sampling it)
+    if (((getGEConfig()->m_ssao_debug && m_ssao) ||
+        (getGEConfig()->m_gi_debug && m_surfel_gi)) && !useSwapChainOutput())
+        return m_image_view;
+    return GEVulkanFBOTexture::getImageView(srgb, load_ondemand);
+}   // getImageView
 
 // ----------------------------------------------------------------------------
 void GEVulkanDeferredFBOSplit::createRTT()
@@ -810,16 +1255,22 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
     // Nothing is traced in the first frame, there is no output of the
     // previous one
     const bool solid_ssr = m_solid_ssr && m_solid_ssr_ready;
+    // The point light debug view is the lighting pass only: the skybox, the
+    // reflections and the effects added to hdr are skipped, so only the
+    // lighting and shadows of the point lights and spot lights are shown
+    const bool point_light_debug = getGEConfig()->m_point_light_debug;
 
     // 2. glow outline of the meshes (a render pass with the depth of the
     // g-buffer and the blur of it), all viewports at once
-    const bool has_glow_outline = m_glow_outline &&
+    const bool has_glow_outline = !point_light_debug && m_glow_outline &&
         m_glow_outline->render(cmd, p);
-    // And light scattering of the lights in the fog (compute shaders only)
-    const bool has_light_scatter = m_light_scatter &&
+    // And volumetric light scattering of the sun and the lights in the fog
+    // (compute shaders only)
+    const bool has_light_scatter = !point_light_debug && m_light_scatter &&
         m_light_scatter->render(cmd, p);
-    // And the light shafts of the sun (compute shaders only)
-    const bool has_god_rays = m_god_rays && m_god_rays->render(cmd, p);
+    // And the light shafts of the sun of the track (compute shaders only)
+    const bool has_god_rays = !point_light_debug && m_god_rays &&
+        m_god_rays->render(cmd, p);
     // And the ambient occlusion which the lighting pass samples (compute
     // shaders only)
     if (m_ssao)
@@ -827,6 +1278,50 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
     // And the visibility of the ray traced shadows (the sun)
     if (m_rt_shadow)
         m_rt_shadow->render(cmd, p);
+    // And the surfel based global illumination which the lighting pass adds to
+    // the ambient light (compute shaders and a ray per surfel)
+    if (m_surfel_gi)
+        m_surfel_gi->render(cmd, p);
+
+    // The reflections of the solid materials are traced at a reduced size (a
+    // quarter for the screen space reflection, half for the ray traced one,
+    // see getSolidReflectionScale) in their own pass, at the same size the
+    // stochastic target of the trace is filtered (solid_reflection_resolve.
+    // frag) and the lighting pass samples the resolved target with the
+    // hardware bilinear filter (utils/handle_pbr.glsl). The screen space
+    // reflection has no output of the previous frame to reflect in the first
+    // one
+    const bool solid_rt = m_solid_rt && isSolidRayTracing();
+    const bool has_reflection = !point_light_debug && m_reflection_target &&
+        (solid_ssr || solid_rt);
+    if (has_reflection)
+    {
+        const float scale = 1.0f / (float)getSolidReflectionScale();
+        beginReflectionPass(cmd);
+        for (auto& q : p)
+        {
+            q.first->prepareReflectionViewport(m_vk, q.second->getViewPort(),
+                cmd, scale);
+            if (solid_ssr)
+                q.first->renderSolidSSR(m_vk, cmd);
+            else
+                q.first->renderSolidRT(m_vk, cmd);
+        }
+        vkCmdEndRenderPass(cmd);
+
+        // The taps of the resolve read the levels of the target of the trace
+        generateReflectionMipmaps(cmd);
+
+        beginReflectionResolvePass(cmd);
+        for (auto& q : p)
+        {
+            // Always, the pass above left the viewport of the trace
+            q.first->prepareReflectionViewport(m_vk, q.second->getViewPort(),
+                cmd, scale);
+            q.first->renderSolidReflectionResolve(m_vk, cmd);
+        }
+        vkCmdEndRenderPass(cmd);
+    }
 
     // 3. lighting, the background is the clear color of hdr
     {
@@ -837,16 +1332,12 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         beginPass(cmd, GVDSP_LIGHTING, GVDSP_LIGHTING, 1, &clear);
         for (auto& q : p)
         {
-            if (multiple_viewports)
-                q.first->prepareViewport(m_vk, q.second->getViewPort(), cmd);
+            // Always, the reflection pass left its reduced size viewport
+            q.first->prepareViewport(m_vk, q.second->getViewPort(), cmd);
             q.first->renderDeferredLighting(m_vk, cmd);
+            if (point_light_debug)
+                continue;
             q.first->renderSkyBox(m_vk, cmd);
-            // After everything which is lit (it's blended over it), but the
-            // glow outline is above it
-            if (solid_ssr)
-                q.first->renderSolidSSR(m_vk, cmd);
-            else if (m_solid_rt && isSolidRayTracing())
-                q.first->renderSolidRT(m_vk, cmd);
             // Above everything which is lit, the glow outline is not over the
             // meshes
             if (has_glow_outline || has_light_scatter || has_god_rays)
@@ -858,11 +1349,16 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         vkCmdEndRenderPass(cmd);
     }
 
-    // 4. bloom of the finished hdr (compute shaders only)
-    const bool has_bloom = m_bloom && m_bloom->render(cmd, p);
+    // 4. indirect light of the ambient occlusion, which the tonemap pass adds
+    // to hdr (compute shaders only, the hdr it uses is finished). It needs the
+    // surfel global illumination, it's the light which it bounces
+    if (hasSSIL())
+        m_ssao->renderIndirect(cmd, p);
 
-    // 5. tonemap (and the bloom is added to hdr), then ghost and transparent
-    // materials
+    // 5. bloom of the finished hdr (compute shaders only)
+    const bool has_bloom = m_bloom && m_bloom->render(cmd, p);
+    // 6. tonemap (and the bloom and the indirect light are added to hdr), then
+    // ghost and transparent materials
     {
         VkClearValue clear = {};
         beginPass(cmd, GVDSP_TONEMAP,
@@ -896,7 +1392,7 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         return;
     vkCmdEndRenderPass(cmd);
 
-    // 6. displace, the mask is skipped if no material uses it, but the color
+    // 7. displace, the mask is skipped if no material uses it, but the color
     // pass is always rendered (a copy of the tonemap output then)
     bool has_displace = false;
     for (auto& q : p)
@@ -1009,10 +1505,13 @@ VkRenderPass GEVulkanDeferredFBOSplit::getRenderPassForPipeline(
             VK_NULL_HANDLE;
     case GVPT_DEFERRED_LIGHTING:
     case GVPT_SKYBOX:
-    case GVPT_SOLID_SSR:
-    case GVPT_SOLID_RT:
     case GVPT_LIGHTING_COMPOSITE:
         return getRTTRenderPass(GVDSP_LIGHTING);
+    // The reflection passes render to the reduced size target, not to hdr
+    case GVPT_SOLID_SSR:
+    case GVPT_SOLID_RT:
+    case GVPT_SOLID_REFLECTION_RESOLVE:
+        return m_reflection_render_pass;
     case GVPT_DEFERRED_CONVERT_COLOR:
     case GVPT_GHOST_DEPTH:
     case GVPT_TRANSPARENT:
@@ -1039,13 +1538,25 @@ std::vector<VkDescriptorSetLayout>
         // The reflection of the solid materials needs the g-buffer (normal
         // with the gloss, depth) of the lighting pass instead of the
         // environment map, so the layout of the displace pass (the output of
-        // the previous frame and the depth, HiZ depth) is not extended
+        // the previous frame and the depth, HiZ depth) is not extended.
         return
             {
                 getDescriptorSetLayout(id),
                 data_layout,
                 m_vk->getRTTTexture()->getDescriptorSetLayout(GVDFP_HDR),
                 m_vk->getSkyBoxRenderer()->getEnvDescriptorSetLayout()
+            };
+    }
+    if (id == GVDFP_SOLID_REFLECTION_RESOLVE)
+    {
+        // The spatial resolve is a separate pass, so the g-buffer (normal,
+        // depth) is sampled instead of being an input attachment: it needs
+        // the descriptor set of the lighting pass, not the layout of it
+        return
+            {
+                getDescriptorSetLayout(id),
+                data_layout,
+                m_vk->getRTTTexture()->getDescriptorSetLayout(GVDFP_HDR)
             };
     }
     return GEVulkanDeferredFBO::getAllDescriptorSetLayouts(data_layout, id);

@@ -57,6 +57,8 @@ void RayTracingSettingsDialog::beforeAddingWidgets()
         ->setState(UserConfigParams::m_ray_tracing_alphatest);
     getWidget<CheckBoxWidget>("rt_grass")
         ->setState(UserConfigParams::m_ray_tracing_grass);
+    getWidget<CheckBoxWidget>("rt_gi")
+        ->setState(UserConfigParams::m_ray_tracing_gi);
 }   // beforeAddingWidgets
 
 // -----------------------------------------------------------------------------
@@ -72,6 +74,7 @@ void RayTracingSettingsDialog::updateActivation()
     getWidget<CheckBoxWidget>("rt_dynamic_objects")->setActive(on);
     getWidget<CheckBoxWidget>("rt_foliage")->setActive(on);
     getWidget<CheckBoxWidget>("rt_grass")->setActive(on);
+    getWidget<CheckBoxWidget>("rt_gi")->setActive(on);
     // The label explaining why it's not available
     getWidget<LabelWidget>("rt_unsupported")->setVisible(!m_supported);
 }   // updateActivation
@@ -102,6 +105,7 @@ GUIEngine::EventPropagation RayTracingSettingsDialog::processEvent(
                     UserConfigParams::m_ray_tracing_displace_reflection;
                 const bool prev_shadow =
                     UserConfigParams::m_ray_tracing_shadow;
+                const bool prev_gi = UserConfigParams::m_ray_tracing_gi;
                 UserConfigParams::m_ray_tracing =
                     getWidget<CheckBoxWidget>("rt_enabled")->getState();
                 UserConfigParams::m_ray_tracing_reflection =
@@ -118,6 +122,8 @@ GUIEngine::EventPropagation RayTracingSettingsDialog::processEvent(
                     getWidget<CheckBoxWidget>("rt_foliage")->getState();
                 UserConfigParams::m_ray_tracing_grass =
                     getWidget<CheckBoxWidget>("rt_grass")->getState();
+                UserConfigParams::m_ray_tracing_gi =
+                    getWidget<CheckBoxWidget>("rt_gi")->getState();
                 user_config->saveConfig();
                 OptionsScreenVideo::setRayTracing();
 
@@ -127,18 +133,23 @@ GUIEngine::EventPropagation RayTracingSettingsDialog::processEvent(
                 // pipelines (the shadow is ray traced or uses the shadow map
                 // of GEConfig::m_shadow_size, the displace reflection is ray
                 // traced or uses GEConfig::m_displace_reflection, which is not
-                // changed), which the draw calls created again have.
+                // changed), which the draw calls created again have. The
+                // surfels are created with the deferred FBO, so gi_changed
+                // creates it again.
                 const bool shadow_changed =
                     prev_shadow != UserConfigParams::m_ray_tracing_shadow;
                 const bool reflection_changed =
                     prev_reflection != UserConfigParams::m_ray_tracing_reflection ||
                     prev_displace_reflection !=
                     UserConfigParams::m_ray_tracing_displace_reflection;
+                // The surfels are created with the deferred FBO
+                const bool gi_changed =
+                    prev_gi != UserConfigParams::m_ray_tracing_gi;
                 if (prev_enabled != UserConfigParams::m_ray_tracing ||
-                    reflection_changed || shadow_changed)
+                    reflection_changed || shadow_changed || gi_changed)
                 {
                     GE::getVKDriver()->updateDriver(reflection_changed ||
-                        shadow_changed);
+                        shadow_changed || gi_changed);
                 }
             }
 #endif

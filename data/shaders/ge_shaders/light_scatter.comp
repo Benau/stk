@@ -8,32 +8,192 @@ layout(set = 0, binding = 1, r11f_g11f_b10f) uniform writeonly image2D u_scatter
 layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D u_scatter;
 #endif
 
+// The environment of the viewport: the shadow map has the sun cascades
+// (getShadowFactorSingleSample) and, if they are enabled and the light is one
+// of the first u_point_shadow_limit, the atlas of the point lights and spot
+// lights (sampleOmniShadowSingleSample)
+layout(set = 2, binding = 3) uniform sampler2DArrayShadow u_shadow_map;
+layout(set = 2, binding = 5) uniform sampler2DShadow u_omni_shadow_map;
+
 layout(push_constant) uniform PushConstants
 {
     // x0, y0, x1, y1 (exclusive) in pixels of the depth: the viewport of one
     // camera, u_scatter is half the size of it and covers the same area
     ivec4 m_rect;
+    // xyz is the position (world space) of the sun of the light shaft, w its
+    // radius, all 0 if the track has none
+    vec4 m_light_shaft_position_radius;
+    // rgb is the color and a the opacity of the sun of the light shaft, a is
+    // 0 if the track has none
+    vec4 m_light_shaft_color_opacity;
 } pc;
 
 #include "utils/camera.glsl"
+#include "utils/constants_utils.glsl"
+#include "utils/pbr_utils.glsl"
 #include "utils/global_light_data.glsl"
+#include "utils/pbr_light.glsl"
 #include "utils/unproject_position.glsl"
+#include "utils/random.glsl"
 
-// Light scattering of the point lights in the fog: every pixel marches in 16
-// steps from the farthest point of its ray inside the sphere of the light (or
-// the geometry, whichever is closer) back to the camera. The result is blurred
-// (the gaussian mode of blur_hdr.comp) and added to hdr (lighting_composite.frag).
+// Volumetric fog and light scattering, which replaces the light scattering of
+// the OpenGL renderer (pointlightscatter.frag): every pixel of the half size
+// image marches along the ray of the camera through the fog of the track,
+// which is the exponential one of the deferred lighting (m_fog_density, from
+// fog-start of scene.xml) multiplied by the height factor of the fog (from
+// fog-start-height/fog-end-height), and collects the light which is scattered
+// toward the camera along it:
 //
-// Here every tile of 16x16 pixels first collects the lights which touch its
-// view frustum (like the billboards do, but with the exact sphere), so most of
-// the pixels loop over few lights or none.
+// - The sun: it is sampled in the sun shadow map of the lighting pass at every
+//   step, so the fog has the shafts of the geometry (the light which reaches
+//   it) instead of being lit everywhere. The phase is Henyey-Greenstein, so
+//   the fog glows when the camera looks toward the sun. The scattering is
+//   scaled like the one of the point lights (SUN_SCATTER_SCALE) because the
+//   sun color of the engine is an artistic value, not a radiance.
+//   The light shaft node of the track (the sun which the camera sees) gives
+//   the direction of the phase and its color. The disc of the sun and its
+//   rays are rendered by the light shafts pass (GEVulkanGodRays), which the
+//   lighting pass adds to hdr too.
+//
+// - The point lights and spot lights: every tile of 16x16 pixels first
+//   collects the lights which touch its view frustum (like the billboards do,
+//   but with the exact sphere), so most of the pixels loop over few lights or
+//   none. A light is sampled in its shadow map (the cube map face of a point
+//   light or the map of the cone of a spot light, a single tap: the fog has no
+//   surface which needs the PCF of the lighting pass), so a light has its
+//   shadows in the fog too.
+//
+// The result is blurred (the gaussian mode of blur_hdr.comp) and added to hdr
+// on top of the normal fog of the materials (handle_pbr.glsl, transparent.frag
+// and bubble_utils.glsl), like the light scattering of the OpenGL renderer is
+// added after the fog.
 const int STEPS = 16;
+const int SUN_STEPS = 24;
 const uint TILE_THREADS = 64u;
+const float SCATTER_PI = 3.14159265359;
+// Same scale as the point light scattering of the OpenGL renderer
+// (pointlightscatter.frag), the sun color is not a physical radiance
+const float SUN_SCATTER_SCALE = 20.0;
 
 shared uint s_count;
 shared uint s_index[MAX_RENDERING_LIGHT];
 // View space position (xyz) and radius (w)
 shared vec4 s_light[MAX_RENDERING_LIGHT];
+
+// Henyey-Greenstein phase function, cos_theta is the cosine between the
+// direction of the ray and the one where the light comes from (the direction
+// toward the sun for the sun), g is the anisotropy (0 is isotropic)
+float phaseHG(float cos_theta, float g)
+{
+    const float g2 = g * g;
+    return (1.0 - g2) / (4.0 * SCATTER_PI *
+        pow(1.0 + g2 - 2.0 * g * cos_theta, 1.5));
+}
+
+// The density of the fog is the exponential one of the track (m_fog_density)
+// multiplied by this: 1 below fog-start-height and 0 above fog-end-height, so
+// the fog stays in the valleys of the tracks which use it. A track without
+// height fog (end <= start) has a constant density
+float fogHeightFactor(float y)
+{
+    const float start = u_global_light.m_fog_range.z;
+    const float end = u_global_light.m_fog_range.w;
+    if (end <= start)
+        return 1.0;
+    return 1.0 - smoothstep(start, end, y);
+}
+
+// The light shaft node of the track is the sun which the camera sees, its
+// opacity is 0 if the track has none (see GEVulkanLightScatter)
+bool hasLightShaft()
+{
+    return pc.m_light_shaft_color_opacity.a > 0.0;
+}
+
+// Color of the sun of the light shaft multiplied by its opacity
+vec3 getLightShaftColor()
+{
+    return pc.m_light_shaft_color_opacity.rgb *
+        pc.m_light_shaft_color_opacity.a;
+}
+
+// Direction from the camera toward the sun of the light shaft, or the one of
+// the directional sun if the track has none
+vec3 getSunDirection()
+{
+    if (!hasLightShaft())
+        return u_global_light.m_sun_direction;
+    vec3 to_sun = pc.m_light_shaft_position_radius.xyz -
+        u_camera.m_inverse_view_matrix[3].xyz;
+    float distance_to_sun = length(to_sun);
+    return distance_to_sun > 0.0001 ?
+        to_sun / distance_to_sun : u_global_light.m_sun_direction;
+}
+
+// In-scattered light of the sun along the ray of the camera: from the camera
+// to the geometry (or the end of the fog, the fog is in the sky too), the
+// extinction is the exponential fog at the height of every step and the sun
+// shadow map gives the light which reaches it
+vec3 sunScatter(vec3 ray_dir, float scene_distance, vec2 pixel)
+{
+    const float density = u_global_light.m_fog_density;
+    // 6 / density is where 99.75% of the light is extinguished, no fog is
+    // visible after it
+    float far = min(scene_distance, max(u_global_light.m_fog_range.y, 1.0));
+    far = min(far, 6.0 / max(density, 1.0e-8));
+    if (far <= 0.0)
+        return vec3(0.0);
+
+    // The shadows are always the ones of the directional sun (the shadow map
+    // is rendered with it), the light shaft only changes the direction of the
+    // phase (the sun which the camera sees) and tints the light
+    const vec3 sun_dir = u_global_light.m_sun_direction;
+    const vec3 sun_radiance = u_global_light.m_sun_color *
+        (u_global_light.m_sun_scatter * SUN_SCATTER_SCALE) *
+        (hasLightShaft() ? getLightShaftColor() : vec3(1.0));
+    // Direction of the light which the camera sees in the fog
+    const float phase = phaseHG(dot(normalize(
+        (u_camera.m_inverse_view_matrix * vec4(ray_dir, 0.0)).xyz),
+        getSunDirection()), 0.7);
+    // The normal bias of the shadow is canceled (there is no surface): the
+    // normal points away from the sun and the light direction is the one
+    // toward it, see getShadowFactorSingleSample
+    const vec3 shadow_normal = -sun_dir;
+    const bool sun_shadow = (u_shadow_type & GST_SUN) != 0u &&
+        u_shadow_size != 0u;
+
+    vec3 scatter = vec3(0.0);
+    float transmittance = 1.0;
+    // Jittered steps, denser near the camera: the density is exponential and
+    // the first metres extinguish the light the most
+    const float jitter = interleavedGradientNoise(pixel);
+    float prev_t = 0.0;
+    for (int i = 0; i < SUN_STEPS; i++)
+    {
+        const float u = (float(i) + jitter) / float(SUN_STEPS);
+        const float t = far * u * u;
+        const float step_size = t - prev_t;
+        prev_t = t;
+        if (step_size <= 0.0)
+            continue;
+
+        const vec3 xpos = ray_dir * t;
+        const vec3 world_pos = (u_camera.m_inverse_view_matrix *
+            vec4(xpos, 1.0)).xyz;
+        const float step_density = density * fogHeightFactor(world_pos.y);
+        const float extinction = step_density * step_size;
+
+        float shadow = 1.0;
+        if (sun_shadow)
+        {
+            shadow = getShadowFactorSingleSample(u_shadow_map, world_pos, t,
+                xpos.z, 1.0, shadow_normal, sun_dir);
+        }
+        scatter += sun_radiance * phase * shadow * transmittance * extinction;
+        transmittance *= exp(-extinction);
+    }
+    return scatter;
+}
 
 void main()
 {
@@ -88,12 +248,6 @@ void main()
 
     if (!inside)
         return;
-    const uint count = s_count;
-    if (count == 0u)
-    {
-        imageStore(u_scatter, dst, vec4(0.0));
-        return;
-    }
 
     // The depth of the pixel at the bottom right of the 2x2 block
     ivec2 full = clamp(dst * 2 + 1, pc.m_rect.xy, pc.m_rect.zw - 1);
@@ -108,7 +262,17 @@ void main()
     float scene_distance = depth > 0.0 ? length(pixel_pos) : 1.0e30;
 
     const float density = u_global_light.m_fog_density;
+    // The sun is scattered even without any point light (the fog is lit by it)
     vec3 scatter = vec3(0.0);
+    if ((u_global_light.m_sun_color.x > 0.0 ||
+        u_global_light.m_sun_color.y > 0.0 ||
+        u_global_light.m_sun_color.z > 0.0) &&
+        u_global_light.m_sun_scatter > 0.0)
+    {
+        scatter = sunScatter(ray_dir, scene_distance, vec2(dst));
+    }
+
+    const uint count = s_count;
     for (uint n = 0u; n < count; n++)
     {
         vec3 light_pos = s_light[n].xyz;
@@ -132,6 +296,11 @@ void main()
         uint light_idx = s_index[n];
         vec3 fog_factor = u_global_light.m_lights[light_idx]
             .m_color_inverse_square_range.xyz * density * step_size * 20.0;
+        // A single tap of the shadow tile of the light, the fog has no
+        // surface which needs the 4 taps of the lighting pass
+        const bool light_shadow =
+            (u_shadow_type & GST_POINTLIGHT) != 0u && u_shadow_size != 0u &&
+            light_idx < u_point_shadow_limit;
 
         // Spotlight direction calculation
         float sscale = u_global_light.m_lights[light_idx]
@@ -148,11 +317,15 @@ void main()
         for (int j = 0; j < STEPS; j++)
         {
             vec3 xpos = ray_dir * (farthest - float(j) * step_size);
+            vec3 world_pos = (u_camera.m_inverse_view_matrix *
+                vec4(xpos, 1.0)).xyz;
             vec3 light_to_pos = light_pos - xpos;
             float d = length(light_to_pos);
             float l = float(STEPS - j) * step_size;
+            float height = fogHeightFactor(world_pos.y);
             vec3 base_att = fog_factor / (1.0 + d * d) *
-                max((radius - d) / radius, 0.0) * exp(-density * (d + l));
+                max((radius - d) / radius, 0.0) * height *
+                exp(-density * (d + l));
 
             // Apply spotlight attenuation
             if (sscale != 0.0)
@@ -161,6 +334,12 @@ void main()
                     abs(sscale) + u_global_light.m_lights[light_idx]
                     .m_direction_scale_offset.w, 0.0, 1.0);
                 base_att *= sattenuation * sattenuation;
+            }
+            if (light_shadow)
+            {
+                // The normal bias is for surfaces, the fog is a volume
+                base_att *= sampleOmniShadowSingleSample(int(light_idx),
+                    world_pos, vec3(0.0));
             }
             scatter += base_att;
         }

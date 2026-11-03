@@ -10,7 +10,6 @@
 #include "ge_vulkan_billboard_buffer.hpp"
 #include "ge_vulkan_bloom.hpp"
 #include "ge_vulkan_camera_scene_node.hpp"
-#include "ge_vulkan_combined_shadow_fbo.hpp"
 #include "ge_vulkan_deferred_fbo.hpp"
 #include "ge_vulkan_deferred_fbo_split.hpp"
 #include "ge_vulkan_driver.hpp"
@@ -21,6 +20,7 @@
 #include "ge_vulkan_light_handler.hpp"
 #include "ge_vulkan_mesh_cache.hpp"
 #include "ge_vulkan_mesh_scene_node.hpp"
+#include "ge_vulkan_omni_shadow_fbo.hpp"
 #include "ge_vulkan_rt_scene.hpp"
 #include "ge_vulkan_scene_manager.hpp"
 #include "ge_vulkan_shader_manager.hpp"
@@ -282,6 +282,7 @@ GEVulkanDrawCall::GEVulkanDrawCall()
     m_texture_descriptor = vk->getMeshTextureDescriptor();
     m_hiz_depth = NULL;
     m_shadow_fbo = NULL;
+    m_omni_shadow_fbo = NULL;
     m_glow_outline = false;
     m_light_scatter = false;
     m_god_rays = false;
@@ -318,6 +319,7 @@ GEVulkanDrawCall::~GEVulkanDrawCall()
         }
     }
     delete m_shadow_fbo;
+    delete m_omni_shadow_fbo;
 }   // ~GEVulkanDrawCall
 
 // ----------------------------------------------------------------------------
@@ -862,34 +864,32 @@ void GEVulkanDrawCall::prepare(GEVulkanCamera* cam)
             getGEConfig()->m_point_shadow_limit =
                 getGEConfig()->m_max_pointlights;
         }
-        if (getShadowSize() > 0 && sun)
+        if (getShadowSize() > 0)
         {
-            switch (getShadowType())
+            if (sun && (getShadowType() & GST_SUN) != 0)
             {
-            case GST_SUN:
                 m_shadow_fbo = new GEVulkanShadowFBO(vk,
                     getShadowSize(), this, sun);
-                break;
-            case GST_POINTLIGHT:
-                m_shadow_fbo = new GEVulkanOmniShadowFBO(vk,
-                    getShadowSize(), this, sun);
-                break;
-            case GST_COMBINED:
-                m_shadow_fbo = new GEVulkanCombinedShadowFBO(vk,
-                    getShadowSize(), this, sun);
-                break;
-            default:
-                break;
+            }
+            if ((getShadowType() & GST_POINTLIGHT) != 0)
+            {
+                m_omni_shadow_fbo = new GEVulkanOmniShadowFBO(vk,
+                    getShadowSize(), this);
             }
             if (m_shadow_fbo)
             {
                 m_shadow_fbo->createRTT();
                 m_shadow_fbo->createDrawCalls();
             }
+            if (m_omni_shadow_fbo)
+            {
+                m_omni_shadow_fbo->createRTT();
+                m_omni_shadow_fbo->createDrawCalls();
+            }
         }
     }
     if (m_light_handler)
-        m_light_handler->prepare();
+        m_light_handler->prepare(cam);
     m_culling_tool->init(cam);
     m_view_position = cam->getAbsolutePosition();
     m_billboard_rotation = MiniGLM::getBulletQuaternion(cam->getViewMatrix());
@@ -1162,18 +1162,6 @@ void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
     settings.m_shader_name = "deferred_pbr";
     createPipeline(vk, settings, dp_cache);
 
-    def_mat.m_depth_test = true;
-    def_mat.m_additive = true;
-    def_mat.m_vertex_shader = "deferred_pointlight.vert";
-    def_mat.m_fragment_shader = "deferred_pointlight.frag";
-    settings.loadMaterial(def_mat);
-    settings.m_depth_op = VK_COMPARE_OP_GREATER;
-    settings.m_topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
-    settings.m_shader_name = "deferred_pointlight";
-    createPipeline(vk, settings, dp_cache);
-
-    def_mat.m_depth_test = false;
-    def_mat.m_additive = false;
     def_mat.m_vertex_shader = "fullscreen_quad.vert";
     def_mat.m_fragment_shader = "deferred_convert_color.frag";
     settings.loadMaterial(def_mat);
@@ -1197,8 +1185,11 @@ void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
         def_mat.m_additive = false;
     }
 
-    // The color is premultiplied by the weight (alpha), so it's blended over
-    // hdr as mix(hdr, reflection, weight)
+    // The reflections (solid_ssr.frag and solid_rt.frag) write to the reduced
+    // size target of the reflection pass: the traced radiance premultiplied by
+    // its coverage and the coverage, which the spatial resolve of the pass
+    // (solid_reflection_resolve.frag) filters and the lighting calculation
+    // samples (utils/handle_pbr.glsl)
     if (m_deferred_layouts[GVDFP_SOLID_SSR] != VK_NULL_HANDLE)
     {
         def_mat.m_alphablend = true;
@@ -1221,6 +1212,20 @@ void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
         settings.m_custom_pl = m_solid_rt_layout;
         createPipeline(vk, settings, dp_cache);
         def_mat.m_alphablend = false;
+    }
+
+    // The spatial resolve of the target of the trace (solid_reflection_resolve.
+    // frag) writes every texel of the resolved target, the alphablend of the
+    // traces is not needed
+    if (m_deferred_layouts[GVDFP_SOLID_REFLECTION_RESOLVE] != VK_NULL_HANDLE)
+    {
+        def_mat.m_fragment_shader = "solid_reflection_resolve.frag";
+        settings.loadMaterial(def_mat);
+        settings.m_shader_name = "solid_reflection_resolve";
+        settings.m_pipeline_type = GVPT_SOLID_REFLECTION_RESOLVE;
+        settings.m_custom_pl =
+            m_deferred_layouts[GVDFP_SOLID_REFLECTION_RESOLVE];
+        createPipeline(vk, settings, dp_cache);
     }
 
     if (has_displace)
@@ -1309,6 +1314,15 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
             rasterizer.depthBiasConstantFactor = 0.5;
             rasterizer.depthBiasSlopeFactor = 1.5;
             rasterizer.depthBiasClamp = 8.0;
+        }
+        else if (useDPShadow())
+        {
+            // The paraboloid depth is linear in the distance to the light,
+            // a constant or slope scaled bias would detach the shadows there,
+            // sampleOmniShadow applies the bias in world space instead
+            rasterizer.depthBiasConstantFactor = 0.0f;
+            rasterizer.depthBiasSlopeFactor = 0.0f;
+            rasterizer.depthBiasClamp = 0.0f;
         }
         else
         {
@@ -1426,6 +1440,8 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     {
         assert(isShadow());
         GEVulkanShadowFBO* sfbo = getMasterDrawCall()->getShadowFBO();
+        if (sfbo == NULL)
+            sfbo = getMasterDrawCall()->getOmniShadowFBO();
         assert(sfbo);
         prci.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
         prci.depthAttachmentFormat = sfbo->getInternalFormat();
@@ -1446,15 +1462,20 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
         uint32_t m_point_shadow_limit;
         VkBool32 m_glow_outline;
         VkBool32 m_light_scatter;
+        VkBool32 m_god_rays;
         VkBool32 m_bloom;
         VkBool32 m_bloom_blend;
         VkBool32 m_ssao;
         uint32_t m_rt_shadow_type;
         float m_rt_shadow_scale;
-        VkBool32 m_god_rays;
+        VkBool32 m_surfel_gi;
+        VkBool32 m_ssil;
+        VkBool32 m_dpsm_shadow;
+        uint32_t m_reflection_scale;
     };
     Constants constants = {};
     constants.m_rt_shadow_scale = 1.0f;
+    constants.m_reflection_scale = 1;
     constants.m_ibl = getGEConfig()->m_pbr && getGEConfig()->m_ibl &&
         GEVulkanFeatures::supportsComputeInMainQueue() && m_has_skybox;
     float ts = GEVulkanEnvironmentMap::getSpecularEnvironmentMapSize().Width;
@@ -1470,11 +1491,16 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
                 static_cast<GEVulkanDeferredFBOSplit*>(rtt);
             constants.m_glow_outline = split->hasGlowOutline();
             constants.m_light_scatter = split->hasLightScatter();
+            constants.m_god_rays = split->hasGodRays();
             constants.m_bloom = split->hasBloom();
             constants.m_bloom_blend = split->hasBloomBlend();
             constants.m_ssao = split->hasSSAO();
             constants.m_rt_shadow_scale = split->getRTShadowScale();
-            constants.m_god_rays = split->hasGodRays();
+            constants.m_surfel_gi = split->hasSurfelGI();
+            constants.m_ssil = split->hasSSIL();
+            if (split->hasSolidReflection())
+                constants.m_reflection_scale =
+                    split->getSolidReflectionScale();
         }
     }
     constants.m_solid_reflection = getSolidReflection();
@@ -1492,17 +1518,18 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     // Ray traced, but the scene can't be used by this draw call
     if (constants.m_displace_reflection == GDRT_RT && !hasDisplaceRT())
         constants.m_displace_reflection = GDRT_SSR_FAST;
-    if (m_shadow_fbo)
+    if (hasShadowFBO())
     {
         constants.m_shadow_size = getShadowSize();
         constants.m_shadow_type = getShadowType();
     }
     // The point lights which have a shadow, with a shadow map or ray traced
-    if (m_shadow_fbo || (getRTShadowType() & GST_POINTLIGHT) != 0)
+    if (hasShadowFBO() || (getRTShadowType() & GST_POINTLIGHT) != 0)
         constants.m_point_shadow_limit = getGEConfig()->m_point_shadow_limit;
     // The shadows which have no shadow map
     constants.m_rt_shadow_type = getRTShadowType();
-    std::array<VkSpecializationMapEntry, 16> specialization_entries = {};
+    constants.m_dpsm_shadow = useDPShadow();
+    std::array<VkSpecializationMapEntry, 20> specialization_entries = {};
     specialization_entries[0].constantID = 0;
     specialization_entries[0].offset = offsetof(Constants, m_ibl);
     specialization_entries[0].size = sizeof(VkBool32);
@@ -1553,12 +1580,25 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     specialization_entries[15].constantID = 15;
     specialization_entries[15].offset = offsetof(Constants, m_god_rays);
     specialization_entries[15].size = sizeof(VkBool32);
+    specialization_entries[16].constantID = 16;
+    specialization_entries[16].offset = offsetof(Constants, m_surfel_gi);
+    specialization_entries[16].size = sizeof(VkBool32);
+    specialization_entries[17].constantID = 17;
+    specialization_entries[17].offset = offsetof(Constants, m_ssil);
+    specialization_entries[17].size = sizeof(VkBool32);
+    specialization_entries[18].constantID = 18;
+    specialization_entries[18].offset = offsetof(Constants, m_dpsm_shadow);
+    specialization_entries[18].size = sizeof(VkBool32);
+    specialization_entries[19].constantID = 19;
+    specialization_entries[19].offset = offsetof(Constants, m_reflection_scale);
+    specialization_entries[19].size = sizeof(uint32_t);
     VkSpecializationInfo specialization_info = {};
     specialization_info.mapEntryCount = specialization_entries.size();
     specialization_info.pMapEntries = specialization_entries.data();
     specialization_info.dataSize = sizeof(Constants);
     specialization_info.pData = &constants;
-    if (getGEConfig()->m_pbr)
+    // The shadow vertex shaders need u_dpsm_shadow too
+    if (getGEConfig()->m_pbr || isShadow())
     {
         shader_stages[0].pSpecializationInfo = &specialization_info;
         shader_stages[1].pSpecializationInfo = &specialization_info;
@@ -1819,6 +1859,17 @@ VkDescriptorSetLayout GEVulkanDrawCall::createDataLayout(GEVulkanDriver* vk)
          skinning_layout_binding,
          light_layout_binding
     };
+    // The light clusters of GEVulkanLightHandler, after the light block of the
+    // same camera buffer (see getDefaultDynamicOffsets)
+    VkDescriptorSetLayoutBinding cluster_layout_binding = {};
+    cluster_layout_binding.binding = 5;
+    cluster_layout_binding.descriptorCount = 1;
+    cluster_layout_binding.descriptorType =
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+    cluster_layout_binding.pImmutableSamplers = NULL;
+    cluster_layout_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT |
+        VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings.push_back(cluster_layout_binding);
     if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
     {
         VkDescriptorSetLayoutBinding material_binding = {};
@@ -1861,19 +1912,21 @@ void GEVulkanDrawCall::createVulkanData()
     std::vector<VkDescriptorPoolSize> sizes =
     {
         {
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6
         },
         {
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
             (vk->getMaxFrameInFlight() + 1) * 2 * 2
         },
         {
+            // Binding 1, 2 and 5 (the light clusters), and 4 with the mesh
+            // textures bound at once
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC,
-            (vk->getMaxFrameInFlight() + 1) * 2 * 2
+            (vk->getMaxFrameInFlight() + 1) * 3 * 2
         }
     };
     if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
-        sizes.back().descriptorCount = (vk->getMaxFrameInFlight() + 1) * 3 * 2;
+        sizes.back().descriptorCount = (vk->getMaxFrameInFlight() + 1) * 4 * 2;
 
     VkDescriptorPoolCreateInfo pool_info = {};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -2126,16 +2179,45 @@ void GEVulkanDrawCall::prepareViewport(GEVulkanDriver* vk,
 }   // prepareViewport
 
 // ----------------------------------------------------------------------------
+void GEVulkanDrawCall::prepareReflectionViewport(GEVulkanDriver* vk,
+    const irr::core::rect<irr::s32>& viewp, VkCommandBuffer cmd, float scale)
+{
+    // The viewport is already rotated by getRenderViewport, so the reflection
+    // target has the same rotated size
+    VkViewport vp = getRenderViewport(vk, viewp);
+    vp.x *= scale;
+    vp.y *= scale;
+    vp.width *= scale;
+    vp.height *= scale;
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+
+    VkRect2D scissor;
+    scissor.offset.x = (int32_t)std::floor(vp.x);
+    scissor.offset.y = (int32_t)std::floor(vp.y);
+    scissor.extent.width = (uint32_t)std::ceil(vp.width);
+    scissor.extent.height = (uint32_t)std::ceil(vp.height);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+}   // prepareReflectionViewport
+
+// ----------------------------------------------------------------------------
 std::vector<uint32_t> GEVulkanDrawCall::getDefaultDynamicOffsets() const
 {
+    // The dynamic descriptors in the binding order, and the material binding
+    // 4 isn't bound if the mesh textures aren't supported
     std::vector<uint32_t> offsets;
     if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
-        offsets = std::vector<uint32_t>(5, 0);
+        offsets = std::vector<uint32_t>(6, 0);
     else
-        offsets = std::vector<uint32_t>(4, 0);
+        offsets = std::vector<uint32_t>(5, 0);
     offsets[0] = m_camera_ubo_offset;
     if (m_light_handler != NULL)
+    {
         offsets[3] = m_light_data_offset;
+        // Binding 5 is the last, the clusters follow the light block in the
+        // same camera buffer
+        offsets.back() = m_light_data_offset +
+            GEVulkanLightHandler::getClusterOffset();
+    }
     return offsets;
 }   // getDefaultDynamicOffsets
 
@@ -2430,7 +2512,7 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
     for (unsigned i = 0; i < m_data_descriptor_sets.size(); i++)
     {
         VkDescriptorBufferInfo ubo_info, sbo_info_objects, sbo_info_skinning,
-            sbo_info_light, sbo_info_material;
+            sbo_info_light, sbo_info_material, cluster_info;
         ubo_info.buffer = GEVulkanDynamicBuffer::supportsHostTransfer() ?
             cam->getCameraUBO()->getHostBuffer()[i] :
             cam->getCameraUBO()->getLocalBuffer()[i];
@@ -2490,7 +2572,8 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
                 cam->getCameraUBO()->getHostBuffer()[i] :
                 cam->getCameraUBO()->getLocalBuffer()[i];
             sbo_info_light.offset = 0;
-            sbo_info_light.range = GEVulkanLightHandler::getMaxSize();
+            sbo_info_light.range =
+                GEVulkanLightHandler::getMaxLightBlockSize();
             data_set.push_back({});
             VkWriteDescriptorSet& ds = data_set.back();
             ds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -2500,6 +2583,30 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
             ds.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
             ds.descriptorCount = 1;
             ds.pBufferInfo = &sbo_info_light;
+
+            // The clusters follow the light block in the same camera buffer.
+            // A dynamic storage buffer needs a real range (VK_WHOLE_SIZE is
+            // only valid with a dynamic offset of 0), and the range is the
+            // size of the cluster block of the handler because the dynamic
+            // offset already contains the offset of the light block inside
+            // the camera buffer
+            const size_t cluster_offset =
+                GEVulkanLightHandler::getClusterOffset();
+            const size_t handler_size = m_light_handler->getMaxSize();
+            cluster_info.buffer = sbo_info_light.buffer;
+            cluster_info.offset = 0;
+            cluster_info.range = handler_size > cluster_offset ?
+                handler_size - cluster_offset : sizeof(uint32_t);
+            data_set.push_back({});
+            VkWriteDescriptorSet& cluster_ds = data_set.back();
+            cluster_ds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            cluster_ds.dstSet = m_data_descriptor_sets[i];
+            cluster_ds.dstBinding = 5;
+            cluster_ds.dstArrayElement = 0;
+            cluster_ds.descriptorType =
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+            cluster_ds.descriptorCount = 1;
+            cluster_ds.pBufferInfo = &cluster_info;
         }
 
         if (bind_mesh_textures && sbo_buffer != VK_NULL_HANDLE)
@@ -2529,7 +2636,6 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
 
         vkUpdateDescriptorSets(vk->getDevice(), data_set.size(),
             data_set.data(), 0, NULL);
-
         VkBuffer dspm_buffer = m_dspm_data->getHostBuffer()[i];
         if (dspm_buffer != VK_NULL_HANDLE)
         {
@@ -2601,34 +2707,9 @@ void GEVulkanDrawCall::renderDeferredLighting(GEVulkanDriver* vk,
         dynamic_offsets.size(), dynamic_offsets.data());
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
         m_deferred_layouts[GVDFP_HDR], 2, 1, getEnvDescriptorSet(vk), 0, NULL);
-    unsigned fullscreen_light = m_light_handler ?
-        m_light_handler->getFullscreenLightCount() : 0;
-    vkCmdPushConstants(cmd, m_deferred_layouts[GVDFP_HDR],
-        VK_SHADER_STAGE_ALL_GRAPHICS, 0, sizeof(unsigned),
-        &fullscreen_light);
+    // Every light is culled per screen tile and depth slice in the shader,
+    // the clusters are in the binding 5 of the data set
     vkCmdDraw(cmd, 3, 1, 0, 0);
-
-    if (m_light_handler &&
-        m_light_handler->getLightCount() - fullscreen_light > 0)
-    {
-        auto& pl = m_graphics_pipelines.at("deferred_pointlight")
-            .m_pipelines;
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            *pl[GVPT_DEFERRED_LIGHTING]);
-        struct PushConstants
-        {
-            btQuaternion m_rotation;
-            int m_fullscreen_light;
-        };
-        PushConstants pc;
-        pc.m_rotation = m_billboard_rotation;
-        pc.m_fullscreen_light = fullscreen_light;
-        vkCmdPushConstants(cmd, m_deferred_layouts[GVDFP_HDR],
-            VK_SHADER_STAGE_ALL_GRAPHICS, 0, sizeof(PushConstants),
-            &pc);
-        vkCmdDraw(cmd, 4,
-            m_light_handler->getLightCount() - fullscreen_light, 0, 0);
-    }
 }   // renderDeferredLighting
 
 // ----------------------------------------------------------------------------
@@ -2645,17 +2726,29 @@ void GEVulkanDrawCall::renderDeferredConvertColor(GEVulkanDriver* vk,
         m_deferred_layouts[GVDFP_CONVERT_COLOR], 0, 1,
         vk->getRTTTexture()->getDescriptorSet(GVDFP_CONVERT_COLOR), 0, NULL);
     GEVulkanFBOTexture* rtt = vk->getRTTTexture();
-    if (rtt->isSplit() &&
-        static_cast<GEVulkanDeferredFBOSplit*>(rtt)->hasBloom())
+    // The push constants of deferred_convert_color.frag, the rects of this
+    // draw call (empty if it has no valid bloom) and the debug views which are
+    // read every frame (so the settings can be changed any time)
+    struct ConvertColorConstants
     {
-        // Empty if this draw call has no valid bloom (see
-        // deferred_convert_color.frag)
-        GEVulkanBloomRects rects = {};
-        if (bloom_rects)
-            rects = *bloom_rects;
-        vkCmdPushConstants(cmd, m_deferred_layouts[GVDFP_CONVERT_COLOR],
-            VK_SHADER_STAGE_ALL_GRAPHICS, 0, sizeof(rects), &rects);
+        GEVulkanBloomRects m_rects;
+        // Not VkBool32 as the one of the specialization constants: it's not
+        // padded after the rects, like the ints of the shader
+        int32_t m_ssao_debug;
+        int32_t m_gi_debug;
+        int32_t m_point_light_debug;
+    } constants = {};
+    if (rtt->isSplit() &&
+        static_cast<GEVulkanDeferredFBOSplit*>(rtt)->hasBloom() && bloom_rects)
+    {
+        constants.m_rects = *bloom_rects;
     }
+    constants.m_ssao_debug = getGEConfig()->m_ssao_debug ? 1 : 0;
+    constants.m_gi_debug = getGEConfig()->m_gi_debug ? 1 : 0;
+    constants.m_point_light_debug =
+        getGEConfig()->m_point_light_debug ? 1 : 0;
+    vkCmdPushConstants(cmd, m_deferred_layouts[GVDFP_CONVERT_COLOR],
+        VK_SHADER_STAGE_ALL_GRAPHICS, 0, sizeof(constants), &constants);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }   // renderDeferredConvertColor
 
@@ -2818,19 +2911,49 @@ void GEVulkanDrawCall::renderSolidRT(GEVulkanDriver* vk, VkCommandBuffer cmd)
 }   // renderSolidRT
 
 // ----------------------------------------------------------------------------
+void GEVulkanDrawCall::renderSolidReflectionResolve(GEVulkanDriver* vk,
+                                                    VkCommandBuffer cmd)
+{
+    if (m_deferred_layouts.empty() ||
+        m_deferred_layouts[GVDFP_SOLID_REFLECTION_RESOLVE] == VK_NULL_HANDLE ||
+        m_visible_nodes.empty())
+        return;
+    auto& pl = m_graphics_pipelines.at("solid_reflection_resolve").m_pipelines;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        *pl[GVPT_SOLID_REFLECTION_RESOLVE]);
+    // The target of the trace of this draw call
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_deferred_layouts[GVDFP_SOLID_REFLECTION_RESOLVE], 0, 1,
+        vk->getRTTTexture()->getDescriptorSet(GVDFP_SOLID_REFLECTION_RESOLVE),
+        0, NULL);
+    // Camera
+    int current_buffer_idx = vk->getCurrentBufferIdx();
+    std::vector<uint32_t> dynamic_offsets = getDefaultDynamicOffsets();
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_deferred_layouts[GVDFP_SOLID_REFLECTION_RESOLVE],
+        1, 1, &m_data_descriptor_sets[current_buffer_idx],
+        dynamic_offsets.size(), dynamic_offsets.data());
+    // g-buffer (the normal and the depth are the surface of the filter)
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_deferred_layouts[GVDFP_SOLID_REFLECTION_RESOLVE], 2, 1,
+        vk->getRTTTexture()->getDescriptorSet(GVDFP_HDR), 0, NULL);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+}   // renderSolidReflectionResolve
+
+// ----------------------------------------------------------------------------
 bool GEVulkanDrawCall::hasLightScatter() const
 {
-    // Same as the OpenGL renderer which needs the fog (the density is 0 if
-    // there is none), and it has no point of marching without any light
+    // The fog of the OpenGL renderer is needed (the density is 0 if there is
+    // none). Any light is not needed: the sun scatters in the fog even
+    // without any point light
     return m_light_scatter && m_light_handler &&
-        m_light_handler->getLightCount() > 0 &&
         m_light_handler->getFogDensity() > 0.0f;
 }   // hasLightScatter
 
 // ----------------------------------------------------------------------------
 bool GEVulkanDrawCall::hasGodRays() const
 {
-    return m_god_rays && getVKDriver()->isGodRaysEnabled();
+    return m_god_rays && getVKDriver()->isLightShaftEnabled();
 }   // hasGodRays
 
 // ----------------------------------------------------------------------------
@@ -3107,7 +3230,7 @@ const VkDescriptorSet* GEVulkanDrawCall::getEnvDescriptorSet(GEVulkanDriver* vk)
             return sky->getDummyEnvDescriptorSet();
         m_env_observer = sky->getEnvObserver();
         sky->fillDescriptor(m_env_descriptor_set, !m_deferred_layouts.empty(),
-            m_shadow_fbo);
+            m_shadow_fbo, m_omni_shadow_fbo);
     }
     return &m_env_descriptor_set;
 }   // getEnvDescriptorSet
@@ -3137,7 +3260,7 @@ size_t GEVulkanDrawCall::getDynamicSPMSize() const
                 }
                 else if (node->getType() == irr::scene::ESNT_BILLBOARD)
                 {
-                    if (m_shadow_fbo && material->m_backface_culling)
+                    if (hasShadowFBO() && material->m_backface_culling)
                         count += 2;
                     else
                         count += 1;
@@ -3229,7 +3352,7 @@ void GEVulkanDrawCall::generateDynamicSPM(GEVulkanDriver* vk)
                             false);
                         written_size += sizeof(ObjectData);
                         mapped_addr += sizeof(ObjectData);
-                        if (m_shadow_fbo && material->m_backface_culling)
+                        if (hasShadowFBO() && material->m_backface_culling)
                         {
                             obj = (ObjectData*)mapped_addr;
                             obj->init(bb, material_id, m_billboard_rotation,

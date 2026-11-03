@@ -213,7 +213,9 @@ IrrDriver::IrrDriver()
     m_renderer            = NULL;
     m_wind                = new Wind();
     m_ssaoviz = false;
+    m_giviz = false;
     m_shadowviz = false;
+    m_pointlightviz = false;
     m_boundingboxesviz = false;
     m_last_light_bucket_distance = 0;
     m_clear_color                = video::SColor(255, 100, 101, 140);
@@ -2578,13 +2580,63 @@ GLuint IrrDriver::getDepthStencilTexture()
 }   // getDepthStencilTexture
 
 // --------------------------------------------------------------------------------------------
+void IrrDriver::toggleSSAOViz()
+{
+    m_ssaoviz = !m_ssaoviz;
+#ifndef SERVER_ONLY
+    // The Vulkan renderer shows it in its deferred convert color pass, the
+    // OpenGL one copies the half size image to the screen
+    GE::getGEConfig()->m_ssao_debug = m_ssaoviz;
+#endif
+}   // toggleSSAOViz
+
+// --------------------------------------------------------------------------------------------
+void IrrDriver::toggleGIDebug()
+{
+    m_giviz = !m_giviz;
+#ifndef SERVER_ONLY
+    // Only the Vulkan renderer has the surfel global illumination, the debug
+    // view of the tonemap pass shows its image
+    GE::getGEConfig()->m_gi_debug = m_giviz;
+#endif
+}   // toggleGIDebug
+
+// --------------------------------------------------------------------------------------------
+void IrrDriver::toggleShadowViz()
+{
+    m_shadowviz = !m_shadowviz;
+#ifndef SERVER_ONLY
+    // The Vulkan renderer shows the depth of the sun cascades in its 2D
+    // renderer, the OpenGL one renders them in shadow_matrices.cpp
+    GE::getGEConfig()->m_shadow_debug = m_shadowviz;
+#endif
+}   // toggleShadowViz
+
+// --------------------------------------------------------------------------------------------
+void IrrDriver::togglePointLightViz()
+{
+    m_pointlightviz = !m_pointlightviz;
+#ifndef SERVER_ONLY
+    // The Vulkan renderer writes only the lighting of the point lights and
+    // spot lights in its deferred lighting pass
+    GE::getGEConfig()->m_point_light_debug = m_pointlightviz;
+#endif
+}   // togglePointLightViz
+
+// --------------------------------------------------------------------------------------------
 void IrrDriver::resetDebugModes()
 {
     m_ssaoviz = false;
+    m_giviz = false;
     m_shadowviz = false;
+    m_pointlightviz = false;
     m_lightviz = false;
     m_boundingboxesviz = false;
 #ifndef SERVER_ONLY
+    GE::getGEConfig()->m_ssao_debug = false;
+    GE::getGEConfig()->m_gi_debug = false;
+    GE::getGEConfig()->m_shadow_debug = false;
+    GE::getGEConfig()->m_point_light_debug = false;
     SP::sp_debug_view = false;
 #endif
 }

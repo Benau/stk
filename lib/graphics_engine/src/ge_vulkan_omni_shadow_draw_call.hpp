@@ -11,37 +11,33 @@ class GEVulkanOmniShadowDrawCall : public GEVulkanShadowDrawCall
 {
 private:
     const unsigned m_layer_id;
-
-    bool m_render_state;
     // ------------------------------------------------------------------------
     virtual bool skip(irr::scene::ISceneNode* node) const     { return false; }
     // ------------------------------------------------------------------------
     virtual bool useDepthClamp() const                        { return false; }
     // ------------------------------------------------------------------------
-    // Each layer maps to exactly one array subpass index.
+    virtual bool useDPShadow() const                           { return true; }
+    // ------------------------------------------------------------------------
+    // The atlas is a single array layer, every slot renders into a tile of it
     virtual uint32_t getSubpassForPipelineCreation(GEVulkanDriver* vk,
                                                    GEVulkanPipelineType type)
     {
-        return (uint32_t)m_layer_id;
+        return 0;
     }
 
 public:
     // ------------------------------------------------------------------------
     GEVulkanOmniShadowDrawCall(GEVulkanShadowFBO* sfbo, unsigned layer_id)
     : GEVulkanShadowDrawCall(sfbo, GVSCC_NEAR),
-      m_layer_id(layer_id), m_render_state(true)
+      m_layer_id(layer_id)
     {
     }
     // ------------------------------------------------------------------------
     virtual void prepareShadow(unsigned layer)
     {
         GEVulkanShadowDrawCall::prepareShadow(layer);
-        m_render_state = true;
+        setRenderState(true);
     }
-    // ------------------------------------------------------------------------
-    virtual void setRenderState(bool state)         { m_render_state = state; }
-    // ------------------------------------------------------------------------
-    virtual bool getRenderState() const              { return m_render_state; }
 
 };   // GEVulkanOmniShadowDrawCall
 

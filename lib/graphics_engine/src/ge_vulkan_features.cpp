@@ -35,6 +35,7 @@ bool g_supports_s3tc_bc3 = false;
 bool g_supports_bptc_bc7 = false;
 bool g_supports_astc_4x4 = false;
 bool g_supports_shader_storage_image_extended_format = false;
+bool g_supports_shader_clip_distance = false;
 bool g_supports_dynamic_rendering = false;
 bool g_supports_dynamic_rendering_local_read = false;
 bool g_supports_ray_query = false;
@@ -106,6 +107,8 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
     g_supports_astc_4x4 = format_properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
 #endif
     g_supports_shader_storage_image_extended_format = vk->getPhysicalDeviceFeatures().shaderStorageImageExtendedFormats;
+    g_supports_shader_clip_distance =
+        vk->getPhysicalDeviceFeatures().shaderClipDistance == VK_TRUE;
     if (g_supports_shader_storage_image_extended_format)
     {
         // iOS simulator doesn't support writing to VK_FORMAT_A2B10G10R10_UNORM_PACK32
@@ -396,6 +399,8 @@ void GEVulkanFeatures::printStats()
         supportsASTC4x4() ? "true" : "false");
     os::Printer::log("Vulkan supports shader storage image extended formats",
         supportsShaderStorageImageExtendedFormats() ? "true" : "false");
+    os::Printer::log("Vulkan supports shader clip distance",
+        supportsShaderClipDistance() ? "true" : "false");
     os::Printer::log(
         "Vulkan supports dynamic rendering (VK_KHR_dynamic_rendering)",
         g_supports_dynamic_rendering ? "true" : "false");
@@ -510,6 +515,12 @@ bool GEVulkanFeatures::supportsShaderStorageImageExtendedFormats()
 {
     return g_supports_shader_storage_image_extended_format;
 }   // supportsShaderStorageImageExtendedFormats
+
+// ----------------------------------------------------------------------------
+bool GEVulkanFeatures::supportsShaderClipDistance()
+{
+    return g_supports_shader_clip_distance;
+}   // supportsShaderClipDistance
 
 // ----------------------------------------------------------------------------
 bool GEVulkanFeatures::supportsDynamicRendering()
