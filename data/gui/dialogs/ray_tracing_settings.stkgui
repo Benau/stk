@@ -29,6 +29,7 @@
             <label text="Realistic water reflections" I18N="Ray tracing settings"/>
         </div>
 
+        <!--
         <spacer height="4" width="10" />
 
         <div layout="horizontal-row" width="100%" proportion="1">
@@ -37,6 +38,7 @@
             <spacer width="10" height="10"/>
             <label text="Realistic shadows" I18N="Ray tracing settings"/>
         </div>
+        -->
 
         <spacer height="4" width="10" />
 
