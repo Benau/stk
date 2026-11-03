@@ -44,6 +44,7 @@ GEVulkanSkyBoxRenderer::GEVulkanSkyBoxRenderer()
     texture_layout_binding[2].binding = 2;
     texture_layout_binding[3] = texture_layout_binding[0];
     texture_layout_binding[3].binding = 3;
+    texture_layout_binding[3].stageFlags |= VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo setinfo = {};
     setinfo.flags = 0;
@@ -99,17 +100,20 @@ GEVulkanSkyBoxRenderer::GEVulkanSkyBoxRenderer()
     info[3].sampler = vk->getSampler(GVS_SHADOW_MAP);
     info[3].imageView = (VkImageView)m_dummy_shadow_fbo->getTextureHandler();
 
-    VkWriteDescriptorSet write_descriptor_set = {};
-    write_descriptor_set.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write_descriptor_set.dstBinding = 0;
-    write_descriptor_set.dstArrayElement = 0;
-    write_descriptor_set.descriptorType =
+    VkWriteDescriptorSet writes[2] = {};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = m_dummy_env_descriptor_set;
+    writes[0].dstBinding = 0;
+    writes[0].dstArrayElement = 0;
+    writes[0].descriptorType =
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write_descriptor_set.descriptorCount = info.size();
-    write_descriptor_set.pBufferInfo = 0;
-    write_descriptor_set.dstSet = m_dummy_env_descriptor_set;
-    write_descriptor_set.pImageInfo = info.data();
-    vkUpdateDescriptorSets(vk->getDevice(), 1, &write_descriptor_set, 0, NULL);
+    writes[0].descriptorCount = 3;
+    writes[0].pImageInfo = info.data();
+    writes[1] = writes[0];
+    writes[1].dstBinding = 3;
+    writes[1].descriptorCount = 1;
+    writes[1].pImageInfo = &info[3];
+    vkUpdateDescriptorSets(vk->getDevice(), 2, writes, 0, NULL);
 }   // init
 
 // ----------------------------------------------------------------------------
@@ -300,19 +304,20 @@ void GEVulkanSkyBoxRenderer::fillDescriptor(VkDescriptorSet ds,
     else
         info[3].imageView = (VkImageView)m_dummy_shadow_fbo->getTextureHandler();
 
-    VkWriteDescriptorSet write_descriptor_set = {};
-    write_descriptor_set.sType =
-        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write_descriptor_set.dstBinding = 0;
-    write_descriptor_set.dstArrayElement = 0;
-    write_descriptor_set.descriptorType =
+    VkWriteDescriptorSet writes[2] = {};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = ds;
+    writes[0].dstBinding = 0;
+    writes[0].dstArrayElement = 0;
+    writes[0].descriptorType =
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write_descriptor_set.descriptorCount = info.size();
-    write_descriptor_set.pBufferInfo = 0;
-    write_descriptor_set.dstSet = ds;
-    write_descriptor_set.pImageInfo = info.data();
-
-    vkUpdateDescriptorSets(vk->getDevice(), 1, &write_descriptor_set, 0, NULL);
+    writes[0].descriptorCount = 3;
+    writes[0].pImageInfo = info.data();
+    writes[1] = writes[0];
+    writes[1].dstBinding = 3;
+    writes[1].descriptorCount = 1;
+    writes[1].pImageInfo = &info[3];
+    vkUpdateDescriptorSets(vk->getDevice(), 2, writes, 0, NULL);
 }   // fillDescriptor
 
 }

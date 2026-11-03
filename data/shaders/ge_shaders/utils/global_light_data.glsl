@@ -15,8 +15,8 @@ layout(std140, set = 1, binding = 3) uniform GlobalLightBuffer
     vec3  m_sun_color;
     float m_sun_angle_tan_half;
     vec3  m_sun_direction;
-    // Exponential fog of solid materials (deferred lighting) and light
-    // scattering, 0 = no fog
+    // Exponential fog of solid materials (deferred lighting) and the density
+    // of the volumetric light scattering (light_scatter.comp), 0 = no fog
     float m_fog_density;
     // rgb: fog color, a: maximum amount of fog of transparent materials
     vec4  m_fog_color;

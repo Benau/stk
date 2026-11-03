@@ -658,6 +658,11 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
             GEVulkanFeatures::needsRTMeshTextureMirror());
         if (GEVulkanFeatures::supportsRayQuery())
             m_rt_scene = new GEVulkanRTScene(this);
+        // Before createSwapChain: the deferred split fbo creates the low res
+        // effects, whose pipeline layout borrows the environment descriptor
+        // set layout of it (the volumetric light scattering reads the shadow
+        // map with it)
+        m_skybox_renderer = new GEVulkanSkyBoxRenderer();
     }
     catch (std::exception& e)
     {
@@ -686,7 +691,6 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
     {
         createCommandBuffers();
         GEVulkan2dRenderer::init(this);
-        m_skybox_renderer = new GEVulkanSkyBoxRenderer();
         GEMaterialManager::init();
         GEVulkanFeatures::printStats();
         VkFormatProperties format_props = {};

@@ -77,3 +77,16 @@ vec3 inverseConvertColor(vec3 y)
     vec3 d = sqrt(max(qb * qb - 4.0 * qa * qc, vec3(0.0)));
     return (2.0 * qc) / max(d - qb, vec3(1e-20));
 }
+
+int getFaceIndex(vec3 d)
+{
+    vec3 a = abs(d);
+    int face;
+    if(a.x > a.y && a.x > a.z)
+        face = d.x > 0 ? 0 : 1;
+    else if(a.y > a.z)
+        face = d.y > 0 ? 2 : 3;
+    else
+        face = d.z > 0 ? 4 : 5;
+    return face;
+}
