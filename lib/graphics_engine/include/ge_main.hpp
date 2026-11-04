@@ -186,6 +186,11 @@ GEDisplaceReflectionType m_displace_reflection;
 std::unordered_set<std::string> m_ondemand_load_texture_paths;
 float m_render_scale;
 unsigned m_shadow_size;
+// The shadows which the USER wants (the setting), only the settings code
+// writes it. A track or any other scene never changes it (see
+// setSceneShadowType()), otherwise the setting is lost (or overridden when the
+// settings are applied) and the effects which depend on it can't tell what
+// changed. Read it with getActiveShadowType(), not directly
 GEShadowType m_shadow_type;
 unsigned m_point_shadow_limit;
 unsigned m_max_pointlights;
@@ -255,14 +260,30 @@ GEDisplaceReflectionType getDisplaceReflection();
 bool isSolidSSR();
 bool isSolidHiZ();
 GESolidReflectionType getSolidReflection();
-// The bits of GEConfig::m_shadow_type which are ray traced (all of them with
+// The shadows which the current scene allows (GST_COMBINED by default), for
+// example a track without shadow of the sun passes GST_POINTLIGHT, and
+// GST_COMBINED again when it's unloaded. It's independent of
+// GEConfig::m_shadow_type (the setting of the user) and both can be changed in
+// any order. Returns true if getActiveShadowType() changed, then what was built
+// with it (the swapchain related objects, see GEVulkanDriver::updateDriver())
+// has to be created again by the caller if the driver is running
+bool setSceneShadowType(GEShadowType allowed);
+GEShadowType getSceneShadowType();
+// What is really on: GEConfig::m_shadow_type (user) & getSceneShadowType(),
+// GST_NONE if GEConfig::m_shadow_size is 0 (the type is kept for later).
+// It includes the ray traced bits, see getRTShadowType() and getShadowType()
+// for the split by the technique. Everything which depends on the type has to
+// use this, never GEConfig::m_shadow_type
+GEShadowType getActiveShadowType();
+// The bits of getActiveShadowType() which are ray traced (all of them with
 // GERayTracingConfig::m_shadow), GST_NONE if ray tracing or the pbr shaders are
-// off. A track without shadow of the sun (no GST_SUN in m_shadow_type) has no
-// ray traced shadow of it either, and the same for the point lights
+// off. A scene without shadow of the sun (no GST_SUN in
+// getSceneShadowType()) has no ray traced shadow of it either, and the same
+// for the point lights
 GEShadowType getRTShadowType();
 // GERayTracingConfig::m_shadow_scale clamped to [0.25, 1.0]
 float getRTShadowScale();
-// The shadows which use shadow maps, GEConfig::m_shadow_type without the ones
+// The shadows which use shadow maps, getActiveShadowType() without the ones
 // of getRTShadowType(), use it (not GEConfig::m_shadow_type) to create the
 // shadow maps and in the shaders
 GEShadowType getShadowType();

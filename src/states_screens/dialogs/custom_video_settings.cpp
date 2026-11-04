@@ -238,8 +238,12 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
             bool advanced_pipeline = getWidget<CheckBoxWidget>("dynamiclight")->getState();
             bool pbr_changed = false;
             bool ibl_changed = false;
-            unsigned prev_shadow_size = GE::getGEConfig()->m_shadow_size;
-            unsigned prev_shadow_type = GE::getGEConfig()->m_shadow_type;
+            // What is built from them (shadow maps, the ray traced shadow,
+            // volumetric shadow) uses these (the type of the setting is kept
+            // when the size is 0), not the raw GEConfig fields
+            const unsigned prev_shadow_size = GE::getShadowSize();
+            const GE::GEShadowType prev_shadow_type = GE::getShadowType();
+            const GE::GEShadowType prev_rt_shadow_type = GE::getRTShadowType();
             if (UserConfigParams::m_dynamic_lights != advanced_pipeline)
             {
                 pbr_changed = true;
@@ -404,21 +408,23 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
                 bool need_recreate_swapchain =
                     GE::getGEConfig()->m_solid_reflection != prev_solid ||
                     GE::getGEConfig()->m_displace_reflection != prev_displace;
-                if (GE::isRayTracing() && prev_shadow_type != GE::getGEConfig()->m_shadow_type)
+                // Which shadows are ray traced (the FBO has the ray traced
+                // shadow only if there is one), also changed by the size 0
+                if (prev_rt_shadow_type != GE::getRTShadowType())
                     need_recreate_swapchain = true;
                 if (anti_aliasing_changed)
                     need_recreate_swapchain = true;
                 // For volumetric shadow
-                if ((prev_shadow_size != GE::getGEConfig()->m_shadow_size ||
-                    prev_shadow_type != GE::getGEConfig()->m_shadow_type) &&
+                if ((prev_shadow_size != GE::getShadowSize() ||
+                    prev_shadow_type != GE::getShadowType()) &&
                     GE::getGEConfig()->m_light_scatter)
                     need_recreate_swapchain = true;
                 if (need_recreate_swapchain || pbr_changed || ibl_changed ||
                     glow_changed || light_scatter_changed || bloom_changed ||
                     ssao_changed || god_rays_changed || dof_changed ||
                     final_pass_changed ||
-                    prev_shadow_size != GE::getGEConfig()->m_shadow_size ||
-                    prev_shadow_type != GE::getGEConfig()->m_shadow_type)
+                    prev_shadow_size != GE::getShadowSize() ||
+                    prev_shadow_type != GE::getShadowType())
                     GE::getVKDriver()->updateDriver(need_recreate_swapchain, pbr_changed, ibl_changed);
             }
             // sameRestart will have the same effect

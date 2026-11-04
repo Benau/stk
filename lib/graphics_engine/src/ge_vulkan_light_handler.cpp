@@ -439,7 +439,7 @@ void GEVulkanLightHandler::generate(const irr::core::vector3df& cam_pos,
 
     auto& data = m_lights->m_data;
     const bool point_shadow =
-        (getGEConfig()->m_shadow_type & GST_POINTLIGHT) != 0;
+        (getActiveShadowType() & GST_POINTLIGHT) != 0;
     const unsigned shadow_limit =
         point_shadow ? getGEConfig()->m_point_shadow_limit : 0;
 

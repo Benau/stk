@@ -405,11 +405,37 @@ GESolidReflectionType getSolidReflection()
     return isSolidRayTracing() ? GSRT_DISABLED : g_config.m_solid_reflection;
 }
 
+// What the scene allows, not a setting of the user
+GEShadowType g_scene_shadow_type = GST_COMBINED;
+
+bool setSceneShadowType(GEShadowType allowed)
+{
+    const GEShadowType prev = getActiveShadowType();
+    g_scene_shadow_type = GEShadowType(allowed & GST_COMBINED);
+    return prev != getActiveShadowType();
+}
+
+GEShadowType getSceneShadowType()
+{
+    return g_scene_shadow_type;
+}
+
+GEShadowType getActiveShadowType()
+{
+    // A shadow size of 0 means the shadows are off (what the settings of the
+    // game do), g_config.m_shadow_type is kept to be used again, and it
+    // applies to the ray traced ones too
+    if (g_config.m_shadow_size == 0)
+        return GST_NONE;
+    return GEShadowType(g_config.m_shadow_type & g_scene_shadow_type &
+        GST_COMBINED);
+}
+
 GEShadowType getRTShadowType()
 {
     if (!g_config.m_pbr || !g_config.m_ray_tracing.m_shadow || !isRayTracing())
         return GST_NONE;
-    return GEShadowType(g_config.m_shadow_type & GST_COMBINED);
+    return getActiveShadowType();
 }
 
 float getRTShadowScale()
@@ -420,7 +446,7 @@ float getRTShadowScale()
 
 GEShadowType getShadowType()
 {
-    return GEShadowType(g_config.m_shadow_type & ~getRTShadowType());
+    return GEShadowType(getActiveShadowType() & ~getRTShadowType());
 }
 
 unsigned getShadowSize()
