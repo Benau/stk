@@ -350,8 +350,13 @@ void Track::cleanup()
     Graph::destroy();
     m_item_manager = nullptr;
 #ifndef SERVER_ONLY
-    GE::getGEConfig()->m_shadow_type =
-        UserConfigParams::m_pointlight_shadows ? GE::GST_COMBINED : GE::GST_SUN;
+    // Back to what the user set, which was never changed by the track
+    if (GE::setSceneShadowType(GE::GST_COMBINED) &&
+        !GUIEngine::isNoGraphics() &&
+        GE::getDriver()->getDriverType() == video::EDT_VULKAN)
+    {
+        GE::getVKDriver()->updateDriver();
+    }
     if (!GUIEngine::isNoGraphics())
         GE::resetOcclusionCulling();
     if (CVS->isGLSL())
@@ -2028,10 +2033,13 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
     main_loop->renderGUI(3100);
 
 #ifndef SERVER_ONLY
-    if (!m_shadows)
+    // The setting of the user is untouched, the track only limits it
+    if (GE::setSceneShadowType(m_shadows ? GE::GST_COMBINED :
+        GE::GST_POINTLIGHT) && !GUIEngine::isNoGraphics() &&
+        GE::getDriver()->getDriverType() == video::EDT_VULKAN)
     {
-        GE::getGEConfig()->m_shadow_type =
-            GE::GEShadowType(GE::getGEConfig()->m_shadow_type & ~(GE::GST_SUN));
+        // Light scatter, ray traced shadow, etc. were made for the old type
+        GE::getVKDriver()->updateDriver();
     }
 
     if (!GUIEngine::isNoGraphics())
