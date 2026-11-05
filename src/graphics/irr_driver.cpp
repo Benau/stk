@@ -2532,13 +2532,13 @@ scene::ISceneNode *IrrDriver::addLight(const core::vector3df &pos,
         if (m_video_driver->getDriverType() == EDT_VULKAN && sun_)
         {
             light = m_scene_manager->addLightSceneNode(parent, pos,
-                video::SColorf(r, g, b, 0.2f), 0.26f * M_PI / 180.0f);
+                video::SColorf(r * M_PI_2, g * M_PI_2, b * M_PI_2, 0.2f), 0.26f * M_PI / 180.0f);
             light->setRotation(-pos);
             light->setLightType(video::ELT_DIRECTIONAL);
         }
         else
         {
-            video::SColorf color(r, g, b, 1.0f);
+            video::SColorf color(r * M_PI_2, g * M_PI_2, b * M_PI_2, 1.0f);
             light = m_scene_manager->addLightSceneNode(parent, pos, color);
             light->setRadius(radius);
             if (m_video_driver->getDriverType() == EDT_VULKAN)

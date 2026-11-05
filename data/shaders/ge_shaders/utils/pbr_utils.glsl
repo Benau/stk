@@ -15,11 +15,10 @@ float F_Schlick(float f0, float f90, float VdotH)
 
 float Fd_Burley(float roughness, float NdotV, float NdotL, float LdotH)
 {
-    // Don't divide by Pi to avoid light being too dim.
     float f90 = 0.5 + 2.0 * roughness * LdotH * LdotH;
     float lightScatter = F_Schlick(1.0, f90, NdotL);
     float viewScatter = F_Schlick(1.0, f90, NdotV);
-    return lightScatter * viewScatter;
+    return lightScatter * viewScatter * (1.0 / 3.14159265359);
 }
 
 // Calculate distribution.

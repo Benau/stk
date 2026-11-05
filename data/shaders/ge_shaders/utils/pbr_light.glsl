@@ -24,7 +24,7 @@ vec3 PBRLight(
 
     float roughness = perceptualRoughnessToRoughness(perceptual_roughness);
 
-    vec3 diffuse = diffuse_color * Fd_Burley(roughness, NdotV, NdotL, NdotH);
+    vec3 diffuse = diffuse_color * Fd_Burley(roughness, NdotV, NdotL, LdotH);
 
     float D = D_GGX(roughness, NdotH);
     float V = V_Smith_GGX_Correlated(roughness, NdotV, NdotL);
@@ -69,7 +69,7 @@ vec3 PBRSunAmbientEmitLight(
 
     float roughness = perceptualRoughnessToRoughness(perceptual_roughness);
 
-    vec3 diffuse = diffuse_color * Fd_Burley(roughness, NdotV, NdotL, NdotH);
+    vec3 diffuse = diffuse_color * Fd_Burley(roughness, NdotV, NdotL, LdotH);
 
     float D = D_GGX(roughness, NdotH);
     float V = V_Smith_GGX_Correlated(roughness, NdotV, NdotL);
