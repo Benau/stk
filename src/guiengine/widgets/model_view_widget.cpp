@@ -29,6 +29,7 @@
 #include <ILightSceneNode.h>
 #include <ISceneManager.h>
 #include <IMeshSceneNode.h>
+#include <IVideoDriver.h>
 
 #include <algorithm>
 #ifndef SERVER_ONLY
@@ -292,6 +293,11 @@ void ModelViewWidget::setupRTTScene()
         scene::ILightSceneNode* light = irr_driver->getSceneManager()
             ->addLightSceneNode(NULL, spot_pos, video::SColorf(1.0f,1.0f,1.0f),
                                 1600 /* radius */);
+        if (irr_driver->getVideoDriver()->getDriverType() == video::EDT_VULKAN)
+        {
+            video::SLight& data = light->getLightData();
+            data.Attenuation.X = 100.0f;
+        }
         light->setLightType(video::ELT_SPOT);
         light->setRotation((core::vector3df(0, 10, 0) - spot_pos).getHorizontalAngle());
         light->updateAbsolutePosition();
