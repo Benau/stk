@@ -128,6 +128,11 @@ struct GERayTracingConfig
     // normal aware, never across the viewports of the splitscreen) to the full
     // resolution. Needs the render target to be created again if it changes
     float m_shadow_scale;
+    // Diffuse global illumination of the static scene, traced by the surfels
+    // of GEVulkanSurfelGI (see isSurfelGI()), it replaces the irradiance of
+    // the environment map in the lighting pass where the surfels cover it.
+    // Needs the render target to be created again if it changes
+    bool m_gi;
     // ------------------------------------------------------------------------
     GERayTracingConfig()
     {
@@ -139,6 +144,7 @@ struct GERayTracingConfig
         m_grass = false;
         m_shadow = false;
         m_shadow_scale = 1.0f;
+        m_gi = false;
     }
 };
 enum GEShadowType : unsigned
@@ -250,6 +256,9 @@ bool isSolidRayTracing();
 // Same for the reflection of the displace materials (GERayTracingConfig::
 // m_displace_reflection)
 bool isDisplaceRayTracing();
+// True if the diffuse global illumination is traced (GERayTracingConfig::m_gi),
+// needs the pbr shaders
+bool isSurfelGI();
 // What the displace reflection is with isDisplaceRayTracing() taken into
 // account: GDRT_RT if it's ray traced, GEConfig::m_displace_reflection
 // otherwise. Everything which needs the displace reflection (the attachments

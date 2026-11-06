@@ -13,6 +13,7 @@
 #include "ge_vulkan_light_scatter.hpp"
 #include "ge_vulkan_skybox_renderer.hpp"
 #include "ge_vulkan_rt_shadow.hpp"
+#include "ge_vulkan_surfel_gi.hpp"
 #include "ge_vulkan_ssao.hpp"
 
 #include <array>
@@ -282,6 +283,22 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
                 m_depth_texture, m_attachments[GVDFT_NORMAL], false));
         }
     }
+    // Also before the descriptor of the g-buffer (it's sampled by the lighting
+    // pass)
+    if (supports_compute && needsSolidRT() && isSurfelGI())
+    {
+        try
+        {
+            m_surfel_gi.reset(new GEVulkanSurfelGI(vk, getSize(),
+                m_depth_texture, m_attachments[GVDFT_NORMAL]));
+        }
+        catch (const std::exception& e)
+        {
+            GE::logMessage(GE::GLL_ERROR,
+                "Failed to initialize global illumination: %s", e.what());
+            m_surfel_gi.reset();
+        }
+    }
     initSplitGBufferDescriptor(vk);
     if (supports_compute && getGEConfig()->m_glow_outline)
     {
@@ -411,8 +428,10 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
     // which is not used if there is none, specialization constant u_ssao), 4 =
     // the array of the visibility of the ray traced shadows (only
     // deferred_pbr.frag, specialization constant u_rt_shadow_type, a dummy one
-    // if it's not used)
-    std::array<VkDescriptorImageInfo, 5> image_infos = {};
+    // if it's not used) and 5 = the irradiance of the global illumination (only
+    // deferred_pbr.frag, specialization constant u_surfel_gi, a transparent
+    // texture which is not used if there is none)
+    std::array<VkDescriptorImageInfo, 6> image_infos = {};
     image_infos[0].sampler = vk->getSampler(GVS_NEAREST);
     image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     image_infos[0].imageView =
@@ -445,6 +464,21 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
     image_infos[4].sampler = vk->getSampler(GVS_NEAREST);
     image_infos[4].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     image_infos[4].imageView = m_rt_shadow->getImageView();
+    image_infos[5].sampler = vk->getSampler(GVS_NEAREST);
+    if (m_surfel_gi)
+    {
+        image_infos[5].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[5].imageView = m_surfel_gi->getImageView();
+    }
+    else
+    {
+        image_infos[5].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        if (vk->getTransparentTexture())
+        {
+            image_infos[5].imageView =
+                (VkImageView)vk->getTransparentTexture()->getTextureHandler();
+        }
+    }
     createSamplerDescriptor(vk, image_infos.size(),
         &m_descriptor_layout[GVDFP_HDR], &m_descriptor_pool[GVDFP_HDR],
         &m_descriptor_set[GVDFP_HDR], image_infos.data(), "GVDFP_HDR");
@@ -827,6 +861,9 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
     // And the visibility of the ray traced shadows (the sun)
     if (m_rt_shadow)
         m_rt_shadow->render(cmd, p);
+    // And the diffuse global illumination of the surfels
+    if (m_surfel_gi)
+        m_surfel_gi->render(cmd, p);
 
     // 3. lighting, the background is the clear color of hdr
     {

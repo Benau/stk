@@ -44,6 +44,15 @@
 
         <div layout="horizontal-row" width="100%" proportion="1">
             <spacer width="70" height="10"/>
+            <checkbox id="rt_gi"/>
+            <spacer width="10" height="10"/>
+            <label text="Global illumination" I18N="Ray tracing settings"/>
+        </div>
+
+        <spacer height="4" width="10" />
+
+        <div layout="horizontal-row" width="100%" proportion="1">
+            <spacer width="70" height="10"/>
             <checkbox id="rt_dynamic_objects"/>
             <spacer width="10" height="10"/>
             <label text="Karts and items" I18N="Ray tracing settings"/>

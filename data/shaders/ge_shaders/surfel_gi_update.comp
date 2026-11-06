@@ -1,0 +1,48 @@
+// Second pass of GEVulkanSurfelGI (see utils/surfel_gi.glsl), one thread per
+// surfel of the pool: a surfel which no pixel used for SURFEL_MAX_LIFE frames,
+// or which is too far from the cameras, is free again. The others get the
+// radius of their distance to the cameras and are added to the cells they touch
+// in the levels which the pixels around them can look in: the level of a pixel
+// is the one of its distance, which is the distance of the surfel plus or minus
+// the radius at most
+layout(local_size_x = 64) in;
+
+#define SURFEL_SET 2
+#include "utils/surfel_gi.glsl"
+
+void main()
+{
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= SURFEL_MAX || u_surfels[id].m_radius == 0.0)
+        return;
+    vec3 position = u_surfels[id].m_position;
+    float camera_distance = getSurfelCameraDistance(position);
+    if (pc.m_frame - u_surfels[id].m_last_seen > SURFEL_MAX_LIFE ||
+        camera_distance > SURFEL_MAX_DISTANCE)
+    {
+        u_surfels[id].m_radius = 0.0;
+        int at = atomicAdd(u_pool.m_free_count, 1);
+        u_pool.m_free[at] = id;
+        return;
+    }
+
+    float radius = getSurfelRadius(camera_distance);
+    u_surfels[id].m_radius = radius;
+    uint first_level = getSurfelLevel(max(camera_distance - radius, 0.0));
+    uint last_level = getSurfelLevel(camera_distance + radius);
+    for (uint level = first_level; level <= last_level; level++)
+    {
+        float cell_size = getSurfelCellSize(level);
+        ivec3 cell_min = ivec3(floor((position - radius) / cell_size));
+        ivec3 cell_max = ivec3(floor((position + radius) / cell_size));
+        for (int x = cell_min.x; x <= cell_max.x; x++)
+        for (int y = cell_min.y; y <= cell_max.y; y++)
+        for (int z = cell_min.z; z <= cell_max.z; z++)
+        {
+            uint cell = getSurfelCell(ivec3(x, y, z), level);
+            uint slot = atomicAdd(u_cell_count[cell], 1u);
+            if (slot < SURFEL_CELL_CAPACITY)
+                u_cell_surfels[cell * SURFEL_CELL_CAPACITY + slot] = id;
+        }
+    }
+}

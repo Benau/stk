@@ -395,6 +395,11 @@ bool isDisplaceRayTracing()
         isRayTracing();
 }
 
+bool isSurfelGI()
+{
+    return g_config.m_pbr && g_config.m_ray_tracing.m_gi && isRayTracing();
+}
+
 GEDisplaceReflectionType getDisplaceReflection()
 {
     return isDisplaceRayTracing() ? GDRT_RT : g_config.m_displace_reflection;

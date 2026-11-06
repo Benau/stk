@@ -344,6 +344,7 @@ GEVulkanRTScene::GEVulkanRTScene(GEVulkanDriver* vk)
     m_skin_block = VK_NULL_HANDLE;
     m_geometry_count = 0;
     m_triangle_count = 0;
+    m_build_count = 0;
 
     std::array<VkDescriptorSetLayoutBinding, 4> bindings = {};
     bindings[0].binding = 0;
@@ -670,7 +671,7 @@ VkAccelerationStructureInstanceKHR GEVulkanRTScene::getStaticInstance() const
     instance.transform.matrix[1][1] = 1.0f;
     instance.transform.matrix[2][2] = 1.0f;
     instance.instanceCustomIndex = 0;
-    instance.mask = 0xFF;
+    instance.mask = GRTIM_STATIC;
     instance.instanceShaderBindingTableRecordOffset = 0;
     instance.flags = 0;
     instance.accelerationStructureReference =
@@ -1646,7 +1647,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
                 instance.transform.matrix[r][c] = abs[c * 4 + r];
         }
         instance.instanceCustomIndex = (uint32_t)geometry_count;
-        instance.mask = 0xFF;
+        instance.mask = GRTIM_DYNAMIC;
         instance.instanceShaderBindingTableRecordOffset = 0;
         instance.flags = 0;
         instance.accelerationStructureReference = blas->m_address;
@@ -1737,7 +1738,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
                 instance.transform.matrix[r][c] = abs[c * 4 + r];
         }
         instance.instanceCustomIndex = first_geometry;
-        instance.mask = 0xFF;
+        instance.mask = GRTIM_DYNAMIC;
         instance.instanceShaderBindingTableRecordOffset = 0;
         instance.flags = 0;
         instance.accelerationStructureReference = blas->m_address;
@@ -1866,7 +1867,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
                 instance.transform.matrix[1][3] = skin_origin.Y;
                 instance.transform.matrix[2][3] = skin_origin.Z;
                 instance.instanceCustomIndex = (uint32_t)geometry_count;
-                instance.mask = 0xFF;
+                instance.mask = GRTIM_DYNAMIC;
                 instance.instanceShaderBindingTableRecordOffset = 0;
                 instance.flags = 0;
                 instance.accelerationStructureReference = m_skin_set->m_address;
@@ -2345,6 +2346,7 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
     }
     m_geometry_count = (uint32_t)static_count;
     m_triangle_count = triangles;
+    m_build_count++;
     updateDescriptorSet();
     GE::logMessage(GLL_INFO, "GEVulkanRTScene: built %d geometries",
         m_geometry_count);

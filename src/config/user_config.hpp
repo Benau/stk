@@ -1057,6 +1057,10 @@ namespace UserConfigParams
             "ray_tracing_shadow_scale", &m_graphics_quality,
             "Resolution of the ray traced shadow relative to the render "
             "resolution (0.25 to 1.0)"));
+    PARAM_PREFIX BoolUserConfigParam        m_ray_tracing_gi
+            PARAM_DEFAULT(BoolUserConfigParam(false, "ray_tracing_gi",
+            &m_graphics_quality, "Ray traced indirect diffuse light of the "
+            "track (global illumination with surfels, can be slow)"));
     PARAM_PREFIX BoolUserConfigParam        m_ray_tracing_dynamic_objects
             PARAM_DEFAULT(BoolUserConfigParam(false,
             "ray_tracing_dynamic_objects", &m_graphics_quality,

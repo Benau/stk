@@ -43,6 +43,9 @@ layout (constant_id = 13) const uint u_rt_shadow_type = 0;
 layout (constant_id = 14) const float u_rt_shadow_scale = 1.0;
 // Of lighting_composite.frag, the light shafts (GEVulkanGodRays) are added
 layout (constant_id = 15) const bool u_god_rays = false;
+// Of deferred_pbr.frag, the irradiance of the surfels (GEVulkanSurfelGI) is mixed
+// with the one of the environment map by its coverage
+layout (constant_id = 16) const bool u_surfel_gi = false;
 
 vec3 convertColor(vec3 input_color)
 {

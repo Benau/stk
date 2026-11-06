@@ -13,6 +13,7 @@ class GEVulkanHiZDepth;
 class GEVulkanLightScatter;
 class GEVulkanGodRays;
 class GEVulkanRTShadow;
+class GEVulkanSurfelGI;
 class GEVulkanSSAO;
 
 // Same output as GEVulkanDeferredFBO, but every stage is its own traditional
@@ -97,6 +98,10 @@ private:
     // the g-buffer is valid
     std::unique_ptr<GEVulkanRTShadow> m_rt_shadow;
 
+    // The diffuse global illumination which the lighting pass samples, NULL if
+    // it is not enabled (see isSurfelGI())
+    std::unique_ptr<GEVulkanSurfelGI> m_surfel_gi;
+
     // Same, NULL if bloom is not enabled
     std::unique_ptr<GEVulkanBloom> m_bloom;
 
@@ -168,6 +173,10 @@ public:
     // Same for the ambient occlusion which the lighting pass samples (the
     // fourth binding of GVDFP_HDR)
     bool hasSSAO() const                             { return m_ssao != NULL; }
+    // ------------------------------------------------------------------------
+    // Same for the global illumination which the lighting pass samples (the
+    // sixth binding of GVDFP_HDR)
+    bool hasSurfelGI() const                    { return m_surfel_gi != NULL; }
     // ------------------------------------------------------------------------
     // Size of the ray traced shadow relative to the FBO, 1.0 if there is none
     float getRTShadowScale() const;

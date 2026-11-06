@@ -51,6 +51,18 @@ const uint RT_SHADING_ALPHATEST = 4;
 const uint RT_SHADING_UNLIT = 5;
 const uint RT_SHADING_GRASS = 6;
 const uint RT_VERTEX_WORDS = 8;
+// Same as GERTInstanceMask, the static BLAS and the instances of the dynamic
+// nodes
+const uint RT_MASK_STATIC = 1u;
+const uint RT_MASK_DYNAMIC = 2u;
+// The instances which block the shadow rays, and whether the shadow fades with
+// the view depth (the range of the shadow map), a shader which includes this
+// file can define them before (GEVulkanSurfelGI only sees the static scene,
+// and its surfels are anywhere around the camera)
+#ifndef RT_SHADOW_MASK
+#define RT_SHADOW_MASK 0xFF
+#endif
+
 // Same as GERTGeometry flags
 const uint RT_GEOMETRY_CACHE_VERTEX = 1;
 const uint RT_GEOMETRY_CACHE_INDEX = 2;
@@ -188,12 +200,15 @@ const float RT_SHADOW_FADE_END = 150.0;
 float getSunShadow(vec3 position, vec3 normal, vec3 sun_direction,
                    float view_depth)
 {
+#ifdef RT_SHADOW_NO_FADE
+    view_depth = 0.0;
+#endif
     if (view_depth >= RT_SHADOW_FADE_END)
         return 1.0;
     rayQueryEXT shadow_query;
     rayQueryInitializeEXT(shadow_query, u_tlas,
         gl_RayFlagsTerminateOnFirstHitEXT |
-        gl_RayFlagsCullFrontFacingTrianglesEXT, 0xFF,
+        gl_RayFlagsCullFrontFacingTrianglesEXT, RT_SHADOW_MASK,
         position + normal * RT_RAY_MIN, RT_RAY_MIN, sun_direction,
         RT_SHADOW_MAX);
     RT_PROCEED(shadow_query)
@@ -218,7 +233,7 @@ float getLightShadow(vec3 position, vec3 normal, vec3 light_position,
     rayQueryEXT shadow_query;
     rayQueryInitializeEXT(shadow_query, u_tlas,
         gl_RayFlagsTerminateOnFirstHitEXT |
-        gl_RayFlagsCullFrontFacingTrianglesEXT, 0xFF,
+        gl_RayFlagsCullFrontFacingTrianglesEXT, RT_SHADOW_MASK,
         position + normal * RT_RAY_MIN, RT_RAY_MIN,
         to_light / max(light_distance, 1.0e-4),
         max(light_distance - 0.1, RT_RAY_MIN * 2.0));

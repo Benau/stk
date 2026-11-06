@@ -25,10 +25,12 @@ vec3 gtaoMultiBounce(float visibility, vec3 albedo)
 // 1.0 if there is none. Same as IBL.frag of the OpenGL renderer.
 // rt_shadow is the visibility of the sun of GEVulkanRTShadow, it's only used if
 // the sun is ray traced (u_rt_shadow_type)
+// gi is the irradiance of GEVulkanSurfelGI and its coverage (alpha), it's only
+// used with u_surfel_gi
 vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
                        vec3 eyedir, vec3 normal, float perceptual_roughness,
                        vec4 world_position, float view_depth, float ao,
-                       float rt_shadow)
+                       float rt_shadow, vec4 gi)
 {
     vec3 ao_diffuse = vec3(1.0);
     vec3 ao_specular = vec3(1.0);
@@ -52,6 +54,8 @@ vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
         vec3 world_reflection = (u_camera.m_inverse_view_matrix *
             vec4(reflection, 0.0)).xyz;
         irradiance = texture(u_diffuse, world_normal).rgb;
+        if (u_surfel_gi)
+            irradiance = mix(irradiance, gi.rgb, gi.a);
         radiance = textureLod(u_specular, world_reflection, radiance_level).rgb;
     }
 
@@ -101,7 +105,8 @@ vec3 handlePBR(vec3 diffuse_color, vec3 pbr, vec4 world_position,
     float perceptual_roughness = 1.0 - pbr.x;
 
     vec3 mixed_color = handlePBRDeferred(diffuse_color, pbr, world_normal,
-        eyedir, normal, perceptual_roughness, world_position, xpos.z, 1.0, 1.0);
+        eyedir, normal, perceptual_roughness, world_position, xpos.z, 1.0, 1.0,
+        vec4(0.0));
 
     mixed_color += accumulateLights(u_global_light.m_light_count,
         diffuse_color, normal, xpos, eyedir, perceptual_roughness, pbr.y,

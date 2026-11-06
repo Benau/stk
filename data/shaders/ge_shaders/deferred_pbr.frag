@@ -9,6 +9,9 @@ layout(binding = 3) uniform sampler2D u_ssao_texture;
 // (layer 1 + the index of the light) of GEVulkanRTShadow, used if
 // u_rt_shadow_type has them (a dummy texture is bound if not)
 layout(binding = 4) uniform sampler2DArray u_rt_shadow_texture;
+// Irradiance of GEVulkanSurfelGI (alpha is its coverage), used if u_surfel_gi (a
+// transparent texture is bound if not)
+layout(binding = 5) uniform sampler2D u_surfel_gi_texture;
 // Enables the filter of it in utils/pbr_light.glsl
 #define HAS_RT_SHADOW_TEXTURE
 #define GE_LOAD_GBUFFER(tex) texelFetch(tex, ivec2(gl_FragCoord.xy), 0)
@@ -47,16 +50,19 @@ void main()
     vec3 normal = (u_camera.m_view_matrix * vec4(world_normal, 0.0)).xyz;
     float ao = 1.0;
     float rt_shadow = 1.0;
+    vec4 gi = vec4(0.0);
 #ifdef SPLIT
     if (u_ssao)
         ao = texelFetch(u_ssao_texture, ivec2(gl_FragCoord.xy), 0).x;
+    if (u_surfel_gi)
+        gi = texelFetch(u_surfel_gi_texture, ivec2(gl_FragCoord.xy), 0);
     if ((u_rt_shadow_type & GST_SUN) != 0)
     {
         rt_shadow = sampleRTShadow(xpos, normal, 0);
     }
 #endif
     vec3 hdr = handlePBRDeferred(diffuse_color, pbr, world_normal, eyedir,
-        normal, 1.0 - pbr.x, world_position, xpos.z, ao, rt_shadow);
+        normal, 1.0 - pbr.x, world_position, xpos.z, ao, rt_shadow, gi);
     hdr += accumulateLights(u_push_constants.m_fullscreen_light_count,
         diffuse_color, normal, xpos, eyedir, 1.0 - pbr.x, pbr.y,
         world_position.xyz);

@@ -78,6 +78,16 @@ struct GERTGeometry
     uint32_t m_flags;
 };
 
+// Mask of the instances of the TLAS, the static BLAS and the instances of the
+// dynamic nodes have their own bit, so a ray can see only the static scene
+// (the global illumination of GEVulkanSurfelGI), the other passes use 0xFF.
+// Same as RT_MASK_* of utils/rt_scene.glsl
+enum GERTInstanceMask : uint32_t
+{
+    GRTIM_STATIC = 1,
+    GRTIM_DYNAMIC = 2
+};
+
 enum GERTGeometryFlag : uint32_t
 {
     // The vertices are in the mesh cache of the driver (m_vertex_offset is a
@@ -456,6 +466,9 @@ private:
 
     uint32_t m_triangle_count;
 
+    // Incremented every time the static BLAS is built
+    uint32_t m_build_count;
+
     // ------------------------------------------------------------------------
     // buffer_size is the size of the buffer if it's more than size (the rest is
     // not written)
@@ -593,6 +606,10 @@ public:
     uint32_t getGeometryCount() const              { return m_geometry_count; }
     // ------------------------------------------------------------------------
     uint32_t getTriangleCount() const              { return m_triangle_count; }
+    // ------------------------------------------------------------------------
+    // Changes every time the static BLAS is built (a new track), so what is
+    // attached to the static scene (the surfels) can be reset
+    uint32_t getBuildCount() const                    { return m_build_count; }
 };   // GEVulkanRTScene
 
 }
