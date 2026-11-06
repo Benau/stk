@@ -68,7 +68,9 @@ private:
         uint32_t m_frame;
         uint32_t m_camera_count;
         uint32_t m_reset;
-        uint32_t m_padding;
+        // The env set of the first viewport has the skybox (binding 2), not
+        // the dummy one (no skybox, or it's loading)
+        uint32_t m_has_skybox;
     };
 
     enum BufferIndex : unsigned

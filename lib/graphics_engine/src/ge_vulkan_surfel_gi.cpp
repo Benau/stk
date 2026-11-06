@@ -5,6 +5,7 @@
 #include "ge_vulkan_camera_scene_node.hpp"
 #include "ge_vulkan_draw_call.hpp"
 #include "ge_vulkan_driver.hpp"
+#include "ge_vulkan_environment_map.hpp"
 #include "ge_vulkan_features.hpp"
 #include "ge_vulkan_rt_scene.hpp"
 #include "ge_vulkan_shader_manager.hpp"
@@ -12,6 +13,7 @@
 #include "ge_vulkan_texture_descriptor.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 
@@ -296,15 +298,20 @@ void GEVulkanSurfelGI::createPipelines()
     }
 
     // The trace shades the hits like the reflection, which reads the image
-    // based lighting setting and the number of levels of the specular map
+    // based lighting setting and the number of levels of the specular map, the
+    // same as GEVulkanDrawCall::createPipeline (the environment maps only
+    // exist then). A ray which misses samples the skybox, which doesn't need
+    // them
     struct Constants
     {
         VkBool32 m_ibl;
         float m_specular_levels_minus_one;
     };
     Constants constants = {};
-    constants.m_ibl = getGEConfig()->m_ibl;
-    constants.m_specular_levels_minus_one = 0.0f;
+    constants.m_ibl = getGEConfig()->m_pbr && getGEConfig()->m_ibl &&
+        GEVulkanFeatures::supportsComputeInMainQueue();
+    constants.m_specular_levels_minus_one = std::floor(std::log2(
+        GEVulkanEnvironmentMap::getSpecularEnvironmentMapSize().Width));
     std::array<VkSpecializationMapEntry, 2> entries = {};
     entries[0].constantID = 0;
     entries[0].offset = offsetof(Constants, m_ibl);
@@ -450,11 +457,14 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipeline_layout, 3, 1,
         m_vk->getMeshTextureDescriptor()->getRTDescriptorSet(), 0, NULL);
-    // The light of the hits is the one of the first viewport
+    // The light of the hits and the sky of the misses are the ones of the
+    // first viewport
     GEVulkanDrawCall* first_dc = viewports[0].m_draw_call;
+    const VkDescriptorSet* env = first_dc->getEnvDescriptorSet(m_vk);
+    pc.m_has_skybox =
+        env != m_vk->getSkyBoxRenderer()->getDummyEnvDescriptorSet();
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_pipeline_layout, 4, 1, first_dc->getEnvDescriptorSet(m_vk), 0,
-        NULL);
+        m_pipeline_layout, 4, 1, env, 0, NULL);
     first_dc->bindDataDescriptorSet(m_vk, cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipeline_layout, 1);
     vkCmdPushConstants(cmd, m_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,

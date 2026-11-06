@@ -38,7 +38,8 @@ layout(push_constant) uniform SurfelPushConstants
     uint m_camera_count;
     // The pool is cleared (surfel_gi_clear.comp)
     uint m_reset;
-    uint m_padding;
+    // The env set (surfel_gi_trace.comp) has the skybox, not the dummy one
+    uint m_has_skybox;
 } pc;
 
 // Same as Surfel of GEVulkanSurfelGI (std430, 48 bytes), a free surfel has a

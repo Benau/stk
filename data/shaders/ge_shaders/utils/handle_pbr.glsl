@@ -47,17 +47,18 @@ vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
     float radiance_level = perceptual_roughness * u_specular_levels_minus_one;
     vec3 reflection = reflect(-eyedir, normal);
 
-    vec3 irradiance = vec3(0.0);
+    vec3 irradiance = getAmbientIrradiance();
     vec3 radiance = vec3(0.0);
     if (u_ibl)
     {
         vec3 world_reflection = (u_camera.m_inverse_view_matrix *
             vec4(reflection, 0.0)).xyz;
         irradiance = texture(u_diffuse, world_normal).rgb;
-        if (u_surfel_gi)
-            irradiance = mix(irradiance, gi.rgb, gi.a);
         radiance = textureLod(u_specular, world_reflection, radiance_level).rgb;
     }
+    // With or without image based lighting
+    if (u_surfel_gi)
+        irradiance = mix(irradiance, gi.rgb, gi.a);
 
     vec3 lightdir = sunDirection(reflection,
         u_global_light.m_sun_direction, u_global_light.m_sun_angle_tan_half,

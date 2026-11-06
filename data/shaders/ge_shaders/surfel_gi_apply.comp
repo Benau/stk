@@ -5,6 +5,14 @@
 // pass mixes it with the irradiance of the environment by it). A surfel which
 // is used is kept alive.
 //
+// A pixel which they don't cover enough (a kart, or a hole between them) gets
+// the irradiance of the surfels around it too: the ones of the 8 cells nearest
+// to it which it is in front of, like an irradiance probe made of them (a kart
+// in a room is lit by the surfels of its floor and its walls, not by the sky).
+// The ones which face the same way weigh the most, but all of them weigh some,
+// so a side which no surfel faces still gets the color of the room. It doesn't
+// keep them alive or stop a spawn.
+//
 // Every 8x8 group spawns a surfel at its least covered pixel if the surfels
 // don't cover it enough, only on the static scene: the ray from the camera to
 // the pixel must hit the static BLAS there (a kart or anything moving is not
@@ -60,6 +68,46 @@ bool isStaticSurface(vec3 camera, vec3 position)
         return false;
     float hit = rayQueryGetIntersectionTEXT(ray_query, true);
     return abs(hit - position_distance) < position_distance * 0.02 + 0.05;
+}
+
+// The irradiance of the surfels around a pixel which they don't cover (alpha is
+// how much of it there is), see above. A surfel which touches several of the
+// cells is in each of them, that only weights it more.
+vec4 getNearbyIrradiance(vec3 position, vec3 normal, float camera_distance)
+{
+    uint level = getSurfelLevel(camera_distance);
+    float cell_size = getSurfelCellSize(level);
+    // The 2x2x2 cells nearest to the position, so it's at least half a cell
+    // from the side of them
+    ivec3 first = ivec3(floor(position / cell_size - 0.5));
+    vec3 irradiance = vec3(0.0);
+    float weight_sum = 0.0;
+    for (int i = 0; i < 8; i++)
+    {
+        uint cell = getSurfelCell(first + ivec3(i & 1, (i >> 1) & 1, i >> 2),
+            level);
+        uint count = min(u_cell_count[cell], SURFEL_CELL_CAPACITY);
+        for (uint j = 0u; j < count; j++)
+        {
+            Surfel surfel = u_surfels[
+                u_cell_surfels[cell * SURFEL_CELL_CAPACITY + j]];
+            vec3 offset = position - surfel.m_position;
+            float offset_distance = length(offset);
+            // Behind it is the other side of its wall
+            if (offset_distance >= cell_size ||
+                dot(offset, surfel.m_normal) < -0.05 * cell_size)
+                continue;
+            float facing = 0.5 + 0.5 * dot(normal, surfel.m_normal);
+            float falloff = 1.0 - offset_distance / cell_size;
+            float weight = falloff * falloff * facing * facing *
+                min(surfel.m_samples / 8.0, 1.0);
+            irradiance += surfel.m_irradiance * weight;
+            weight_sum += weight;
+        }
+    }
+    if (weight_sum == 0.0)
+        return vec4(0.0);
+    return vec4(irradiance / weight_sum, clamp(weight_sum, 0.0, 1.0));
 }
 
 void main()
@@ -123,6 +171,14 @@ void main()
         {
             gi = vec4(irradiance / weight_sum,
                 clamp(weight_sum * 2.0, 0.0, 1.0));
+        }
+        if (depth != 0.0 && gi.a < 1.0)
+        {
+            vec4 nearby = getNearbyIrradiance(world_position, world_normal,
+                camera_distance);
+            // The surfels on the surface first
+            gi = vec4(mix(nearby.rgb, gi.rgb, gi.a),
+                max(gi.a, nearby.a));
         }
         imageStore(u_out, pixel, gi);
     }

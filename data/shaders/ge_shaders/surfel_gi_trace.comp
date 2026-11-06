@@ -5,9 +5,13 @@
 // shadow ray of the static scene and the ambient of the environment, which
 // stands for the next bounces), a ray which hits the back of a triangle is
 // inside of a mesh and sees nothing, and a ray which hits nothing sees the
-// diffuse environment map (the sky blurred like the irradiance it is compared
-// with). The mean of the rays is added to the running mean of the irradiance
-// of the surfel.
+// skybox (the cosine weighted rays average it like the diffuse environment map
+// does, so it doesn't need image based lighting). The mean of the rays is added
+// to the running mean of the irradiance of the surfel.
+//
+// Only what doesn't move lights the surfels, so they can be cached: the static
+// scene, the sun and the sky (the dynamic nodes are not in RT_MASK_STATIC, and
+// shadeHit has no point light).
 //
 // Set 0 is the one of GEVulkanRTScene, set 1 the camera and the global light
 // (of the first viewport), set 2 the surfels, set 3 the mesh textures and set 4
@@ -23,6 +27,9 @@ layout(local_size_x = 64) in;
 
 layout(set = 4, binding = 0) uniform samplerCube u_diffuse;
 layout(set = 4, binding = 1) uniform samplerCube u_specular;
+// The sRGB view of the skybox (the env set of a deferred draw call), so it's
+// linear
+layout(set = 4, binding = 2) uniform samplerCube u_skybox;
 // Only to share pbr_light.glsl, the shadow of a hit is a ray
 layout(set = 4, binding = 3) uniform sampler2DArrayShadow u_shadow_map;
 
@@ -39,12 +46,13 @@ layout(set = 4, binding = 3) uniform sampler2DArrayShadow u_shadow_map;
 #include "utils/rt_reflection.glsl"
 #include "utils/surfel_gi.glsl"
 
-// The radiance of a ray which hits nothing
+// The radiance of a ray which hits nothing, without a skybox it's the ambient
+// which the lighting pass uses without image based lighting
 vec3 getSkyRadiance(vec3 direction)
 {
-    if (u_ibl)
-        return texture(u_diffuse, direction).rgb;
-    return u_global_light.m_skytop_color * u_global_light.m_ambient_color;
+    if (pc.m_has_skybox != 0u)
+        return texture(u_skybox, direction).rgb;
+    return getAmbientIrradiance();
 }
 
 vec3 traceSurfelRay(vec3 origin, vec3 direction)

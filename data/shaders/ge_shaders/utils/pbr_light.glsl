@@ -34,6 +34,15 @@ vec3 PBRLight(
     return NdotL * (diffuse + specular);
 }
 
+// The irradiance of the environment without image based lighting (the sky top
+// color, PBRSunAmbientEmitLight scales the ambient by 0.4 too)
+vec3 getAmbientIrradiance()
+{
+    return u_global_light.m_skytop_color * u_global_light.m_ambient_color * 0.4;
+}
+
+// irradiance is the one of the diffuse environment map with image based
+// lighting, getAmbientIrradiance() (or the global illumination) without it
 vec3 PBRSunAmbientEmitLight(
     vec3 normal,
     vec3 eyedir,
@@ -92,8 +101,8 @@ vec3 PBRSunAmbientEmitLight(
     }
     else
     {
-        environment = u_global_light.m_skytop_color * ambient_color *
-            diffuse_color * ao_diffuse;
+        // getAmbientIrradiance() or the global illumination of the surfels
+        environment = irradiance * diffuse_color * ao_diffuse;
     }
 
     vec3 emit = emissive * color * 4.0;

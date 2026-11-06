@@ -224,7 +224,7 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
     }
 
     // Same as handlePBRDeferred, in world space (no sun disk, no ssao)
-    vec3 irradiance = vec3(0.0);
+    vec3 irradiance = getAmbientIrradiance();
     vec3 radiance = vec3(0.0);
     if (u_ibl)
     {
