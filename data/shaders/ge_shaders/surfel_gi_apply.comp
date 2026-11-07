@@ -53,21 +53,37 @@ const float SURFEL_SPAWN_CHANCE = 0.25;
 shared uint s_spawn;
 
 // Whether the surface at the end of the ray from the camera is in the static
-// scene
+// scene, and the camera is not inside of a mesh of it: then the g-buffer has
+// what is behind the faces around it (their back is culled), and a surfel there
+// would be inside of the mesh too, so all its rays see the back of a triangle
+// and it's black. The ray from the camera must not cross the back of a triangle
+// before the surface (or at it, the mesh can touch the surface)
 bool isStaticSurface(vec3 camera, vec3 position)
 {
     vec3 to_position = position - camera;
     float position_distance = length(to_position);
+    vec3 direction = to_position / position_distance;
+    float ray_max = position_distance * 1.02 + 0.1;
     rayQueryEXT ray_query;
     rayQueryInitializeEXT(ray_query, u_tlas, gl_RayFlagsNoneEXT,
-        RT_MASK_STATIC, camera, 0.0, to_position / position_distance,
-        position_distance * 1.02 + 0.1);
+        RT_MASK_STATIC, camera, 0.0, direction, ray_max);
     RT_PROCEED(ray_query)
     if (rayQueryGetIntersectionTypeEXT(ray_query, true) ==
-        gl_RayQueryCommittedIntersectionNoneEXT)
+        gl_RayQueryCommittedIntersectionNoneEXT ||
+        !rayQueryGetIntersectionFrontFaceEXT(ray_query, true))
         return false;
     float hit = rayQueryGetIntersectionTEXT(ray_query, true);
-    return abs(hit - position_distance) < position_distance * 0.02 + 0.05;
+    if (abs(hit - position_distance) >= position_distance * 0.02 + 0.05)
+        return false;
+
+    rayQueryEXT back_query;
+    rayQueryInitializeEXT(back_query, u_tlas,
+        gl_RayFlagsTerminateOnFirstHitEXT |
+        gl_RayFlagsCullFrontFacingTrianglesEXT, RT_MASK_STATIC, camera, 0.0,
+        direction, ray_max);
+    RT_PROCEED(back_query)
+    return rayQueryGetIntersectionTypeEXT(back_query, true) ==
+        gl_RayQueryCommittedIntersectionNoneEXT;
 }
 
 // The irradiance of the surfels around a pixel which they don't cover (alpha is

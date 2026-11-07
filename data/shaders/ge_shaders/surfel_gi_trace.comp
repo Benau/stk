@@ -55,7 +55,8 @@ vec3 getSkyRadiance(vec3 direction)
     return getAmbientIrradiance();
 }
 
-vec3 traceSurfelRay(vec3 origin, vec3 direction)
+// back_face is set if the ray hits the back of a triangle
+vec3 traceSurfelRay(vec3 origin, vec3 direction, inout bool back_face)
 {
     rayQueryEXT ray_query;
     rayQueryInitializeEXT(ray_query, u_tlas, gl_RayFlagsNoneEXT,
@@ -65,7 +66,10 @@ vec3 traceSurfelRay(vec3 origin, vec3 direction)
         gl_RayQueryCommittedIntersectionNoneEXT)
         return getSkyRadiance(direction);
     if (!rayQueryGetIntersectionFrontFaceEXT(ray_query, true))
+    {
+        back_face = true;
         return vec3(0.0);
+    }
     uint geometry_index =
         uint(rayQueryGetIntersectionInstanceCustomIndexEXT(ray_query, true)) +
         uint(rayQueryGetIntersectionGeometryIndexEXT(ray_query, true));
@@ -92,6 +96,7 @@ void main()
 
     uint seed = id * 9781u + pc.m_frame * 6271u;
     vec3 radiance = vec3(0.0);
+    uint back_faces = 0u;
     for (uint i = 0u; i < SURFEL_RAYS; i++)
     {
         // Cosine weighted, so the mean of the radiance is the irradiance
@@ -102,7 +107,21 @@ void main()
         float phi = 6.28318530718 * v;
         vec3 direction = normalize(tangent * (r * cos(phi)) +
             bitangent * (r * sin(phi)) + normal * sqrt(max(1.0 - u, 0.0)));
-        radiance += traceSurfelRay(origin, direction);
+        bool back_face = false;
+        radiance += traceSurfelRay(origin, direction, back_face);
+        if (back_face)
+            back_faces++;
+    }
+    // Every ray is inside of a mesh, so is the surfel (it was spawned from a
+    // camera inside of it, or the mesh is open): it's free again, a surfel
+    // outside of it sees at least one ray out of it almost always
+    if (back_faces == SURFEL_RAYS)
+    {
+        u_surfels[id].m_radius = 0.0;
+        u_surfels[id].m_samples = 0.0;
+        int at = atomicAdd(u_pool.m_free_count, 1);
+        u_pool.m_free[at] = id;
+        return;
     }
     radiance *= 1.0 / float(SURFEL_RAYS);
     // A few very bright hits (emissive, the sun on a glossy surface) would
