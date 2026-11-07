@@ -1,22 +1,26 @@
 // Last pass of GEVulkanSurfelGI (see utils/surfel_gi.glsl), one thread per
 // pixel of the viewport of a camera: the irradiance of the surface of the pixel
-// is the weighted mean of the surfels which touch it, in the 2x2x2 cells nearest
-// to it (by the distance to their center and the normal), its alpha is how much they cover it (the lighting
-// pass mixes it with the irradiance of the environment by it). A surfel which
-// is used is kept alive.
+// is the weighted mean of the surfels which touch it, in the 2x2x2 cells
+// nearest to it (by the distance to their center and the normal), its alpha is
+// how much they cover it (the lighting pass mixes it with the irradiance of the
+// environment by it). A surfel which is used is kept alive.
 //
 // A pixel which they don't cover enough (a kart, or a hole between them) gets
-// the irradiance of the surfels around it too: the ones of the same cells which
-// it is in front of, like an irradiance probe made of them (a kart
-// in a room is lit by the surfels of its floor and its walls, not by the sky).
-// The ones which face the same way weigh the most, but all of them weigh some,
-// so a side which no surfel faces still gets the color of the room. It doesn't
-// keep them alive or stop a spawn.
+// the irradiance of the surfels within a cell around it too, the ones which it
+// is in front of, like an irradiance probe made of them (a kart in a room is
+// lit by the surfels of its floor and its walls, not by the sky). They are in
+// the 3x3x3 cells around the cell of the pixel: the 2x2x2 nearest cells only
+// have all the surfels within half a cell, a farther one would be in them on
+// one side of the border of a cell and not on the other, which is a seam on
+// the kart, and half a cell is too short (the ground under a kart is hidden,
+// it has no surfels). The ones which face the same way weigh the most, but all
+// of them weigh some, so a side which no surfel faces still gets the color of
+// the room. It doesn't keep them alive or stop a spawn.
 //
 // Every 8x8 group spawns a surfel at its least covered pixel if the surfels
-// don't cover it enough and its cell is not full, only on the static scene: the ray from the camera to
-// the pixel must hit the static BLAS there (a kart or anything moving is not
-// static, and the surfels never move).
+// don't cover it enough and its cell is not full, only on the static scene: the
+// ray from the camera to the pixel must hit the static BLAS there (a kart or
+// anything moving is not static, and the surfels never move).
 //
 // Set 0 is the one of GEVulkanRTScene, set 1 the camera and the global light
 // of the viewport, set 2 the g-buffer, the output and the surfels, and set 3
@@ -86,6 +90,44 @@ bool isStaticSurface(vec3 camera, vec3 position)
         gl_RayQueryCommittedIntersectionNoneEXT;
 }
 
+// The irradiance of the surfels within a cell of a pixel which they don't
+// cover (alpha is how much of it there is), see above
+vec4 getNearbyIrradiance(vec3 position, vec3 normal, float camera_distance)
+{
+    uint level = getSurfelLevel(camera_distance);
+    float cell_size = getSurfelCellSize(level);
+    ivec3 center = ivec3(floor(position / cell_size));
+    vec3 irradiance = vec3(0.0);
+    float weight_sum = 0.0;
+    for (int c = 0; c < 27; c++)
+    {
+        uint cell = getSurfelCell(center + ivec3(c % 3, (c / 3) % 3, c / 9) -
+            1, level);
+        uint count = min(u_cell_count[cell], SURFEL_CELL_CAPACITY);
+        for (uint i = 0u; i < count; i++)
+        {
+            Surfel surfel =
+                u_surfels[u_cell_surfels[cell * SURFEL_CELL_CAPACITY + i]];
+            vec3 offset = position - surfel.m_position;
+            float offset_distance = length(offset);
+            // Behind it is the other side of its wall
+            if (offset_distance >= cell_size ||
+                dot(offset, surfel.m_normal) < -0.05 * cell_size)
+                continue;
+            float facing = 0.5 + 0.5 * dot(normal, surfel.m_normal);
+            float falloff = 1.0 - offset_distance / cell_size;
+            // A new surfel has a noisy mean
+            float weight = falloff * falloff * facing * facing *
+                min(surfel.m_samples / 8.0, 1.0);
+            irradiance += surfel.m_irradiance * weight;
+            weight_sum += weight;
+        }
+    }
+    if (weight_sum == 0.0)
+        return vec4(0.0);
+    return vec4(irradiance / weight_sum, clamp(weight_sum, 0.0, 1.0));
+}
+
 void main()
 {
     if (gl_LocalInvocationIndex == 0u)
@@ -104,8 +146,6 @@ void main()
     vec3 irradiance = vec3(0.0);
     float weight_sum = 0.0;
     float coverage = 0.0;
-    vec3 nearby_irradiance = vec3(0.0);
-    float nearby_weight = 0.0;
     bool cell_full = false;
     // Reverse z, 0 is the sky
     if (depth != 0.0)
@@ -134,20 +174,6 @@ void main()
                 vec3 offset = world_position - surfel.m_position;
                 float offset_distance = length(offset);
                 float plane_distance = dot(offset, surfel.m_normal);
-                // A new surfel has a noisy mean
-                float confidence = min(surfel.m_samples / 8.0, 1.0);
-                // Nearby, behind it is the other side of its wall
-                if (offset_distance < cell_size &&
-                    plane_distance >= -0.05 * cell_size)
-                {
-                    float facing = 0.5 + 0.5 * dot(world_normal,
-                        surfel.m_normal);
-                    float falloff = 1.0 - offset_distance / cell_size;
-                    float weight = falloff * falloff * facing * facing *
-                        confidence;
-                    nearby_irradiance += surfel.m_irradiance * weight;
-                    nearby_weight += weight;
-                }
                 if (offset_distance >= surfel.m_radius)
                     continue;
                 float facing = dot(world_normal, surfel.m_normal);
@@ -158,6 +184,8 @@ void main()
                 float falloff = 1.0 - offset_distance / surfel.m_radius;
                 float weight = falloff * falloff * facing;
                 coverage += weight;
+                // A new surfel has a noisy mean
+                float confidence = min(surfel.m_samples / 8.0, 1.0);
                 irradiance += surfel.m_irradiance * (weight * confidence);
                 weight_sum += weight * confidence;
                 u_surfels[id].m_last_seen = pc.m_frame;
@@ -172,11 +200,13 @@ void main()
             gi = vec4(irradiance / weight_sum,
                 clamp(weight_sum * 2.0, 0.0, 1.0));
         }
-        if (gi.a < 1.0 && nearby_weight > 0.0)
+        if (depth != 0.0 && gi.a < 1.0)
         {
+            vec4 nearby = getNearbyIrradiance(world_position, world_normal,
+                camera_distance);
             // The surfels on the surface first
-            gi = vec4(mix(nearby_irradiance / nearby_weight, gi.rgb, gi.a),
-                max(gi.a, clamp(nearby_weight, 0.0, 1.0)));
+            if (nearby.a > 0.0)
+                gi = vec4(mix(nearby.rgb, gi.rgb, gi.a), max(gi.a, nearby.a));
         }
         imageStore(u_out, pixel, gi);
     }
