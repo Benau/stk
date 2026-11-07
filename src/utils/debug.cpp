@@ -107,6 +107,7 @@ enum DebugMenuCommand
     DEBUG_FONT_RELOAD,
     DEBUG_GE_PBR,
     DEBUG_GE_IBL,
+    DEBUG_GE_GI,
     DEBUG_GE_SR,
     DEBUG_GE_DR,
     DEBUG_GE_RT,
@@ -414,6 +415,23 @@ bool handleContextMenuAction(s32 cmd_id)
             GE::getGEConfig()->m_ibl = !UserConfigParams::m_degraded_IBL;
             vk->updateDriver(false/*scale_changed*/, false/*pbr_changed*/,
                 true/*ibl_changed*/);
+        }
+        break;
+    }
+#endif
+    case DEBUG_GE_GI:
+#ifndef SERVER_ONLY
+    {
+        GE::GEVulkanDriver* vk = GE::getVKDriver();
+        if (vk)
+        {
+            // Same as the ray tracing settings: the global illumination is a
+            // pass of the render target, which is created again
+            UserConfigParams::m_ray_tracing_gi =
+                !UserConfigParams::m_ray_tracing_gi;
+            GE::getGEConfig()->m_ray_tracing.m_gi =
+                UserConfigParams::m_ray_tracing_gi;
+            vk->updateDriver(true/*scale_changed*/);
         }
         break;
     }
@@ -1382,6 +1400,7 @@ bool onEvent(const SEvent &event)
             sub = mnu->getSubMenu(7);
             sub->addItem(L"Toggle GE PBR", DEBUG_GE_PBR);
             sub->addItem(L"Toggle GE IBL", DEBUG_GE_IBL);
+            sub->addItem(L"Toggle GE global illumination", DEBUG_GE_GI);
             sub->addItem(L"Toggle GE Solid Reflection", DEBUG_GE_SR);
             sub->addItem(L"Toggle GE Displace Reflection", DEBUG_GE_DR);
             sub->addItem(L"Ray tracing settings...", DEBUG_GE_RT);
