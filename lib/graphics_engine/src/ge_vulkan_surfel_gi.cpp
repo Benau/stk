@@ -45,9 +45,9 @@ GEVulkanSurfelGI::GEVulkanSurfelGI(GEVulkanDriver* vk,
                 : GEVulkanPostProcessing(vk, size), m_buffers(), m_gi(NULL),
                   m_layout(VK_NULL_HANDLE), m_pool(VK_NULL_HANDLE),
                   m_set(VK_NULL_HANDLE), m_data_layout(VK_NULL_HANDLE),
-                  m_pipeline_layout(VK_NULL_HANDLE), m_pipelines(),
-                  m_frame(0), m_rt_build_count(0), m_needs_reset(true),
-                  m_cleared(false)
+                  m_pipeline_layout(VK_NULL_HANDLE), m_ibl(false),
+                  m_pipelines(), m_frame(0), m_rt_build_count(0),
+                  m_needs_reset(true), m_cleared(false)
 {
     for (Buffer& b : m_buffers)
     {
@@ -265,6 +265,13 @@ void GEVulkanSurfelGI::createPipeline(const char* shader, VkPipeline* pipeline,
 }   // createPipeline
 
 // ----------------------------------------------------------------------------
+bool GEVulkanSurfelGI::isIBL()
+{
+    return getGEConfig()->m_pbr && getGEConfig()->m_ibl &&
+        GEVulkanFeatures::supportsComputeInMainQueue();
+}   // isIBL
+
+// ----------------------------------------------------------------------------
 void GEVulkanSurfelGI::createPipelines()
 {
     if (m_data_layout == VK_NULL_HANDLE)
@@ -308,8 +315,8 @@ void GEVulkanSurfelGI::createPipelines()
         float m_specular_levels_minus_one;
     };
     Constants constants = {};
-    constants.m_ibl = getGEConfig()->m_pbr && getGEConfig()->m_ibl &&
-        GEVulkanFeatures::supportsComputeInMainQueue();
+    m_ibl = isIBL();
+    constants.m_ibl = m_ibl;
     constants.m_specular_levels_minus_one = std::floor(std::log2(
         GEVulkanEnvironmentMap::getSpecularEnvironmentMapSize().Width));
     std::array<VkSpecializationMapEntry, 2> entries = {};
@@ -388,6 +395,15 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
     {
         m_vk->waitIdle();
         destroyPipelines();
+    }
+    // Image based lighting was toggled: the trace has its specialization
+    // constant, and the irradiance of the surfels was traced with the other
+    // ambient
+    if (m_pipeline_layout != VK_NULL_HANDLE && m_ibl != isIBL())
+    {
+        m_vk->waitIdle();
+        destroyPipelines();
+        m_needs_reset = true;
     }
     if (m_pipeline_layout == VK_NULL_HANDLE)
     {

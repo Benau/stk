@@ -119,6 +119,11 @@ private:
     // pipelines are created again then
     std::weak_ptr<VkDescriptorSetLayout> m_mesh_texture_layout;
 
+    // u_ibl of the trace (isIBL()) when the pipelines were created, they are
+    // created again if it changes (GEVulkanDriver::updateDriver doesn't create
+    // this again when only image based lighting is toggled)
+    bool m_ibl;
+
     enum PipelineIndex : unsigned
     {
         PI_CLEAR = 0,
@@ -150,6 +155,10 @@ private:
                            GEVulkanAttachmentTexture* normal);
     // ------------------------------------------------------------------------
     void createPipelines();
+    // ------------------------------------------------------------------------
+    // Same as u_ibl of GEVulkanDrawCall::createPipeline, the environment maps
+    // only exist then
+    static bool isIBL();
     // ------------------------------------------------------------------------
     void destroyPipelines();
     // ------------------------------------------------------------------------
