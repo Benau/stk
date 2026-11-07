@@ -69,8 +69,9 @@ layout(std430, set = SURFEL_SET, binding = 4) buffer SurfelPool
     uint m_free[];
 } u_pool;
 
-// Number of surfels in every cell of the grid of the frame (it can be more than
-// SURFEL_CELL_CAPACITY, the others are not in the cell then)
+// Number of surfels in every cell of the grid of the frame, a surfel is in the
+// cell of its center (it can be more than SURFEL_CELL_CAPACITY, the others are
+// not in the cell then, and no surfel spawns in it)
 layout(std430, set = SURFEL_SET, binding = 5) buffer SurfelCellCount
 {
     uint u_cell_count[];
@@ -84,13 +85,13 @@ layout(std430, set = SURFEL_SET, binding = 6) buffer SurfelCellSurfels
 
 const uint SURFEL_MAX = 32768u;
 const uint SURFEL_CELL_COUNT = 65536u;
-const uint SURFEL_CELL_CAPACITY = 32u;
+const uint SURFEL_CELL_CAPACITY = 64u;
 // Rays of a surfel in a frame and the samples of the mean of the irradiance:
 // the irradiance follows a change of the lighting in about 64 frames
 const uint SURFEL_RAYS = 4u;
 const float SURFEL_MAX_SAMPLES = 64.0;
 // Frames a surfel which no pixel uses is kept
-const uint SURFEL_MAX_LIFE = 600u;
+const uint SURFEL_MAX_LIFE = 300u;
 // A surfel farther than it from all the cameras is recycled
 const float SURFEL_MAX_DISTANCE = 1000.0;
 // The cells of the first level are SURFEL_CELL_SIZE wide, up to
@@ -120,8 +121,8 @@ float getSurfelCellSize(uint level)
     return SURFEL_CELL_SIZE * exp2(float(level));
 }
 
-// At most half a cell of its level, so a surfel touches at most 2 cells per
-// axis of its own level
+// At most half a cell of its level, so the 2x2x2 cells nearest to a position
+// (getSurfelNearestCells) have the centers of the surfels which touch it
 float getSurfelRadius(float camera_distance)
 {
     float radius = max(camera_distance, SURFEL_LEVEL_DISTANCE) *
@@ -147,6 +148,13 @@ uint getSurfelCell(vec3 position, uint level)
 {
     return getSurfelCell(ivec3(floor(position / getSurfelCellSize(level))),
         level);
+}
+
+// The first of the 2x2x2 cells of a level nearest to a position (it's at least
+// half a cell from their sides)
+ivec3 getSurfelNearestCells(vec3 position, float cell_size)
+{
+    return ivec3(floor(position / cell_size - 0.5));
 }
 
 // A random number in [0, 1) of a seed

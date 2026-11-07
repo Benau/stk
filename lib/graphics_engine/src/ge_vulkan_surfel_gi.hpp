@@ -45,7 +45,7 @@ public:
     {
         MAX_SURFELS = 32768,
         CELL_COUNT = 65536,
-        CELL_CAPACITY = 32
+        CELL_CAPACITY = 64
     };
 private:
     // Same as Surfel of utils/surfel_gi.glsl (std430)
