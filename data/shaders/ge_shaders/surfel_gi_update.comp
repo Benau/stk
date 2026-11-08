@@ -1,11 +1,13 @@
 // Second pass of GEVulkanSurfelGI (see utils/surfel_gi.glsl), one thread per
-// surfel of the pool: a surfel which no pixel used for SURFEL_MAX_LIFE ms,
-// or which is too far from the cameras, is free again. The others get the
-// radius of their distance to the cameras and are added to the cell of their
-// center in the levels which the pixels around them can look in: the level of a
-// pixel is the one of its distance, which is the distance of the surfel plus or
-// minus the radius at most. A pixel looks in the 2x2x2 cells nearest to it, the
-// radius is at most half a cell so they have every surfel which touches it
+// surfel of the pool: a surfel which no pixel used for its life (from
+// SURFEL_MAX_LIFE ms down to SURFEL_MIN_LIFE ms when the pool is almost
+// empty), or which is too far from the cameras, is free again. The others get
+// the radius of their distance to the cameras and are added to the cell of
+// their center in the levels which the pixels around them can look in: the
+// level of a pixel is the one of its distance, which is the distance of the
+// surfel plus or minus the radius at most. A pixel looks in the 2x2x2 cells
+// nearest to it, the radius is at most half a cell so they have every surfel
+// which touches it
 layout(local_size_x = 64) in;
 
 #define SURFEL_SET 2
@@ -18,7 +20,14 @@ void main()
         return;
     vec3 position = u_surfels[id].m_position;
     float camera_distance = getSurfelCameraDistance(position);
-    if (pc.m_time - u_surfels[id].m_last_seen > SURFEL_MAX_LIFE ||
+    // The free count grows while this pass frees surfels, so the threads
+    // which read it later keep more of theirs: it stops when there is enough
+    // room again
+    float room = clamp(float(u_pool.m_free_count) / float(SURFEL_LOW_POOL),
+        0.0, 1.0);
+    uint life = uint(mix(float(SURFEL_MIN_LIFE), float(SURFEL_MAX_LIFE),
+        room));
+    if (pc.m_time - u_surfels[id].m_last_seen > life ||
         camera_distance > SURFEL_MAX_DISTANCE)
     {
         u_surfels[id].m_radius = 0.0;

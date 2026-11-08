@@ -90,6 +90,13 @@ layout(std430, set = SURFEL_SET, binding = 6) buffer SurfelCellSurfels
     uint u_cell_surfels[];
 };
 
+// Number of surfels spawned in every cell in this frame (cleared with the
+// cells), see trySpawnSurfelInCell()
+layout(std430, set = SURFEL_SET, binding = 7) buffer SurfelCellSpawns
+{
+    uint u_cell_spawns[];
+};
+
 const uint SURFEL_MAX = 32768u;
 const uint SURFEL_CELL_COUNT = 65536u;
 const uint SURFEL_CELL_CAPACITY = 64u;
@@ -104,8 +111,15 @@ const float SURFEL_MAX_SAMPLES = 64.0;
 // Steps of samples a surfel needs to count fully, a new surfel has a noisy
 // mean
 const float SURFEL_CONFIDENT_SAMPLES = 8.0;
-// Milliseconds a surfel which no pixel uses is kept
+// Milliseconds a surfel which no pixel uses is kept, when the pool has enough
+// free surfels (SURFEL_LOW_POOL or more)
 const uint SURFEL_MAX_LIFE = 5000u;
+// With fewer free surfels than SURFEL_LOW_POOL the life is shorter, down to
+// SURFEL_MIN_LIFE when the pool is empty: the surfels which nothing used for
+// the longest are recycled first, so a fast camera which keeps seeing new
+// surfaces (a tunnel after a valley) doesn't wait for the old ones to expire
+const uint SURFEL_MIN_LIFE = 500u;
+const int SURFEL_LOW_POOL = 8192;
 // A surfel farther than it from all the cameras is recycled
 const float SURFEL_MAX_DISTANCE = 1000.0;
 // The cells of the first level are SURFEL_CELL_SIZE wide, up to
@@ -169,6 +183,18 @@ uint getSurfelCell(vec3 position, uint level)
 ivec3 getSurfelNearestCells(vec3 position, float cell_size)
 {
     return ivec3(floor(position / cell_size - 0.5));
+}
+
+// The new surfels of a frame are only in the grid in the next one, so every
+// group of pixels which sees an empty cell would spawn in it in the same
+// frame: a cell gets at most SURFEL_CELL_CAPACITY surfels with the ones
+// spawned in this frame. Returns false if it's full
+bool trySpawnSurfelInCell(uint cell)
+{
+    if (u_cell_count[cell] >= SURFEL_CELL_CAPACITY)
+        return false;
+    uint spawned = atomicAdd(u_cell_spawns[cell], 1u);
+    return u_cell_count[cell] + spawned < SURFEL_CELL_CAPACITY;
 }
 
 // A random number in [0, 1) of a seed

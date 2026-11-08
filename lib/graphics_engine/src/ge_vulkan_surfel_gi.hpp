@@ -87,6 +87,8 @@ private:
         // The number of surfels of every cell, and their indices
         BI_CELL_COUNT,
         BI_CELL_SURFEL,
+        // The number of surfels spawned in every cell in the frame
+        BI_CELL_SPAWN,
         BI_COUNT
     };
 
@@ -102,7 +104,7 @@ private:
     GEVulkanAttachmentTexture* m_gi;
 
     // Binding 0 is the depth and 1 is the normal of the g-buffer (combined
-    // image samplers), 2 is the output, 3 to 6 the buffers
+    // image samplers), 2 is the output, 3 to 7 the buffers
     VkDescriptorSetLayout m_layout;
 
     VkDescriptorPool m_pool;

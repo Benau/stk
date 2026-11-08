@@ -139,7 +139,8 @@ void GEVulkanSurfelGI::createBuffers()
         sizeof(Surfel) * MAX_SURFELS,
         sizeof(int32_t) + sizeof(uint32_t) * MAX_SURFELS,
         sizeof(uint32_t) * CELL_COUNT,
-        sizeof(uint32_t) * CELL_COUNT * CELL_CAPACITY
+        sizeof(uint32_t) * CELL_COUNT * CELL_CAPACITY,
+        sizeof(uint32_t) * CELL_COUNT
     }};
     for (unsigned i = 0; i < BI_COUNT; i++)
     {

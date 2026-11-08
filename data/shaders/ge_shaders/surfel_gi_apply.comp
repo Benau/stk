@@ -18,7 +18,8 @@
 // the room. It doesn't keep them alive or stop a spawn.
 //
 // Every 8x8 group spawns a surfel at its least covered pixel if the surfels
-// don't cover it enough and its cell is not full, only on the static scene: the
+// don't cover it enough and its cell is not full (with the surfels spawned in
+// this frame), only on the static scene: the
 // ray from the camera to the pixel must hit the static BLAS there (a kart or
 // anything moving is not static, and the surfels never move).
 //
@@ -228,8 +229,11 @@ void main()
     if (getSurfelRandom(seed) >=
         1.0 - pow(1.0 - SURFEL_SPAWN_CHANCE, pc.m_steps))
         return;
+    if (u_pool.m_free_count <= 0)
+        return;
     if (!isStaticSurface(u_camera.m_inverse_view_matrix[3].xyz,
-        world_position))
+        world_position) || !trySpawnSurfelInCell(getSurfelCell(world_position,
+        getSurfelLevel(camera_distance))))
         return;
     int free_count = atomicAdd(u_pool.m_free_count, -1);
     if (free_count <= 0)
