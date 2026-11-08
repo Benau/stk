@@ -15,11 +15,11 @@ void main()
         u_cell_count[i] = 0u;
         u_cell_spawns[i] = 0u;
     }
-    if (pc.m_reset == 0u || i >= SURFEL_MAX)
+    if (pc.m_reset == 0u || i >= pc.m_surfel_count)
         return;
     u_surfels[i].m_radius = 0.0;
     // Popped from the end, so the first surfels are used first
-    u_pool.m_free[i] = SURFEL_MAX - 1u - i;
+    u_pool.m_free[i] = pc.m_surfel_count - 1u - i;
     if (i == 0u)
-        u_pool.m_free_count = int(SURFEL_MAX);
+        u_pool.m_free_count = int(pc.m_surfel_count);
 }

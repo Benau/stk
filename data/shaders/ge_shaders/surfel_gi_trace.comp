@@ -85,7 +85,7 @@ vec3 traceSurfelRay(vec3 origin, vec3 direction, inout bool back_face)
 void main()
 {
     uint id = gl_GlobalInvocationID.x;
-    if (id >= SURFEL_MAX || u_surfels[id].m_radius == 0.0)
+    if (id >= pc.m_surfel_count || u_surfels[id].m_radius == 0.0)
         return;
     Surfel surfel = u_surfels[id];
     vec3 normal = surfel.m_normal;

@@ -43,7 +43,12 @@ public:
     // Same as the constants of utils/surfel_gi.glsl
     enum : uint32_t
     {
-        MAX_SURFELS = 32768,
+        // Surfels of every viewport (SURFEL_PER_CAMERA), the buffers have
+        // room for MAX_CAMERAS of them and a frame only uses the ones of its
+        // viewports
+        SURFELS_PER_CAMERA = 32768,
+        MAX_CAMERAS = 4,
+        MAX_SURFELS = SURFELS_PER_CAMERA * MAX_CAMERAS,
         CELL_COUNT = 65536,
         CELL_CAPACITY = 64
     };
@@ -76,6 +81,8 @@ private:
         // Time of the frame in steps of 1/60 s (the constants of time of the
         // shaders are in them, so they don't depend on the frame rate)
         float m_steps;
+        // SURFELS_PER_CAMERA of every camera, the pool in use
+        uint32_t m_surfel_count;
     };
 
     enum BufferIndex : unsigned
@@ -155,6 +162,9 @@ private:
 
     // The pool was never cleared
     bool m_needs_reset;
+    // The pool in use, the pool is cleared when it changes (the cameras of
+    // the viewports)
+    uint32_t m_surfel_count;
 
     // The output was cleared to black (nothing is traced), it's not cleared
     // again until something is traced

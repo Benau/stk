@@ -46,6 +46,10 @@ layout(push_constant) uniform SurfelPushConstants
     // the surfels fill in and follow the lighting in the same time at any
     // frame rate
     float m_steps;
+    // The surfels of the pool in use: SURFEL_PER_CAMERA for every viewport
+    // (the buffers have room for the most viewports), so the budget of a
+    // camera doesn't depend on how many players share the screen
+    uint m_surfel_count;
 } pc;
 
 // Same as Surfel of GEVulkanSurfelGI (std430, 48 bytes), a free surfel has a
@@ -97,7 +101,9 @@ layout(std430, set = SURFEL_SET, binding = 7) buffer SurfelCellSpawns
     uint u_cell_spawns[];
 };
 
-const uint SURFEL_MAX = 32768u;
+// Surfels of the pool for every viewport, they are shared by the cameras (a
+// surface seen by two of them has the same surfels), see pc.m_surfel_count
+const uint SURFEL_PER_CAMERA = 32768u;
 const uint SURFEL_CELL_COUNT = 65536u;
 const uint SURFEL_CELL_CAPACITY = 64u;
 // The constants of time are in steps of 1/60 s (pc.m_steps is the time of the
@@ -112,14 +118,15 @@ const float SURFEL_MAX_SAMPLES = 64.0;
 // mean
 const float SURFEL_CONFIDENT_SAMPLES = 8.0;
 // Milliseconds a surfel which no pixel uses is kept, when the pool has enough
-// free surfels (SURFEL_LOW_POOL or more)
+// free surfels (a quarter of the pool, SURFEL_LOW_POOL_PER_CAMERA per camera)
 const uint SURFEL_MAX_LIFE = 5000u;
-// With fewer free surfels than SURFEL_LOW_POOL the life is shorter, down to
-// SURFEL_MIN_LIFE when the pool is empty: the surfels which nothing used for
-// the longest are recycled first, so a fast camera which keeps seeing new
-// surfaces (a tunnel after a valley) doesn't wait for the old ones to expire
+// With fewer free surfels than SURFEL_LOW_POOL_PER_CAMERA of every camera the
+// life is shorter, down to SURFEL_MIN_LIFE when the pool is empty: the surfels
+// which nothing used for the longest are recycled first, so a fast camera
+// which keeps seeing new surfaces (a tunnel after a valley) doesn't wait for
+// the old ones to expire
 const uint SURFEL_MIN_LIFE = 500u;
-const int SURFEL_LOW_POOL = 8192;
+const int SURFEL_LOW_POOL_PER_CAMERA = 8192;
 // A surfel farther than it from all the cameras is recycled
 const float SURFEL_MAX_DISTANCE = 1000.0;
 // The cells of the first level are SURFEL_CELL_SIZE wide, up to

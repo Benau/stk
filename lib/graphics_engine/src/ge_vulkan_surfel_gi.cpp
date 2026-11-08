@@ -47,7 +47,8 @@ GEVulkanSurfelGI::GEVulkanSurfelGI(GEVulkanDriver* vk,
                   m_set(VK_NULL_HANDLE), m_data_layout(VK_NULL_HANDLE),
                   m_pipeline_layout(VK_NULL_HANDLE), m_ibl(false),
                   m_pipelines(), m_frame(0), m_time(0), m_last_render(0),
-                  m_rt_build_count(0), m_needs_reset(true), m_cleared(false)
+                  m_rt_build_count(0), m_needs_reset(true), m_surfel_count(0),
+                  m_cleared(false)
 {
     for (Buffer& b : m_buffers)
     {
@@ -437,8 +438,17 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
     m_time += (uint32_t)dt_ms;
     pc.m_time = m_time;
     pc.m_steps = (float)dt_ms * (60.0f / 1000.0f);
-    const unsigned camera_count = std::min<unsigned>((unsigned)p.size(), 4);
+    const unsigned camera_count =
+        std::min<unsigned>((unsigned)p.size(), MAX_CAMERAS);
     pc.m_camera_count = camera_count;
+    // Every camera has its own budget, the ids above the pool in use are not
+    // in the free stack, so it's cleared when the count of them changes
+    pc.m_surfel_count = SURFELS_PER_CAMERA * camera_count;
+    if (pc.m_surfel_count != m_surfel_count)
+    {
+        m_surfel_count = pc.m_surfel_count;
+        m_needs_reset = true;
+    }
     for (unsigned i = 0; i < camera_count; i++)
     {
         const irr::core::matrix4& inverse_view =
@@ -500,20 +510,20 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
     // 1. Empty cells (and pool)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipelines[PI_CLEAR]);
-    vkCmdDispatch(cmd, groups64(std::max<uint32_t>(CELL_COUNT, MAX_SURFELS)),
-        1, 1);
+    vkCmdDispatch(cmd,
+        groups64(std::max<uint32_t>(CELL_COUNT, pc.m_surfel_count)), 1, 1);
     computeToComputeBarrier(cmd, 0);
 
     // 2. Recycle, resize and register in the cells
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipelines[PI_UPDATE]);
-    vkCmdDispatch(cmd, groups64(MAX_SURFELS), 1, 1);
+    vkCmdDispatch(cmd, groups64(pc.m_surfel_count), 1, 1);
     computeToComputeBarrier(cmd, 0);
 
     // 3. Rays of the surfels
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipelines[PI_TRACE]);
-    vkCmdDispatch(cmd, groups64(MAX_SURFELS), 1, 1);
+    vkCmdDispatch(cmd, groups64(pc.m_surfel_count), 1, 1);
     computeToComputeBarrier(cmd, 0);
 
     // 4. Irradiance of the pixels and new surfels, per viewport
