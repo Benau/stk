@@ -33,13 +33,19 @@ layout(push_constant) uniform SurfelPushConstants
     // x0, y0, x1, y1 (exclusive) in pixels of the viewport of
     // surfel_gi_apply.comp
     ivec4 m_rect;
-    // Incremented every frame
+    // Incremented every frame (random seeds)
     uint m_frame;
     uint m_camera_count;
     // The pool is cleared (surfel_gi_clear.comp)
     uint m_reset;
     // The env set (surfel_gi_trace.comp) has the skybox, not the dummy one
     uint m_has_skybox;
+    // Milliseconds since the start (wraps), for the life of the surfels
+    uint m_time;
+    // Time of the frame in steps of 1/60 s (SURFEL_STEPS_PER_SECOND), so
+    // the surfels fill in and follow the lighting in the same time at any
+    // frame rate
+    float m_steps;
 } pc;
 
 // Same as Surfel of GEVulkanSurfelGI (std430, 48 bytes), a free surfel has a
@@ -49,10 +55,11 @@ struct Surfel
     vec3 m_position;
     float m_radius;
     vec3 m_normal;
-    // m_frame of the push constants when a pixel last used it
+    // m_time of the push constants when a pixel last used it
     uint m_last_seen;
     vec3 m_irradiance;
-    // Samples in the mean of the irradiance, up to SURFEL_MAX_SAMPLES
+    // Steps (m_steps of the push constants) of the samples in the mean of the
+    // irradiance, up to SURFEL_MAX_SAMPLES
     float m_samples;
 };
 
@@ -86,12 +93,19 @@ layout(std430, set = SURFEL_SET, binding = 6) buffer SurfelCellSurfels
 const uint SURFEL_MAX = 32768u;
 const uint SURFEL_CELL_COUNT = 65536u;
 const uint SURFEL_CELL_CAPACITY = 64u;
-// Rays of a surfel in a frame and the samples of the mean of the irradiance:
-// the irradiance follows a change of the lighting in about 64 frames
+// The constants of time are in steps of 1/60 s (pc.m_steps is the time of the
+// frame in them), not in frames: a slower GPU has fewer frames in a second
+const float SURFEL_STEPS_PER_SECOND = 60.0;
+// Rays of a surfel in a frame and the steps of the samples of the mean of the
+// irradiance: the irradiance follows a change of the lighting in about 64
+// steps (a frame of a slower GPU is a sample which weighs more)
 const uint SURFEL_RAYS = 4u;
 const float SURFEL_MAX_SAMPLES = 64.0;
-// Frames a surfel which no pixel uses is kept
-const uint SURFEL_MAX_LIFE = 300u;
+// Steps of samples a surfel needs to count fully, a new surfel has a noisy
+// mean
+const float SURFEL_CONFIDENT_SAMPLES = 8.0;
+// Milliseconds a surfel which no pixel uses is kept
+const uint SURFEL_MAX_LIFE = 5000u;
 // A surfel farther than it from all the cameras is recycled
 const float SURFEL_MAX_DISTANCE = 1000.0;
 // The cells of the first level are SURFEL_CELL_SIZE wide, up to

@@ -1,5 +1,5 @@
 // Second pass of GEVulkanSurfelGI (see utils/surfel_gi.glsl), one thread per
-// surfel of the pool: a surfel which no pixel used for SURFEL_MAX_LIFE frames,
+// surfel of the pool: a surfel which no pixel used for SURFEL_MAX_LIFE ms,
 // or which is too far from the cameras, is free again. The others get the
 // radius of their distance to the cameras and are added to the cell of their
 // center in the levels which the pixels around them can look in: the level of a
@@ -18,7 +18,7 @@ void main()
         return;
     vec3 position = u_surfels[id].m_position;
     float camera_distance = getSurfelCameraDistance(position);
-    if (pc.m_frame - u_surfels[id].m_last_seen > SURFEL_MAX_LIFE ||
+    if (pc.m_time - u_surfels[id].m_last_seen > SURFEL_MAX_LIFE ||
         camera_distance > SURFEL_MAX_DISTANCE)
     {
         u_surfels[id].m_radius = 0.0;

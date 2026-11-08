@@ -46,8 +46,8 @@ GEVulkanSurfelGI::GEVulkanSurfelGI(GEVulkanDriver* vk,
                   m_layout(VK_NULL_HANDLE), m_pool(VK_NULL_HANDLE),
                   m_set(VK_NULL_HANDLE), m_data_layout(VK_NULL_HANDLE),
                   m_pipeline_layout(VK_NULL_HANDLE), m_ibl(false),
-                  m_pipelines(), m_frame(0), m_rt_build_count(0),
-                  m_needs_reset(true), m_cleared(false)
+                  m_pipelines(), m_frame(0), m_time(0), m_last_render(0),
+                  m_rt_build_count(0), m_needs_reset(true), m_cleared(false)
 {
     for (Buffer& b : m_buffers)
     {
@@ -426,6 +426,16 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
 
     SurfelPushConstants pc = {};
     pc.m_frame = ++m_frame;
+    // The time of the frame, at most a tenth of a second (a hitch, or the
+    // first frame) so a long pause doesn't fill in everything at once
+    const uint64_t now = getMonoTimeMs();
+    uint64_t dt_ms = 16;
+    if (m_frame > 1)
+        dt_ms = std::min<uint64_t>(now - m_last_render, 100);
+    m_last_render = now;
+    m_time += (uint32_t)dt_ms;
+    pc.m_time = m_time;
+    pc.m_steps = (float)dt_ms * (60.0f / 1000.0f);
     const unsigned camera_count = std::min<unsigned>((unsigned)p.size(), 4);
     pc.m_camera_count = camera_count;
     for (unsigned i = 0; i < camera_count; i++)

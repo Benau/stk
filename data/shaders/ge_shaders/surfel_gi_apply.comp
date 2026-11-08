@@ -48,8 +48,9 @@ layout(set = 2, binding = 2, rgba16f) uniform writeonly image2D u_out;
 
 // A pixel less covered than it gets a new surfel
 const float SURFEL_SPAWN_COVERAGE = 0.5;
-// Chance of a group to spawn in a frame, so the groups around a hole don't all
-// spawn in the same frame (the new surfels are in the grid in the next one)
+// Chance of a group to spawn in a step (1/60 s, the chance of a frame is the
+// one of its steps), so the groups around a hole don't all spawn in the same
+// frame (the new surfels are in the grid in the next one)
 const float SURFEL_SPAWN_CHANCE = 0.25;
 
 // The least covered pixel of the group: the coverage (rounded, a float which
@@ -118,7 +119,7 @@ vec4 getNearbyIrradiance(vec3 position, vec3 normal, float camera_distance)
             float falloff = 1.0 - offset_distance / cell_size;
             // A new surfel has a noisy mean
             float weight = falloff * falloff * facing * facing *
-                min(surfel.m_samples / 8.0, 1.0);
+                min(surfel.m_samples / SURFEL_CONFIDENT_SAMPLES, 1.0);
             irradiance += surfel.m_irradiance * weight;
             weight_sum += weight;
         }
@@ -185,10 +186,11 @@ void main()
                 float weight = falloff * falloff * facing;
                 coverage += weight;
                 // A new surfel has a noisy mean
-                float confidence = min(surfel.m_samples / 8.0, 1.0);
+                float confidence = min(surfel.m_samples /
+                    SURFEL_CONFIDENT_SAMPLES, 1.0);
                 irradiance += surfel.m_irradiance * (weight * confidence);
                 weight_sum += weight * confidence;
-                u_surfels[id].m_last_seen = pc.m_frame;
+                u_surfels[id].m_last_seen = pc.m_time;
             }
         }
     }
@@ -223,7 +225,8 @@ void main()
         return;
     uint seed = (uint(pixel.x) * 1973u) ^ (uint(pixel.y) * 9277u) ^
         (pc.m_frame * 26699u);
-    if (getSurfelRandom(seed) >= SURFEL_SPAWN_CHANCE)
+    if (getSurfelRandom(seed) >=
+        1.0 - pow(1.0 - SURFEL_SPAWN_CHANCE, pc.m_steps))
         return;
     if (!isStaticSurface(u_camera.m_inverse_view_matrix[3].xyz,
         world_position))
@@ -239,7 +242,7 @@ void main()
     surfel.m_position = world_position;
     surfel.m_radius = getSurfelRadius(camera_distance);
     surfel.m_normal = world_normal;
-    surfel.m_last_seen = pc.m_frame;
+    surfel.m_last_seen = pc.m_time;
     // What is already there, so it doesn't start black
     surfel.m_irradiance = weight_sum > 0.0 ? irradiance / weight_sum :
         vec3(0.0);

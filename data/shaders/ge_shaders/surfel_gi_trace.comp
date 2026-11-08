@@ -131,8 +131,9 @@ void main()
     if (luminance > MAX_LUMINANCE)
         radiance *= MAX_LUMINANCE / luminance;
 
-    float samples = min(surfel.m_samples + 1.0, SURFEL_MAX_SAMPLES);
+    // The rays of this frame weigh its steps (pc.m_steps)
+    float samples = min(surfel.m_samples + pc.m_steps, SURFEL_MAX_SAMPLES);
     u_surfels[id].m_irradiance = mix(surfel.m_irradiance, radiance,
-        1.0 / samples);
+        min(pc.m_steps / samples, 1.0));
     u_surfels[id].m_samples = samples;
 }

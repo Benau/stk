@@ -71,6 +71,11 @@ private:
         // The env set of the first viewport has the skybox (binding 2), not
         // the dummy one (no skybox, or it's loading)
         uint32_t m_has_skybox;
+        // Milliseconds since the start (wraps, the life of the surfels)
+        uint32_t m_time;
+        // Time of the frame in steps of 1/60 s (the constants of time of the
+        // shaders are in them, so they don't depend on the frame rate)
+        float m_steps;
     };
 
     enum BufferIndex : unsigned
@@ -137,6 +142,10 @@ private:
 
     // Incremented every frame which is rendered
     uint32_t m_frame;
+
+    // m_time of the push constants, and getMonoTimeMs() of the last frame
+    uint32_t m_time;
+    uint64_t m_last_render;
 
     // GEVulkanRTScene::getBuildCount() of the surfels, they are on the
     // triangles of that scene
