@@ -106,6 +106,8 @@ layout(std430, set = SURFEL_SET, binding = 7) buffer SurfelCellSpawns
 const uint SURFEL_PER_CAMERA = 32768u;
 const uint SURFEL_CELL_COUNT = 65536u;
 const uint SURFEL_CELL_CAPACITY = 64u;
+// New surfels of a cell in a step (1/60 s), see trySpawnSurfelInCell()
+const float SURFEL_CELL_SPAWNS_PER_STEP = 8.0;
 // The constants of time are in steps of 1/60 s (pc.m_steps is the time of the
 // frame in them), not in frames: a slower GPU has fewer frames in a second
 const float SURFEL_STEPS_PER_SECOND = 60.0;
@@ -195,13 +197,19 @@ ivec3 getSurfelNearestCells(vec3 position, float cell_size)
 // The new surfels of a frame are only in the grid in the next one, so every
 // group of pixels which sees an empty cell would spawn in it in the same
 // frame: a cell gets at most SURFEL_CELL_CAPACITY surfels with the ones
-// spawned in this frame. Returns false if it's full
+// spawned in this frame. And only SURFEL_CELL_SPAWNS_PER_STEP of them in a
+// step: a cell comes into view as a thin strip at the side of the screen (the
+// floor behind a camera which moves back), which is the least covered pixel
+// of many groups, they would fill the whole cell on the strip and the rest of
+// it would never get a surfel. The next frames spawn where the surfels of
+// this one don't cover it. Returns false if it's full
 bool trySpawnSurfelInCell(uint cell)
 {
     if (u_cell_count[cell] >= SURFEL_CELL_CAPACITY)
         return false;
     uint spawned = atomicAdd(u_cell_spawns[cell], 1u);
-    return u_cell_count[cell] + spawned < SURFEL_CELL_CAPACITY;
+    return spawned < uint(ceil(SURFEL_CELL_SPAWNS_PER_STEP * pc.m_steps)) &&
+        u_cell_count[cell] + spawned < SURFEL_CELL_CAPACITY;
 }
 
 // A random number in [0, 1) of a seed
