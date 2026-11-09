@@ -71,6 +71,9 @@ const uint SURFEL_CACHE_FRAME = 1u;
 // The history of surfel_gi_apply.comp was written by the last frame, with the
 // cameras of u_prev_cameras
 const uint SURFEL_CACHE_HISTORY = 2u;
+// The pixels which can't be reused are in a list for surfel_gi_gather.comp
+// (see surfel_gi_apply.comp)
+const uint SURFEL_CACHE_DEFER = 4u;
 
 // Same as Surfel of GEVulkanSurfelGI (std430, 48 bytes), a free surfel has a
 // radius of 0

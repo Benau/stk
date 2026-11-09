@@ -162,15 +162,22 @@ void GEVulkanSurfelGI::createBuffers()
         sizeof(uint32_t) * CELL_COUNT,
         sizeof(uint32_t) * CELL_COUNT * CELL_CAPACITY,
         sizeof(uint32_t) * CELL_COUNT,
-        sizeof(PrevCamera) * MAX_CAMERAS
+        sizeof(PrevCamera) * MAX_CAMERAS,
+        sizeof(uint32_t) * (4 + m_size.Width * m_size.Height),
+        sizeof(uint32_t) * ((m_size.Width + 7) / 8) * ((m_size.Height + 7) / 8)
     }};
     for (unsigned i = 0; i < BI_COUNT; i++)
     {
         VmaAllocationCreateInfo alloc_info = {};
         alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        if (i == BI_PREV_CAMERA)
+        if (i == BI_PREV_CAMERA || i == BI_TILE_SPAWN)
             usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        if (i == BI_MISS)
+        {
+            usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+        }
         if (!m_vk->createBuffer(sizes[i], usage, alloc_info,
             m_buffers[i].m_buffer, m_buffers[i].m_memory))
         {
@@ -388,6 +395,8 @@ void GEVulkanSurfelGI::createPipelines()
     createPipeline("surfel_gi_trace.comp", &m_pipelines[PI_TRACE],
         &specialization);
     createPipeline("surfel_gi_apply.comp", &m_pipelines[PI_APPLY]);
+    createPipeline("surfel_gi_gather.comp", &m_pipelines[PI_GATHER]);
+    createPipeline("surfel_gi_spawn.comp", &m_pipelines[PI_SPAWN]);
 }   // createPipelines
 
 // ----------------------------------------------------------------------------
@@ -420,6 +429,46 @@ void GEVulkanSurfelGI::clearOutput(VkCommandBuffer cmd)
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, NULL, 0,
         NULL);
 }   // clearOutput
+
+// ----------------------------------------------------------------------------
+void GEVulkanSurfelGI::clearMissList(VkCommandBuffer cmd, bool first)
+{
+    // The passes of the last viewport read them (the first one has the
+    // barrier of the beginning of render())
+    if (!first)
+    {
+        VkMemoryBarrier barrier = {};
+        barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
+            VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, NULL, 0, NULL);
+    }
+    else
+    {
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 0, NULL);
+    }
+    // No pixel and no group of the dispatch (x), the dispatch has y and z of
+    // 1, and no spawn in the tiles
+    vkCmdFillBuffer(cmd, m_buffers[BI_MISS].m_buffer, 0,
+        2 * sizeof(uint32_t), 0);
+    vkCmdFillBuffer(cmd, m_buffers[BI_MISS].m_buffer, 2 * sizeof(uint32_t),
+        2 * sizeof(uint32_t), 1);
+    vkCmdFillBuffer(cmd, m_buffers[BI_TILE_SPAWN].m_buffer, 0, VK_WHOLE_SIZE,
+        0xFFFFFFFF);
+    VkMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+        VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, NULL, 0,
+        NULL);
+}   // clearMissList
 
 // ----------------------------------------------------------------------------
 bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
@@ -532,7 +581,7 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
     {
         pc.m_cache |= CACHE_FRAME;
         if (pc.m_reset == 0 && prev_camera_count == viewport_count)
-            pc.m_cache |= CACHE_HISTORY;
+            pc.m_cache |= CACHE_HISTORY | CACHE_DEFER;
     }
 
     // The cameras which the history was rendered with, after the apply of
@@ -609,8 +658,7 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
     computeToComputeBarrier(cmd, 0);
 
     // 4. Irradiance of the pixels and new surfels, per viewport
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_pipelines[PI_APPLY]);
+    const bool defer = (pc.m_cache & CACHE_DEFER) != 0;
     for (unsigned v = 0; v < viewport_count; v++)
     {
         const Viewport& vp = viewports[v];
@@ -623,8 +671,38 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
         pc.m_viewport_index = v;
         vkCmdPushConstants(cmd, m_pipeline_layout,
             VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-        vkCmdDispatch(cmd, groups8(vp.m_rect[2] - vp.m_rect[0]),
-            groups8(vp.m_rect[3] - vp.m_rect[1]), 1);
+        const uint32_t tiles_x = groups8(vp.m_rect[2] - vp.m_rect[0]);
+        const uint32_t tiles_y = groups8(vp.m_rect[3] - vp.m_rect[1]);
+        if (defer)
+            clearMissList(cmd, v == 0);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            m_pipelines[PI_APPLY]);
+        vkCmdDispatch(cmd, tiles_x, tiles_y, 1);
+        if (!defer)
+            continue;
+        // The list of the misses is complete, and its size is the indirect
+        // dispatch
+        {
+            VkMemoryBarrier barrier = {};
+            barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                VK_ACCESS_SHADER_WRITE_BIT |
+                VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 1, &barrier, 0, NULL,
+                0, NULL);
+        }
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            m_pipelines[PI_GATHER]);
+        vkCmdDispatchIndirect(cmd, m_buffers[BI_MISS].m_buffer,
+            sizeof(uint32_t));
+        computeToComputeBarrier(cmd, 0);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            m_pipelines[PI_SPAWN]);
+        vkCmdDispatch(cmd, groups64(tiles_x * tiles_y), 1, 1);
+        computeToComputeBarrier(cmd, 0);
     }
 
     // The next frame reads the history written now, with the cameras of

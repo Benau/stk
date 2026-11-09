@@ -1,0 +1,28 @@
+// Pass of GEVulkanSurfelGI after surfel_gi_apply.comp with the history of the
+// cache (see utils/surfel_gi_apply.glsl), one thread per pixel of the list of
+// the ones which it couldn't reuse (dispatched indirectly by the size of the
+// list): their irradiance from the surfels, and the least covered pixel of
+// every tile which needs a surfel, for surfel_gi_spawn.comp
+#extension GL_EXT_ray_query : require
+
+layout(local_size_x = 64) in;
+
+#include "utils/surfel_gi_apply.glsl"
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= u_misses.m_count)
+        return;
+    ivec2 pixel = unpackSurfelPixel(u_misses.m_pixels[index]);
+    SurfelPixel p;
+    // Only the pixels of a surface are in the list
+    loadSurfelPixel(pixel, p);
+    SurfelGather g = gatherSurfels(p);
+    bool cacheable;
+    vec4 gi = resolveSurfelPixel(p, g, cacheable);
+    storeSurfelPixel(pixel, p, gi, cacheable);
+    uint key = getSurfelSpawnKey(pixel, p, g);
+    if (key != 0xFFFFFFFFu)
+        atomicMin(u_tile_spawns[getSurfelTile(pixel)], key);
+}

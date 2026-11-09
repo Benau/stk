@@ -1,0 +1,30 @@
+// Pass of GEVulkanSurfelGI after surfel_gi_gather.comp (see
+// utils/surfel_gi_apply.glsl), one thread per 8x8 tile of the viewport: a new
+// surfel at the least covered pixel of the tile which needs one, with the
+// chance of the frame (the same as surfel_gi_apply.comp without the list)
+#extension GL_EXT_ray_query : require
+
+layout(local_size_x = 64) in;
+
+#include "utils/surfel_gi_apply.glsl"
+
+void main()
+{
+    uint tiles_x = uint(pc.m_rect.z - pc.m_rect.x + 7) / 8u;
+    uint tiles_y = uint(pc.m_rect.w - pc.m_rect.y + 7) / 8u;
+    uint tile = gl_GlobalInvocationID.x;
+    if (tile >= tiles_x * tiles_y)
+        return;
+    uint key = u_tile_spawns[tile];
+    if (key == 0xFFFFFFFFu)
+        return;
+    ivec2 pixel = pc.m_rect.xy +
+        ivec2(tile % tiles_x, tile / tiles_x) * 8 +
+        ivec2(key & 7u, (key >> 3u) & 7u);
+    if (!isSurfelSpawnTurn(pixel))
+        return;
+    SurfelPixel p;
+    loadSurfelPixel(pixel, p);
+    // The seed of the new surfel, only for the few which spawn
+    spawnSurfel(p, gatherSurfels(p));
+}

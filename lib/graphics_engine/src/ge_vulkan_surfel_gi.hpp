@@ -14,7 +14,7 @@ class GEVulkanAttachmentTexture;
 
 // Diffuse global illumination of the static scene with surfels (see
 // isSurfelGI()), owned by GEVulkanDeferredFBOSplit (only one for all the
-// viewports of it, like GEVulkanRTShadow). It's 4 compute shaders between the
+// viewports of it, like GEVulkanRTShadow). It's compute shaders between the
 // g-buffer and the lighting pass, see utils/surfel_gi.glsl:
 //
 // 1. surfel_gi_clear.comp: the cells of the grid are cleared (and the pool on
@@ -28,7 +28,8 @@ class GEVulkanAttachmentTexture;
 //    its cell (the output image), and new surfels where the static scene is
 //    not covered. With the frame cache (GERayTracingConfig::m_gi_frame_cache)
 //    a pixel reuses the irradiance of the last frame if its surface is still
-//    on the screen (the history)
+//    on the screen (the history), and the pixels which can't are done by
+//    surfel_gi_gather.comp and surfel_gi_spawn.comp after it
 //
 // Only the static BLAS of GEVulkanRTScene (GRTIM_STATIC) is traced: the
 // surfels are created on it and never move, so they don't follow the nodes
@@ -100,7 +101,11 @@ private:
         CACHE_FRAME = 1,
         // The history of the last frame can be read, it was written by the
         // same viewports with the cache on
-        CACHE_HISTORY = 2
+        CACHE_HISTORY = 2,
+        // The pixels which can't be reused are in a list, which
+        // surfel_gi_gather.comp looks for the surfels of (and
+        // surfel_gi_spawn.comp spawns in the tiles)
+        CACHE_DEFER = 4
     };
 
     // Same as SurfelPrevCamera of utils/surfel_gi.glsl (std430), the camera of
@@ -128,6 +133,11 @@ private:
         BI_CELL_SPAWN,
         // PrevCamera of every viewport
         BI_PREV_CAMERA,
+        // The pixels which can't be reused (the count, the indirect dispatch
+        // of surfel_gi_gather.comp and the pixels), and the spawn of every
+        // 8x8 tile (see utils/surfel_gi_apply.glsl), for CACHE_DEFER
+        BI_MISS,
+        BI_TILE_SPAWN,
         BI_COUNT
     };
 
@@ -148,8 +158,8 @@ private:
     std::array<GEVulkanAttachmentTexture*, 2> m_history;
 
     // Binding 0 is the depth and 1 is the normal of the g-buffer (combined
-    // image samplers), 2 is the output, 3 to 8 the buffers, 9 the history
-    // which is read and 10 the one which is written
+    // image samplers), 2 is the output, 3 to 10 the buffers, 11 the history
+    // which is read and 12 the one which is written
     VkDescriptorSetLayout m_layout;
 
     VkDescriptorPool m_pool;
@@ -183,6 +193,8 @@ private:
         PI_UPDATE,
         PI_TRACE,
         PI_APPLY,
+        PI_GATHER,
+        PI_SPAWN,
         PI_COUNT
     };
 
@@ -237,6 +249,10 @@ private:
     void createPipeline(const char* shader, VkPipeline* pipeline,
                         const VkSpecializationInfo* specialization = NULL)
                                                                          const;
+    // ------------------------------------------------------------------------
+    // Empties the list of the misses and the spawns of the tiles before
+    // surfel_gi_apply.comp of a viewport (CACHE_DEFER)
+    void clearMissList(VkCommandBuffer cmd, bool first);
     // ------------------------------------------------------------------------
     // Black, and sampled by the lighting pass after it
     void clearOutput(VkCommandBuffer cmd);
