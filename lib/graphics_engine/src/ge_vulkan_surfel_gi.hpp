@@ -26,7 +26,9 @@ class GEVulkanAttachmentTexture;
 //    update the irradiance of the surfel
 // 4. surfel_gi_apply.comp: the irradiance of every pixel from the surfels of
 //    its cell (the output image), and new surfels where the static scene is
-//    not covered
+//    not covered. With the frame cache (GERayTracingConfig::m_gi_frame_cache)
+//    a pixel reuses the irradiance of the last frame if its surface is still
+//    on the screen (the history)
 //
 // Only the static BLAS of GEVulkanRTScene (GRTIM_STATIC) is traced: the
 // surfels are created on it and never move, so they don't follow the nodes
@@ -83,7 +85,35 @@ private:
         float m_steps;
         // SURFELS_PER_CAMERA of every camera, the pool in use
         uint32_t m_surfel_count;
+        // CACHE_* bits, see isFrameCache()
+        uint32_t m_cache;
+        // The viewport of surfel_gi_apply.comp (its PrevCamera)
+        uint32_t m_viewport_index;
     };
+
+    // Bits of m_cache of the push constants
+    enum : uint32_t
+    {
+        // The frame cache: the irradiance of the pixels of the last frame is
+        // reused, and the converged surfels trace fewer rays (see
+        // surfel_gi_apply.comp and surfel_gi_trace.comp)
+        CACHE_FRAME = 1,
+        // The history of the last frame can be read, it was written by the
+        // same viewports with the cache on
+        CACHE_HISTORY = 2
+    };
+
+    // Same as SurfelPrevCamera of utils/surfel_gi.glsl (std430), the camera of
+    // a viewport in the last frame, which the history of the pixels was
+    // rendered with
+    struct PrevCamera
+    {
+        float m_projection_view_matrix[16];
+        float m_viewport[4];
+        float m_position[4];
+    };
+    static_assert(sizeof(PrevCamera) == 96, "PrevCamera is 96 bytes in the "
+        "shaders");
 
     enum BufferIndex : unsigned
     {
@@ -96,6 +126,8 @@ private:
         BI_CELL_SURFEL,
         // The number of surfels spawned in every cell in the frame
         BI_CELL_SPAWN,
+        // PrevCamera of every viewport
+        BI_PREV_CAMERA,
         BI_COUNT
     };
 
@@ -110,13 +142,20 @@ private:
     // RGBA16F, general layout all the time (storage image and sampled)
     GEVulkanAttachmentTexture* m_gi;
 
+    // The irradiance of every pixel which can be reused in the next frame
+    // (RG32UI, general layout, see surfel_gi_apply.comp), one is read and the
+    // other one written in a frame, they swap every frame
+    std::array<GEVulkanAttachmentTexture*, 2> m_history;
+
     // Binding 0 is the depth and 1 is the normal of the g-buffer (combined
-    // image samplers), 2 is the output, 3 to 7 the buffers
+    // image samplers), 2 is the output, 3 to 8 the buffers, 9 the history
+    // which is read and 10 the one which is written
     VkDescriptorSetLayout m_layout;
 
     VkDescriptorPool m_pool;
 
-    VkDescriptorSet m_set;
+    // Set i reads m_history[i] and writes the other one
+    std::array<VkDescriptorSet, 2> m_sets;
 
     // Same definition as the data descriptor set layout of draw calls (camera
     // and the global light), see GEVulkanRTShadow
@@ -169,6 +208,15 @@ private:
     // The output was cleared to black (nothing is traced), it's not cleared
     // again until something is traced
     bool m_cleared;
+
+    // The camera of every viewport in the last frame, and how many viewports
+    // it had (0 if it can't be reused: the cache was off, or the pool was
+    // cleared)
+    std::array<PrevCamera, MAX_CAMERAS> m_prev_cameras;
+    unsigned m_prev_camera_count;
+
+    // The history which the next frame reads (the index of m_sets)
+    unsigned m_history_index;
     // ------------------------------------------------------------------------
     void createBuffers();
     // ------------------------------------------------------------------------
@@ -180,6 +228,9 @@ private:
     // Same as u_ibl of GEVulkanDrawCall::createPipeline, the environment maps
     // only exist then
     static bool isIBL();
+    // ------------------------------------------------------------------------
+    // GERayTracingConfig::m_gi_frame_cache
+    static bool isFrameCache();
     // ------------------------------------------------------------------------
     void destroyPipelines();
     // ------------------------------------------------------------------------

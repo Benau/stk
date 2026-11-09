@@ -12,6 +12,15 @@
 //                        cell, and a new surfel where the surfels don't cover
 //                        the static scene enough
 //
+// The scene, the sun and the sky don't change, so the irradiance doesn't
+// either once the surfels converged. With the frame cache (SURFEL_CACHE_FRAME)
+// it's reused: a converged surfel traces a few rays only every
+// SURFEL_CACHED_TRACE_PERIOD frames (its mean has more samples, so it's not
+// noisier), and a pixel whose surfels converged and cover it fully keeps its
+// irradiance in the next frames while its surface stays on the screen (the
+// history of surfel_gi_apply.comp), only every SURFEL_HISTORY_PERIOD frames it
+// looks for its surfels again.
+//
 // A surfel is a disk on a surface of the static scene (the static BLAS of
 // GEVulkanRTScene, RT_MASK_STATIC), it never moves. The grid is a hash of the
 // cells of nested levels around the cameras: the cells of a level are twice
@@ -50,7 +59,18 @@ layout(push_constant) uniform SurfelPushConstants
     // (the buffers have room for the most viewports), so the budget of a
     // camera doesn't depend on how many players share the screen
     uint m_surfel_count;
+    // SURFEL_CACHE_* bits
+    uint m_cache;
+    // The viewport of surfel_gi_apply.comp (its u_prev_cameras)
+    uint m_viewport_index;
 } pc;
+
+// The frame cache, the irradiance which doesn't change anymore is reused (see
+// above)
+const uint SURFEL_CACHE_FRAME = 1u;
+// The history of surfel_gi_apply.comp was written by the last frame, with the
+// cameras of u_prev_cameras
+const uint SURFEL_CACHE_HISTORY = 2u;
 
 // Same as Surfel of GEVulkanSurfelGI (std430, 48 bytes), a free surfel has a
 // radius of 0
@@ -101,6 +121,20 @@ layout(std430, set = SURFEL_SET, binding = 7) buffer SurfelCellSpawns
     uint u_cell_spawns[];
 };
 
+// The camera of every viewport in the last frame (same as PrevCamera of
+// GEVulkanSurfelGI), which rendered the history of surfel_gi_apply.comp
+struct SurfelPrevCamera
+{
+    mat4 m_projection_view_matrix;
+    vec4 m_viewport;
+    vec4 m_position;
+};
+
+layout(std430, set = SURFEL_SET, binding = 8) readonly buffer SurfelPrevCameras
+{
+    SurfelPrevCamera u_prev_cameras[];
+};
+
 // Surfels of the pool for every viewport, they are shared by the cameras (a
 // surface seen by two of them has the same surfels), see pc.m_surfel_count
 const uint SURFEL_PER_CAMERA = 32768u;
@@ -119,6 +153,19 @@ const float SURFEL_MAX_SAMPLES = 64.0;
 // Steps of samples a surfel needs to count fully, a new surfel has a noisy
 // mean
 const float SURFEL_CONFIDENT_SAMPLES = 8.0;
+// With the frame cache, a surfel with SURFEL_MAX_SAMPLES converged: it only
+// traces in one of SURFEL_CACHED_TRACE_PERIOD frames, and its mean has up to
+// SURFEL_CACHED_MAX_SAMPLES steps, so the same number of rays (it follows a
+// change of the lighting slower, which only happens when the static scene is
+// built again, and the pool is cleared then)
+const uint SURFEL_CACHED_TRACE_PERIOD = 8u;
+const float SURFEL_CACHED_MAX_SAMPLES =
+    SURFEL_MAX_SAMPLES * float(SURFEL_CACHED_TRACE_PERIOD);
+// With the frame cache, a pixel which reuses its irradiance looks for its
+// surfels again in one of SURFEL_HISTORY_PERIOD frames at least: it keeps them
+// alive (8 frames are less than SURFEL_MIN_LIFE above 16 FPS), and it follows
+// their radius, which changes with the distance to the camera
+const uint SURFEL_HISTORY_PERIOD = 8u;
 // Milliseconds a surfel which no pixel uses is kept, when the pool has enough
 // free surfels (a quarter of the pool, SURFEL_LOW_POOL_PER_CAMERA per camera)
 const uint SURFEL_MAX_LIFE = 5000u;

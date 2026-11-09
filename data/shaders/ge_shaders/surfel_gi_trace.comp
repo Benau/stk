@@ -11,7 +11,8 @@
 //
 // Only what doesn't move lights the surfels, so they can be cached: the static
 // scene, the sun and the sky (the dynamic nodes are not in RT_MASK_STATIC, and
-// shadeHit has no point light).
+// shadeHit has no point light). With the frame cache, a surfel which converged
+// only traces in one of SURFEL_CACHED_TRACE_PERIOD frames.
 //
 // Set 0 is the one of GEVulkanRTScene, set 1 the camera and the global light
 // (of the first viewport), set 2 the surfels, set 3 the mesh textures and set 4
@@ -95,6 +96,19 @@ void main()
     if (id >= pc.m_surfel_count || u_surfels[id].m_radius == 0.0)
         return;
     Surfel surfel = u_surfels[id];
+    // With the frame cache, a converged surfel traces in one of the frames
+    // (they take turns by id), its rays weigh the steps of all of them, and
+    // its mean has more of them, so it has as many rays as without the cache
+    float steps = pc.m_steps;
+    float max_samples = SURFEL_MAX_SAMPLES;
+    if ((pc.m_cache & SURFEL_CACHE_FRAME) != 0u &&
+        surfel.m_samples >= SURFEL_MAX_SAMPLES)
+    {
+        if ((id / 64u + pc.m_frame) % SURFEL_CACHED_TRACE_PERIOD != 0u)
+            return;
+        steps *= float(SURFEL_CACHED_TRACE_PERIOD);
+        max_samples = SURFEL_CACHED_MAX_SAMPLES;
+    }
     vec3 normal = surfel.m_normal;
     vec3 tangent = normalize(abs(normal.y) < 0.999 ?
         cross(normal, vec3(0.0, 1.0, 0.0)) : cross(normal, vec3(1.0, 0.0, 0.0)));
@@ -139,8 +153,8 @@ void main()
         radiance *= MAX_LUMINANCE / luminance;
 
     // The rays of this frame weigh its steps (pc.m_steps)
-    float samples = min(surfel.m_samples + pc.m_steps, SURFEL_MAX_SAMPLES);
+    float samples = min(surfel.m_samples + steps, max_samples);
     u_surfels[id].m_irradiance = mix(surfel.m_irradiance, radiance,
-        min(pc.m_steps / samples, 1.0));
+        min(steps / samples, 1.0));
     u_surfels[id].m_samples = samples;
 }

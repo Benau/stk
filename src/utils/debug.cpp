@@ -108,6 +108,7 @@ enum DebugMenuCommand
     DEBUG_GE_PBR,
     DEBUG_GE_IBL,
     DEBUG_GE_GI,
+    DEBUG_GE_GI_FRAME_CACHE,
     DEBUG_GE_SR,
     DEBUG_GE_DR,
     DEBUG_GE_RT,
@@ -433,6 +434,18 @@ bool handleContextMenuAction(s32 cmd_id)
                 UserConfigParams::m_ray_tracing_gi;
             vk->updateDriver(true/*scale_changed*/);
         }
+        break;
+    }
+#endif
+    case DEBUG_GE_GI_FRAME_CACHE:
+#ifndef SERVER_ONLY
+    {
+        // The frame cache of the global illumination is read every frame, so
+        // its effect on the speed and the look can be compared in a race
+        GE::GERayTracingConfig& rt = GE::getGEConfig()->m_ray_tracing;
+        rt.m_gi_frame_cache = !rt.m_gi_frame_cache;
+        Log::info("Debug", "GI frame cache %s",
+            rt.m_gi_frame_cache ? "on" : "off");
         break;
     }
 #endif
@@ -1401,6 +1414,8 @@ bool onEvent(const SEvent &event)
             sub->addItem(L"Toggle GE PBR", DEBUG_GE_PBR);
             sub->addItem(L"Toggle GE IBL", DEBUG_GE_IBL);
             sub->addItem(L"Toggle GE global illumination", DEBUG_GE_GI);
+            sub->addItem(L"Toggle GE GI frame cache",
+                DEBUG_GE_GI_FRAME_CACHE);
             sub->addItem(L"Toggle GE Solid Reflection", DEBUG_GE_SR);
             sub->addItem(L"Toggle GE Displace Reflection", DEBUG_GE_DR);
             sub->addItem(L"Ray tracing settings...", DEBUG_GE_RT);

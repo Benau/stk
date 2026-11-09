@@ -133,6 +133,11 @@ struct GERayTracingConfig
     // the environment map in the lighting pass where the surfels cover it.
     // Needs the render target to be created again if it changes
     bool m_gi;
+    // The frame cache of the global illumination: the irradiance of a pixel is
+    // reused in the next frames while its surface stays on the screen, and
+    // the surfels which converged trace fewer rays (see GEVulkanSurfelGI). It
+    // can be changed at any time
+    bool m_gi_frame_cache;
     // ------------------------------------------------------------------------
     GERayTracingConfig()
     {
@@ -145,6 +150,7 @@ struct GERayTracingConfig
         m_shadow = false;
         m_shadow_scale = 1.0f;
         m_gi = false;
+        m_gi_frame_cache = true;
     }
 };
 enum GEShadowType : unsigned
