@@ -164,6 +164,9 @@ const float SURFEL_CONFIDENT_SAMPLES = 8.0;
 const uint SURFEL_CACHED_TRACE_PERIOD = 8u;
 const float SURFEL_CACHED_MAX_SAMPLES =
     SURFEL_MAX_SAMPLES * float(SURFEL_CACHED_TRACE_PERIOD);
+// With the frame cache, a surfel with fewer than SURFEL_MAX_SAMPLES traces
+// this many times SURFEL_RAYS in a frame, see surfel_gi_trace.comp
+const uint SURFEL_YOUNG_RAY_SCALE = 4u;
 // With the frame cache, a pixel which reuses its irradiance looks for its
 // surfels again in one of SURFEL_HISTORY_PERIOD frames at least: it keeps them
 // alive (8 frames are less than SURFEL_MIN_LIFE above 16 FPS), and it follows

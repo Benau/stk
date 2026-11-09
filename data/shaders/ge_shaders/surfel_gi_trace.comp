@@ -12,7 +12,8 @@
 // Only what doesn't move lights the surfels, so they can be cached: the static
 // scene, the sun and the sky (the dynamic nodes are not in RT_MASK_STATIC, and
 // shadeHit has no point light). With the frame cache, a surfel which converged
-// only traces in one of SURFEL_CACHED_TRACE_PERIOD frames.
+// only traces in one of SURFEL_CACHED_TRACE_PERIOD frames, and one which
+// didn't traces more rays (SURFEL_YOUNG_RAY_SCALE).
 //
 // Set 0 is the one of GEVulkanRTScene, set 1 the camera and the global light
 // (of the first viewport), set 2 the surfels, set 3 the mesh textures and set 4
@@ -109,6 +110,18 @@ void main()
         steps *= float(SURFEL_CACHED_TRACE_PERIOD);
         max_samples = SURFEL_CACHED_MAX_SAMPLES;
     }
+    // With the frame cache, a surfel which didn't converge yet traces
+    // SURFEL_YOUNG_RAY_SCALE times the rays, as many samples: the pixels
+    // around it are only in the history after it converged, and a camera
+    // which moves keeps spawning new surfels, so they converge in a quarter
+    // of the time (and their mean is less noisy before)
+    uint ray_count = SURFEL_RAYS;
+    if ((pc.m_cache & SURFEL_CACHE_FRAME) != 0u &&
+        surfel.m_samples < SURFEL_MAX_SAMPLES)
+    {
+        ray_count *= SURFEL_YOUNG_RAY_SCALE;
+        steps *= float(SURFEL_YOUNG_RAY_SCALE);
+    }
     vec3 normal = surfel.m_normal;
     vec3 tangent = normalize(abs(normal.y) < 0.999 ?
         cross(normal, vec3(0.0, 1.0, 0.0)) : cross(normal, vec3(1.0, 0.0, 0.0)));
@@ -118,7 +131,7 @@ void main()
     uint seed = id * 9781u + pc.m_frame * 6271u;
     vec3 radiance = vec3(0.0);
     uint back_faces = 0u;
-    for (uint i = 0u; i < SURFEL_RAYS; i++)
+    for (uint i = 0u; i < ray_count; i++)
     {
         // Cosine weighted, so the mean of the radiance is the irradiance
         // divided by pi, the same as the diffuse environment map
@@ -136,7 +149,7 @@ void main()
     // Every ray is inside of a mesh, so is the surfel (it was spawned from a
     // camera inside of it, or the mesh is open): it's free again, a surfel
     // outside of it sees at least one ray out of it almost always
-    if (back_faces == SURFEL_RAYS)
+    if (back_faces == ray_count)
     {
         u_surfels[id].m_radius = 0.0;
         u_surfels[id].m_samples = 0.0;
@@ -144,7 +157,7 @@ void main()
         u_pool.m_free[at] = id;
         return;
     }
-    radiance *= 1.0 / float(SURFEL_RAYS);
+    radiance *= 1.0 / float(ray_count);
     // A few very bright hits (emissive, the sun on a glossy surface) would
     // stay in the mean for long
     float luminance = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
