@@ -93,6 +93,9 @@ const float SURFEL_SPAWN_CHANCE = 0.25;
 // (a pixel which reuses it looks for its surfels again in
 // SURFEL_HISTORY_PERIOD frames)
 const float SURFEL_CACHE_MIN_SAMPLES = 64.0;
+// With the frame cache, the coverage of the surfels with enough samples around
+// a new surfel which it starts with their samples, see spawnSurfel()
+const float SURFEL_SEED_COVERAGE = 0.25;
 
 // The surface of a pixel in the g-buffer
 struct SurfelPixel
@@ -478,5 +481,17 @@ void spawnSurfel(SurfelPixel p, SurfelGather g)
     surfel.m_irradiance = g.m_weight_sum > 0.0 ?
         g.m_irradiance / g.m_weight_sum : vec3(0.0);
     surfel.m_samples = 0.0;
+    // With the frame cache, a surfel which spawns between surfels with enough
+    // samples starts with their mean (its irradiance above) and as many
+    // samples as them: the pixels around it would not be in the history until
+    // it has enough of its own, and a camera which moves keeps spawning
+    // smaller surfels between the ones of its surfaces (they shrink when it
+    // comes closer). A spawn is less covered than SURFEL_SPAWN_COVERAGE, so
+    // it only needs a few of them around it
+    if ((pc.m_cache & SURFEL_CACHE_FRAME) != 0u &&
+        g.m_coverage >= SURFEL_SEED_COVERAGE)
+    {
+        surfel.m_samples = min(g.m_min_samples, SURFEL_CACHE_MIN_SAMPLES);
+    }
     u_surfels[id] = surfel;
 }   // spawnSurfel
