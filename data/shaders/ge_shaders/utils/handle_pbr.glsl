@@ -61,11 +61,11 @@ vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
     if (u_surfel_gi)
     {
         irradiance = mix(irradiance, gi.rgb, gi.a);
-        // Without image based lighting the ambient color is lit by
+        // With or without image based lighting the ambient color is lit by
         // PBRSunAmbientEmitLight too (the rest of the sky), the surfels have
-        // all of it where they cover the pixel (their rays see the sky)
-        if (!u_ibl)
-            ambient_color *= 1.0 - gi.a;
+        // all of it where they cover the pixel (the rays of a surfel which
+        // see the sky get it, the ones which hit a wall see it lit by it)
+        ambient_color *= 1.0 - gi.a;
     }
 
     vec3 lightdir = sunDirection(reflection,

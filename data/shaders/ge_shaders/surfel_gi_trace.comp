@@ -47,12 +47,19 @@ layout(set = 4, binding = 3) uniform sampler2DArrayShadow u_shadow_map;
 #include "utils/surfel_gi.glsl"
 
 // The radiance of a ray which hits nothing, without a skybox it's the ambient
-// which the lighting pass uses without image based lighting
+// which the lighting pass uses without image based lighting. Plus the ambient
+// color which PBRSunAmbientEmitLight adds to every surface (the rest of the
+// sky, which the lighting pass doesn't add where the surfels cover a pixel,
+// see handlePBRDeferred): a hit has it too (shadeHit), so a surfel which sees
+// the sky gets it like one which sees walls, otherwise a closed tunnel is
+// brighter than the open valley around it at night (its rays hit walls lit by
+// it, the ones in the valley see a black sky)
 vec3 getSkyRadiance(vec3 direction)
 {
+    vec3 ambient = u_global_light.m_ambient_color * 0.4;
     if (pc.m_has_skybox != 0u)
-        return texture(u_skybox, direction).rgb;
-    return getAmbientIrradiance();
+        return texture(u_skybox, direction).rgb + ambient;
+    return getAmbientIrradiance() + ambient;
 }
 
 // back_face is set if the ray hits the back of a triangle
