@@ -167,7 +167,14 @@ void main()
 
     // The rays of this frame weigh its steps (pc.m_steps)
     float samples = min(surfel.m_samples + steps, max_samples);
+    // A converged surfel which traces in one of the frames weighs its rays as
+    // if it traced in all of them, not by its samples: they are only 64 when
+    // it just converged, so a few rays would move its mean a lot (8 / 72 of
+    // it) while the history of the frame cache reuses it
+    float weight = steps / samples;
+    if (max_samples == SURFEL_CACHED_MAX_SAMPLES)
+        weight = steps / SURFEL_CACHED_MAX_SAMPLES;
     u_surfels[id].m_irradiance = mix(surfel.m_irradiance, radiance,
-        min(steps / samples, 1.0));
+        min(weight, 1.0));
     u_surfels[id].m_samples = samples;
 }
