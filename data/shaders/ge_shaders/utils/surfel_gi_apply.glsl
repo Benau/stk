@@ -193,9 +193,8 @@ SurfelGather gatherSurfels(SurfelPixel p)
 
 // ----------------------------------------------------------------------------
 // The irradiance of the surfels within a cell of a pixel which they don't
-// cover (alpha is how much of it there is), see above. min_samples is lowered
-// to the fewest samples of them
-vec4 getNearbyIrradiance(SurfelPixel p, inout float min_samples)
+// cover (alpha is how much of it there is), see above
+vec4 getNearbyIrradiance(SurfelPixel p)
 {
     uint level = getSurfelLevel(p.m_camera_distance);
     float cell_size = getSurfelCellSize(level);
@@ -222,7 +221,6 @@ vec4 getNearbyIrradiance(SurfelPixel p, inout float min_samples)
             // A new surfel has a noisy mean
             float weight = falloff * falloff * facing * facing *
                 min(surfel.m_samples / SURFEL_CONFIDENT_SAMPLES, 1.0);
-            min_samples = min(min_samples, surfel.m_samples);
             irradiance += surfel.m_irradiance * weight;
             weight_sum += weight;
         }
@@ -236,7 +234,14 @@ vec4 getNearbyIrradiance(SurfelPixel p, inout float min_samples)
 // The output of a pixel from its surfels (and the ones around it if they don't
 // cover it), cacheable is set if it can be in the history: the history has no
 // alpha (a pixel which reuses it is covered), and only the irradiance of
-// surfels with enough samples doesn't change much anymore
+// surfels with enough samples doesn't change much anymore.
+//
+// A pixel which needs the surfels around it is never in the history: it's
+// mostly a kart or something else which moves, and the history is reprojected
+// with the camera only, so when the camera turns around a kart, its pixels
+// would reuse the irradiance of another part of it at the same distance with
+// a similar normal (its ears looked blurry), the nearby irradiance also
+// changes with its position
 vec4 resolveSurfelPixel(SurfelPixel p, SurfelGather g, out bool cacheable)
 {
     vec4 gi = vec4(0.0);
@@ -245,15 +250,14 @@ vec4 resolveSurfelPixel(SurfelPixel p, SurfelGather g, out bool cacheable)
         gi = vec4(g.m_irradiance / g.m_weight_sum,
             clamp(g.m_weight_sum * 2.0, 0.0, 1.0));
     }
-    float min_samples = g.m_min_samples;
+    cacheable = gi.a >= 1.0 && g.m_min_samples >= SURFEL_CACHE_MIN_SAMPLES;
     if (gi.a < 1.0)
     {
-        vec4 nearby = getNearbyIrradiance(p, min_samples);
+        vec4 nearby = getNearbyIrradiance(p);
         // The surfels on the surface first
         if (nearby.a > 0.0)
             gi = vec4(mix(nearby.rgb, gi.rgb, gi.a), max(gi.a, nearby.a));
     }
-    cacheable = gi.a >= 1.0 && min_samples >= SURFEL_CACHE_MIN_SAMPLES;
     return gi;
 }   // resolveSurfelPixel
 
