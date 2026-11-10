@@ -36,6 +36,26 @@ uint32_t groups8(int32_t size)
     return (uint32_t)(std::max(size, 0) + 7) / 8;
 }   // groups8
 
+// ----------------------------------------------------------------------------
+// Before a transfer write (fill or update) of a buffer which is written by
+// the transfer in every frame and used by the compute shaders. The barriers
+// after the last write only make it visible to the compute shaders (and the
+// indirect dispatches), so the write of the next frame, which is in another
+// command buffer, needs the last one to be available to the transfer too
+void transferBarrier(VkCommandBuffer cmd, bool indirect_read)
+{
+    VkMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
+        VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    if (indirect_read)
+        barrier.srcAccessMask |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+        VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, NULL, 0, NULL);
+}   // transferBarrier
+
 }   // anonymous namespace
 
 // ----------------------------------------------------------------------------
@@ -435,27 +455,11 @@ void GEVulkanSurfelGI::clearOutput(VkCommandBuffer cmd)
 }   // clearOutput
 
 // ----------------------------------------------------------------------------
-void GEVulkanSurfelGI::clearMissList(VkCommandBuffer cmd, bool first)
+void GEVulkanSurfelGI::clearMissList(VkCommandBuffer cmd)
 {
-    // The passes of the last viewport read them (the first one has the
-    // barrier of the beginning of render())
-    if (!first)
-    {
-        VkMemoryBarrier barrier = {};
-        barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-        barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
-            VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, NULL, 0, NULL);
-    }
-    else
-    {
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 0, NULL);
-    }
+    // The passes of the last viewport (or the last frame) read them, and the
+    // fills of the last frame have to be finished
+    transferBarrier(cmd, true);
     // No pixel and no group of the dispatch (x), the dispatch has y and z of
     // 1, and no spawn in the tiles
     vkCmdFillBuffer(cmd, m_buffers[BI_MISS].m_buffer, 0,
@@ -592,8 +596,7 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
     // the last frame read them
     if ((pc.m_cache & CACHE_HISTORY) != 0)
     {
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 0, NULL);
+        transferBarrier(cmd, false);
         vkCmdUpdateBuffer(cmd, m_buffers[BI_PREV_CAMERA].m_buffer, 0,
             sizeof(PrevCamera) * viewport_count, m_prev_cameras.data());
     }
@@ -698,7 +701,7 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
         const uint32_t tiles_x = groups8(vp.m_rect[2] - vp.m_rect[0]);
         const uint32_t tiles_y = groups8(vp.m_rect[3] - vp.m_rect[1]);
         if (defer)
-            clearMissList(cmd, v == 0);
+            clearMissList(cmd);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
             m_pipelines[PI_APPLY]);
         vkCmdDispatch(cmd, tiles_x, tiles_y, 1);

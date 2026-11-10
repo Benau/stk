@@ -271,7 +271,7 @@ private:
     // ------------------------------------------------------------------------
     // Empties the list of the misses and the spawns of the tiles before
     // surfel_gi_apply.comp of a viewport (CACHE_DEFER)
-    void clearMissList(VkCommandBuffer cmd, bool first);
+    void clearMissList(VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
     // Black, and sampled by the lighting pass after it
     void clearOutput(VkCommandBuffer cmd);
