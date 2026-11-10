@@ -83,8 +83,11 @@ void main()
         uint l = gl_LocalInvocationIndex;
         uint first = atomicAdd(u_trace_lists.m_count[l], s_trace_count[l]);
         s_trace_first[l] = first;
+        // A surfel which didn't converge has SURFEL_YOUNG_RAY_SCALE threads
+        // in surfel_gi_trace.comp
+        uint threads = l == SURFEL_TRACE_YOUNG ? SURFEL_YOUNG_RAY_SCALE : 1u;
         atomicMax(u_trace_lists.m_dispatch[l][0],
-            (first + s_trace_count[l] + 63u) / 64u);
+            ((first + s_trace_count[l]) * threads + 63u) / 64u);
     }
     barrier();
     if (list >= 0)

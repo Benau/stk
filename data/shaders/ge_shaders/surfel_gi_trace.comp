@@ -13,9 +13,9 @@
 // scene, the sun and the sky (the dynamic nodes are not in RT_MASK_STATIC, and
 // shadeHit has no point light). With the frame cache, a surfel which converged
 // only traces in one of SURFEL_CACHED_TRACE_PERIOD frames, and one which
-// didn't traces more rays (SURFEL_YOUNG_RAY_SCALE): the thread of the trace is
-// the one of a surfel of a list of surfel_gi_update.comp (u_trace_lists), the
-// young ones and the converged ones whose turn it is are in 2 dispatches.
+// didn't traces more rays (SURFEL_YOUNG_RAY_SCALE) with as many threads: the
+// surfels are the ones of the lists of surfel_gi_update.comp (u_trace_lists),
+// the young ones and the converged ones whose turn it is in 2 dispatches.
 //
 // Set 0 is the one of GEVulkanRTScene, set 1 the camera and the global light
 // (of the first viewport), set 2 the surfels, set 3 the mesh textures and set 4
@@ -93,52 +93,26 @@ vec3 traceSurfelRay(vec3 origin, vec3 direction, inout bool back_face)
         origin, direction);
 }
 
-void main()
+// With the frame cache, the rays of a surfel which didn't converge are traced
+// by SURFEL_YOUNG_RAY_SCALE threads of the group (SURFEL_RAYS each): one
+// thread would trace them one after the other, and there are only a few of
+// these surfels in a frame (a few thousands), so the gpu would mostly wait for
+// the rays. The sums of the rays of the threads and their back faces
+shared vec4 s_young_rays[64];
+
+// ----------------------------------------------------------------------------
+// The radiance of count cosine weighted rays from the surfel (the seed is the
+// one of the first of them), back_faces is how many hit the back of a triangle
+vec3 traceSurfelRays(Surfel surfel, uint seed, uint count,
+                     inout uint back_faces)
 {
-    uint id = gl_GlobalInvocationID.x;
-    float steps = pc.m_steps;
-    float max_samples = SURFEL_MAX_SAMPLES;
-    uint ray_count = SURFEL_RAYS;
-    if ((pc.m_cache & SURFEL_CACHE_FRAME) != 0u)
-    {
-        // The surfels of the list of this dispatch (see u_trace_lists)
-        uint list = pc.m_trace_list;
-        if (id >= u_trace_lists.m_count[list])
-            return;
-        id = u_trace_lists.m_ids[list * pc.m_surfel_count + id];
-        if (list == SURFEL_TRACE_CONVERGED)
-        {
-            // A converged surfel traces in one of the frames, its rays weigh
-            // the steps of all of them, and its mean has more of them, so it
-            // has as many rays as without the cache
-            steps *= float(SURFEL_CACHED_TRACE_PERIOD);
-            max_samples = SURFEL_CACHED_MAX_SAMPLES;
-        }
-        else
-        {
-            // A surfel which didn't converge yet traces
-            // SURFEL_YOUNG_RAY_SCALE times the rays, as many samples: the
-            // pixels around it are only in the history after it converged,
-            // and a camera which moves keeps spawning new surfels, so they
-            // converge in a quarter of the time (and their mean is less noisy
-            // before)
-            ray_count *= SURFEL_YOUNG_RAY_SCALE;
-            steps *= float(SURFEL_YOUNG_RAY_SCALE);
-        }
-    }
-    else if (id >= pc.m_surfel_count || u_surfels[id].m_radius == 0.0)
-        return;
-    Surfel surfel = u_surfels[id];
     vec3 normal = surfel.m_normal;
     vec3 tangent = normalize(abs(normal.y) < 0.999 ?
         cross(normal, vec3(0.0, 1.0, 0.0)) : cross(normal, vec3(1.0, 0.0, 0.0)));
     vec3 bitangent = cross(normal, tangent);
     vec3 origin = surfel.m_position + normal * RT_RAY_MIN;
-
-    uint seed = id * 9781u + pc.m_frame * 6271u;
     vec3 radiance = vec3(0.0);
-    uint back_faces = 0u;
-    for (uint i = 0u; i < ray_count; i++)
+    for (uint i = 0u; i < count; i++)
     {
         // Cosine weighted, so the mean of the radiance is the irradiance
         // divided by pi, the same as the diffuse environment map
@@ -153,6 +127,85 @@ void main()
         if (back_face)
             back_faces++;
     }
+    return radiance;
+}   // traceSurfelRays
+
+// ----------------------------------------------------------------------------
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    float steps = pc.m_steps;
+    float max_samples = SURFEL_MAX_SAMPLES;
+    uint ray_count = SURFEL_RAYS;
+    // The thread of the rays of a surfel which didn't converge (the first one
+    // sums them), see s_young_rays
+    uint lane = 0u;
+    bool young = false;
+    uint id = index;
+    bool has_surfel = true;
+    if ((pc.m_cache & SURFEL_CACHE_FRAME) != 0u)
+    {
+        // The surfels of the list of this dispatch (see u_trace_lists)
+        uint list = pc.m_trace_list;
+        young = list == SURFEL_TRACE_YOUNG;
+        if (young)
+        {
+            // A surfel which didn't converge yet traces
+            // SURFEL_YOUNG_RAY_SCALE times the rays, as many samples: the
+            // pixels around it are only in the history after it converged,
+            // and a camera which moves keeps spawning new surfels, so they
+            // converge in a quarter of the time (and their mean is less noisy
+            // before)
+            lane = index % SURFEL_YOUNG_RAY_SCALE;
+            index /= SURFEL_YOUNG_RAY_SCALE;
+            ray_count *= SURFEL_YOUNG_RAY_SCALE;
+            steps *= float(SURFEL_YOUNG_RAY_SCALE);
+        }
+        else
+        {
+            // A converged surfel traces in one of the frames, its rays weigh
+            // the steps of all of them, and its mean has more of them, so it
+            // has as many rays as without the cache
+            steps *= float(SURFEL_CACHED_TRACE_PERIOD);
+            max_samples = SURFEL_CACHED_MAX_SAMPLES;
+        }
+        has_surfel = index < u_trace_lists.m_count[list];
+        if (has_surfel)
+            id = u_trace_lists.m_ids[list * pc.m_surfel_count + index];
+    }
+    else
+        has_surfel = id < pc.m_surfel_count && u_surfels[id].m_radius != 0.0;
+
+    Surfel surfel;
+    vec3 radiance = vec3(0.0);
+    uint back_faces = 0u;
+    if (has_surfel)
+    {
+        surfel = u_surfels[id];
+        // A different seed for every thread of a surfel
+        uint seed = id * 9781u + pc.m_frame * 6271u + lane * 7919u;
+        radiance = traceSurfelRays(surfel, seed, SURFEL_RAYS, back_faces);
+    }
+    // A surfel which didn't converge traces more rays than SURFEL_RAYS, which
+    // a thread can't do in time: SURFEL_YOUNG_RAY_SCALE threads of the group
+    // (in the same order as the surfels of the list) sum them, in uniform
+    // control flow for the barrier
+    if (young)
+    {
+        s_young_rays[gl_LocalInvocationIndex] =
+            vec4(radiance, float(back_faces));
+        barrier();
+        if (lane != 0u)
+            return;
+        for (uint i = 1u; i < SURFEL_YOUNG_RAY_SCALE; i++)
+        {
+            vec4 rays = s_young_rays[gl_LocalInvocationIndex + i];
+            radiance += rays.xyz;
+            back_faces += uint(rays.w);
+        }
+    }
+    if (!has_surfel)
+        return;
     // Every ray is inside of a mesh, so is the surfel (it was spawned from a
     // camera inside of it, or the mesh is open): it's free again, a surfel
     // outside of it sees at least one ray out of it almost always
