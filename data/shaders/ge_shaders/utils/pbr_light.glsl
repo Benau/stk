@@ -34,11 +34,17 @@ vec3 PBRLight(
     return NdotL * (diffuse + specular);
 }
 
-// The irradiance of the environment without image based lighting (the sky top
-// color, PBRSunAmbientEmitLight scales the ambient by 0.4 too)
+// Other 0.6 comes from skybox
+vec3 getAmbientColor(vec3 ambient_color)
+{
+    return ambient_color * 0.4;
+}
+
+// The irradiance of the environment without image based lighting
 vec3 getAmbientIrradiance()
 {
-    return u_global_light.m_skytop_color * u_global_light.m_ambient_color * 0.4;
+    return u_global_light.m_skytop_color *
+        getAmbientColor(u_global_light.m_ambient_color);
 }
 
 // irradiance is the one of the diffuse environment map with image based
@@ -52,6 +58,7 @@ vec3 PBRSunAmbientEmitLight(
     vec3 radiance,
     vec3 sun_color,
     vec3 ambient_color,
+    float diffuse_ambient_scale,
     float perceptual_roughness,
     float metallic,
     float emissive,
@@ -91,8 +98,6 @@ vec3 PBRSunAmbientEmitLight(
 
     vec3 specular_ambient = F90 * envBRDFApprox(F0, F_ab);
 
-    // Other 0.6 comes from skybox
-    ambient_color *= 0.4;
     vec3 environment;
     if (u_ibl)
     {
@@ -109,8 +114,8 @@ vec3 PBRSunAmbientEmitLight(
 
     return sun_color * sunlight
           + environment + emit
-          + (diffuse_ambient * ao_diffuse + specular_ambient * ao_specular) *
-          ambient_color;
+          + (diffuse_ambient * ao_diffuse * diffuse_ambient_scale +
+             specular_ambient * ao_specular) * getAmbientColor(ambient_color);
 }
 
 float getShadowPCF(sampler2DArrayShadow map, vec2 shadowtexcoord, int layer, float depth)

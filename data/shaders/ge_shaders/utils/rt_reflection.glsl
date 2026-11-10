@@ -235,7 +235,7 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
     }
     vec3 hdr = PBRSunAmbientEmitLight(normal, eyedir, sun_direction,
         diffuse_color, irradiance, radiance, u_global_light.m_sun_color,
-        u_global_light.m_ambient_color, perceptual_roughness, pbr.y, pbr.z,
+        u_global_light.m_ambient_color, 1.0, perceptual_roughness, pbr.y, pbr.z,
         shadow, vec3(1.0), vec3(1.0));
 
     // TODO: point lights (accumulateLights of the lighting pass, in world

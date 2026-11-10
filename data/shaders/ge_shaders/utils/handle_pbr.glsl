@@ -57,7 +57,7 @@ vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
         radiance = textureLod(u_specular, world_reflection, radiance_level).rgb;
     }
     // With or without image based lighting
-    vec3 ambient_color = u_global_light.m_ambient_color;
+    float diffuse_ambient_scale = 1.0;
     if (u_surfel_gi)
     {
         irradiance = mix(irradiance, gi.rgb, gi.a);
@@ -65,7 +65,7 @@ vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
         // PBRSunAmbientEmitLight too (the rest of the sky), the surfels have
         // all of it where they cover the pixel (the rays of a surfel which
         // see the sky get it, the ones which hit a wall see it lit by it)
-        ambient_color *= 1.0 - gi.a;
+        diffuse_ambient_scale = 1.0 - gi.a;
     }
 
     vec3 lightdir = sunDirection(reflection,
@@ -84,7 +84,8 @@ vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
     vec3 mixed_color = PBRSunAmbientEmitLight(
         normal, eyedir, lightdir, diffuse_color,
         irradiance, radiance,
-        u_global_light.m_sun_color, ambient_color,
+        u_global_light.m_sun_color, u_global_light.m_ambient_color,
+        diffuse_ambient_scale,
         perceptual_roughness, pbr.y, pbr.z, shadow, ao_diffuse, ao_specular);
 
     return mixed_color;

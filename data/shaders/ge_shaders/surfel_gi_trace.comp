@@ -60,7 +60,7 @@ layout(set = 4, binding = 3) uniform sampler2DArrayShadow u_shadow_map;
 // it, the ones in the valley see a black sky)
 vec3 getSkyRadiance(vec3 direction)
 {
-    vec3 ambient = u_global_light.m_ambient_color * 0.4;
+    vec3 ambient = getAmbientColor(u_global_light.m_ambient_color);
     if (pc.m_has_skybox != 0u)
         return texture(u_skybox, direction).rgb + ambient;
     return getAmbientIrradiance() + ambient;
