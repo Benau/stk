@@ -164,7 +164,9 @@ void GEVulkanSurfelGI::createBuffers()
         sizeof(uint32_t) * CELL_COUNT,
         sizeof(PrevCamera) * MAX_CAMERAS,
         sizeof(uint32_t) * (4 + m_size.Width * m_size.Height),
-        sizeof(uint32_t) * ((m_size.Width + 7) / 8) * ((m_size.Height + 7) / 8)
+        sizeof(uint32_t) * ((m_size.Width + 7) / 8) * ((m_size.Height + 7) / 8),
+        sizeof(uint32_t) * (4 * TRACE_LIST_COUNT +
+            TRACE_LIST_COUNT * MAX_SURFELS)
     }};
     for (unsigned i = 0; i < BI_COUNT; i++)
     {
@@ -173,6 +175,8 @@ void GEVulkanSurfelGI::createBuffers()
         VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         if (i == BI_PREV_CAMERA || i == BI_TILE_SPAWN)
             usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        if (i == BI_TRACE_LIST)
+            usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
         if (i == BI_MISS)
         {
             usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT |
@@ -645,16 +649,36 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
         groups64(std::max<uint32_t>(CELL_COUNT, pc.m_surfel_count)), 1, 1);
     computeToComputeBarrier(cmd, 0);
 
-    // 2. Recycle, resize and register in the cells
+    // 2. Recycle, resize and register in the cells (and the lists of the trace)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipelines[PI_UPDATE]);
     vkCmdDispatch(cmd, groups64(pc.m_surfel_count), 1, 1);
     computeToComputeBarrier(cmd, 0);
 
-    // 3. Rays of the surfels
+    // 3. Rays of the surfels, with the frame cache the ones of the lists of
+    // the update (their sizes are the indirect dispatches)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipelines[PI_TRACE]);
-    vkCmdDispatch(cmd, groups64(pc.m_surfel_count), 1, 1);
+    if (cache)
+    {
+        VkMemoryBarrier barrier = {};
+        barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 1, &barrier, 0, NULL, 0,
+            NULL);
+        for (uint32_t list = 0; list < TRACE_LIST_COUNT; list++)
+        {
+            pc.m_trace_list = list;
+            vkCmdPushConstants(cmd, m_pipeline_layout,
+                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+            vkCmdDispatchIndirect(cmd, m_buffers[BI_TRACE_LIST].m_buffer,
+                list * 3 * sizeof(uint32_t));
+        }
+    }
+    else
+        vkCmdDispatch(cmd, groups64(pc.m_surfel_count), 1, 1);
     computeToComputeBarrier(cmd, 0);
 
     // 4. Irradiance of the pixels and new surfels, per viewport

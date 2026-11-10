@@ -1,7 +1,8 @@
 // First pass of GEVulkanSurfelGI (see utils/surfel_gi.glsl): the cells of the
-// grid are empty (and nothing was spawned in them), and with m_reset (the
-// first frame, or the static scene was built again so the surfels are on
-// triangles which are gone) every surfel is free
+// grid and the lists of the surfels to trace are empty (and nothing was
+// spawned in the cells), and with m_reset (the first frame, or the static
+// scene was built again so the surfels are on triangles which are gone) every
+// surfel is free
 layout(local_size_x = 64) in;
 
 #define SURFEL_SET 2
@@ -10,6 +11,11 @@ layout(local_size_x = 64) in;
 void main()
 {
     uint i = gl_GlobalInvocationID.x;
+    if (i < 2u)
+    {
+        u_trace_lists.m_dispatch[i] = uint[3](0u, 1u, 1u);
+        u_trace_lists.m_count[i] = 0u;
+    }
     if (i < SURFEL_CELL_COUNT)
     {
         u_cell_count[i] = 0u;

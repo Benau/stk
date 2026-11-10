@@ -63,6 +63,9 @@ layout(push_constant) uniform SurfelPushConstants
     uint m_cache;
     // The viewport of surfel_gi_apply.comp (its u_prev_cameras)
     uint m_viewport_index;
+    // The list of u_trace_lists which surfel_gi_trace.comp traces with the
+    // frame cache (SURFEL_TRACE_*)
+    uint m_trace_list;
 } pc;
 
 // The frame cache, the irradiance which doesn't change anymore is reused (see
@@ -138,6 +141,25 @@ layout(std430, set = SURFEL_SET, binding = 8) readonly buffer SurfelPrevCameras
     SurfelPrevCamera u_prev_cameras[];
 };
 
+// With the frame cache, the surfels which surfel_gi_trace.comp traces in the
+// frame, put in 2 lists by surfel_gi_update.comp: the ones which didn't
+// converge (they trace SURFEL_YOUNG_RAY_SCALE times the rays) and the
+// converged ones whose turn it is. A group of threads takes as long as its
+// slowest one, so mixed in one dispatch every group would trace the rays of a
+// surfel which didn't converge, and the converged ones which don't trace in
+// the frame would still take a thread. Every list has its indirect dispatch
+// (x, y, z groups of 64) and its count, the ids of list i start at
+// i * pc.m_surfel_count
+layout(std430, set = SURFEL_SET, binding = 11) buffer SurfelTraceLists
+{
+    uint m_dispatch[2][3];
+    uint m_count[2];
+    uint m_ids[];
+} u_trace_lists;
+
+const uint SURFEL_TRACE_YOUNG = 0u;
+const uint SURFEL_TRACE_CONVERGED = 1u;
+
 // Surfels of the pool for every viewport, they are shared by the cameras (a
 // surface seen by two of them has the same surfels), see pc.m_surfel_count
 const uint SURFEL_PER_CAMERA = 32768u;
@@ -157,10 +179,10 @@ const float SURFEL_MAX_SAMPLES = 64.0;
 // mean
 const float SURFEL_CONFIDENT_SAMPLES = 8.0;
 // With the frame cache, a surfel with SURFEL_MAX_SAMPLES converged: it only
-// traces in one of SURFEL_CACHED_TRACE_PERIOD frames, and its mean has up to
-// SURFEL_CACHED_MAX_SAMPLES steps, so the same number of rays (it follows a
-// change of the lighting slower, which only happens when the static scene is
-// built again, and the pool is cleared then)
+// traces in one of SURFEL_CACHED_TRACE_PERIOD frames (they take turns), and its
+// mean has up to SURFEL_CACHED_MAX_SAMPLES steps, so the same number of rays
+// (it follows a change of the lighting slower, which only happens when the
+// static scene is built again, and the pool is cleared then)
 const uint SURFEL_CACHED_TRACE_PERIOD = 8u;
 const float SURFEL_CACHED_MAX_SAMPLES =
     SURFEL_MAX_SAMPLES * float(SURFEL_CACHED_TRACE_PERIOD);

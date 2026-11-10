@@ -90,6 +90,21 @@ private:
         uint32_t m_cache;
         // The viewport of surfel_gi_apply.comp (its PrevCamera)
         uint32_t m_viewport_index;
+        // The list of the surfels which surfel_gi_trace.comp traces with the
+        // frame cache (TRACE_*)
+        uint32_t m_trace_list;
+    };
+    static_assert(sizeof(SurfelPushConstants) <= 128, "The push constants "
+        "which every device has");
+
+    // The lists of BI_TRACE_LIST
+    enum : uint32_t
+    {
+        // The surfels which didn't converge
+        TRACE_YOUNG = 0,
+        // The converged surfels whose turn it is to trace
+        TRACE_CONVERGED,
+        TRACE_LIST_COUNT
     };
 
     // Bits of m_cache of the push constants
@@ -138,6 +153,10 @@ private:
         // 8x8 tile (see utils/surfel_gi_apply.glsl), for CACHE_DEFER
         BI_MISS,
         BI_TILE_SPAWN,
+        // With the frame cache, the surfels which surfel_gi_trace.comp traces
+        // in the frame in TRACE_LIST_COUNT lists, every one with its indirect
+        // dispatch and its count (see u_trace_lists of utils/surfel_gi.glsl)
+        BI_TRACE_LIST,
         BI_COUNT
     };
 
@@ -158,8 +177,8 @@ private:
     std::array<GEVulkanAttachmentTexture*, 2> m_history;
 
     // Binding 0 is the depth and 1 is the normal of the g-buffer (combined
-    // image samplers), 2 is the output, 3 to 10 the buffers, 11 the history
-    // which is read and 12 the one which is written
+    // image samplers), 2 is the output, 3 to 11 the buffers, 12 the history
+    // which is read and 13 the one which is written
     VkDescriptorSetLayout m_layout;
 
     VkDescriptorPool m_pool;

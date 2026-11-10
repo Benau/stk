@@ -7,17 +7,25 @@
 // level of a pixel is the one of its distance, which is the distance of the
 // surfel plus or minus the radius at most. A pixel looks in the 2x2x2 cells
 // nearest to it, the radius is at most half a cell so they have every surfel
-// which touches it
+// which touches it. With the frame cache, the surfels which trace in this
+// frame are put in the lists of surfel_gi_trace.comp (see u_trace_lists)
 layout(local_size_x = 64) in;
 
 #define SURFEL_SET 2
 #include "utils/surfel_gi.glsl"
 
-void main()
+// The surfels of the group in the lists of the trace (one atomic of a list for
+// the group), and the first of them in the lists
+shared uint s_trace_count[2];
+shared uint s_trace_first[2];
+
+// ----------------------------------------------------------------------------
+// Returns the list of the trace of the surfel with the frame cache
+// (SURFEL_TRACE_*), or -1 if it doesn't trace in this frame (or it's free)
+int updateSurfel(uint id)
 {
-    uint id = gl_GlobalInvocationID.x;
     if (id >= pc.m_surfel_count || u_surfels[id].m_radius == 0.0)
-        return;
+        return -1;
     vec3 position = u_surfels[id].m_position;
     float camera_distance = getSurfelCameraDistance(position);
     // The free count grows while this pass frees surfels, so the threads
@@ -34,7 +42,7 @@ void main()
         u_surfels[id].m_radius = 0.0;
         int at = atomicAdd(u_pool.m_free_count, 1);
         u_pool.m_free[at] = id;
-        return;
+        return -1;
     }
 
     float radius = getSurfelRadius(camera_distance);
@@ -47,5 +55,41 @@ void main()
         uint slot = atomicAdd(u_cell_count[cell], 1u);
         if (slot < SURFEL_CELL_CAPACITY)
             u_cell_surfels[cell * SURFEL_CELL_CAPACITY + slot] = id;
+    }
+    if (u_surfels[id].m_samples < SURFEL_MAX_SAMPLES)
+        return int(SURFEL_TRACE_YOUNG);
+    if ((id + pc.m_frame) % SURFEL_CACHED_TRACE_PERIOD == 0u)
+        return int(SURFEL_TRACE_CONVERGED);
+    return -1;
+}   // updateSurfel
+
+// ----------------------------------------------------------------------------
+void main()
+{
+    if (gl_LocalInvocationIndex < 2u)
+        s_trace_count[gl_LocalInvocationIndex] = 0u;
+    barrier();
+    uint id = gl_GlobalInvocationID.x;
+    int list = updateSurfel(id);
+    if ((pc.m_cache & SURFEL_CACHE_FRAME) == 0u)
+        return;
+    uint slot = 0u;
+    if (list >= 0)
+        slot = atomicAdd(s_trace_count[list], 1u);
+    barrier();
+    if (gl_LocalInvocationIndex < 2u &&
+        s_trace_count[gl_LocalInvocationIndex] != 0u)
+    {
+        uint l = gl_LocalInvocationIndex;
+        uint first = atomicAdd(u_trace_lists.m_count[l], s_trace_count[l]);
+        s_trace_first[l] = first;
+        atomicMax(u_trace_lists.m_dispatch[l][0],
+            (first + s_trace_count[l] + 63u) / 64u);
+    }
+    barrier();
+    if (list >= 0)
+    {
+        u_trace_lists.m_ids[uint(list) * pc.m_surfel_count +
+            s_trace_first[list] + slot] = id;
     }
 }

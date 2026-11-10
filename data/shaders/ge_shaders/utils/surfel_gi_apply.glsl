@@ -50,8 +50,8 @@ layout(set = 2, binding = 2, rgba16f) uniform writeonly image2D u_out;
 // The history of the last frame and the one of this frame (the next frame
 // reads it), the irradiance (packSurfelIrradiance) and the surface
 // (packSurfelHistorySurface) of a pixel, 0 if it can't be reused
-layout(set = 2, binding = 11, rg32ui) uniform readonly uimage2D u_history_in;
-layout(set = 2, binding = 12, rg32ui) uniform writeonly uimage2D u_history_out;
+layout(set = 2, binding = 12, rg32ui) uniform readonly uimage2D u_history_in;
+layout(set = 2, binding = 13, rg32ui) uniform writeonly uimage2D u_history_out;
 
 // The pixels which surfel_gi_apply.comp couldn't reuse (packSurfelPixel), for
 // surfel_gi_gather.comp, which is dispatched with m_dispatch (it's the number
