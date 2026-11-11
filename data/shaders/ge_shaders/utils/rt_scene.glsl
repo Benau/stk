@@ -1,6 +1,6 @@
 // The ray traced scene (GEVulkanRTScene) as seen by a shader: its bindings
 // (set RT_SCENE_SET, 0 by default), the geometry data of a hit and the ray
-// queries shared by the passes which trace it (solid_rt.frag,
+// queries shared by the passes which trace it (solid_reflection_rt.comp,
 // displace_mask_rt.frag, the ray traced shadows).
 //
 // The shader which includes this file must have, before it, the include of

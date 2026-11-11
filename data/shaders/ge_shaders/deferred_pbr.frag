@@ -12,6 +12,9 @@ layout(binding = 4) uniform sampler2DArray u_rt_shadow_texture;
 // Irradiance of GEVulkanSurfelGI (alpha is its coverage), used if u_surfel_gi (a
 // transparent texture is bound if not)
 layout(binding = 5) uniform sampler2D u_surfel_gi_texture;
+// Reflection of the glossy solid materials of GEVulkanSolidReflection, used if
+// u_solid_reflection_image (a transparent texture is bound if not)
+layout(binding = 6) uniform sampler2D u_solid_reflection_texture;
 // Enables the filter of it in utils/pbr_light.glsl
 #define HAS_RT_SHADOW_TEXTURE
 #define GE_LOAD_GBUFFER(tex) texelFetch(tex, ivec2(gl_FragCoord.xy), 0)
@@ -27,6 +30,9 @@ layout(location = 0) out vec4 o_color;
 layout(push_constant) uniform Constants
 {
     int m_fullscreen_light_count;
+    // GEVulkanSolidReflection traced the viewport in this frame (only used
+    // with u_solid_reflection_image)
+    uint m_solid_reflection;
 } u_push_constants;
 
 #include "utils/unproject_position.glsl"
@@ -51,7 +57,19 @@ void main()
     float ao = 1.0;
     float rt_shadow = 1.0;
     vec4 gi = vec4(0.0);
+    // The specular radiance which replaces the specular IBL
+    bool has_reflection = false;
+    vec3 reflection = vec3(0.0);
 #ifdef SPLIT
+    // Only the glossy pixels have it (GEVulkanSolidReflection doesn't write
+    // the others)
+    if (u_solid_reflection_image && u_push_constants.m_solid_reflection != 0u &&
+        pbr.x >= SOLID_REFLECTION_MIN_GLOSS)
+    {
+        has_reflection = true;
+        reflection = texelFetch(u_solid_reflection_texture,
+            ivec2(gl_FragCoord.xy), 0).rgb;
+    }
     if (u_ssao)
         ao = texelFetch(u_ssao_texture, ivec2(gl_FragCoord.xy), 0).x;
     if (u_surfel_gi)
@@ -62,7 +80,8 @@ void main()
     }
 #endif
     vec3 hdr = handlePBRDeferred(diffuse_color, pbr, world_normal, eyedir,
-        normal, 1.0 - pbr.x, world_position, xpos.z, ao, rt_shadow, gi);
+        normal, 1.0 - pbr.x, world_position, xpos.z, ao, rt_shadow, gi,
+        has_reflection, reflection);
     hdr += accumulateLights(u_push_constants.m_fullscreen_light_count,
         diffuse_color, normal, xpos, eyedir, 1.0 - pbr.x, pbr.y,
         world_position.xyz);

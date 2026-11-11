@@ -7,9 +7,10 @@
 // ray is traced in the ray traced scene (GEVulkanRTScene) with the shading of
 // the hits shared with the reflection of the solid materials (see
 // utils/rt_reflection.glsl) instead of the screen, which has no history and no
-// screen edges. It uses the pipeline layout of solid_rt.frag (GEVulkanDrawCall::
-// m_solid_rt_layout: the scene is set 0, the environment is set 3 and the mesh
-// textures, also the one of the mask of this material, are the bindless set 4),
+// screen edges. It uses the pipeline layout GEVulkanDrawCall::m_solid_rt_layout
+// (the sets of solid_reflection_rt.comp without its last one: the scene is set
+// 0, the environment is set 3 and the mesh textures, also the one of the mask
+// of this material, are the bindless set 4),
 // so displace_mask_rt.frag defines DISPLACE_ENV_SET and MESH_TEXTURES_SET. The
 // environment is the fallback of both
 layout(location = 1) in vec2 f_uv;

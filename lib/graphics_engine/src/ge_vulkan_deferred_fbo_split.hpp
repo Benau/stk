@@ -14,6 +14,7 @@ class GEVulkanLightScatter;
 class GEVulkanGodRays;
 class GEVulkanRTShadow;
 class GEVulkanSurfelGI;
+class GEVulkanSolidReflection;
 class GEVulkanSSAO;
 
 // Same output as GEVulkanDeferredFBO, but every stage is its own traditional
@@ -49,10 +50,11 @@ class GEVulkanSSAO;
 //                every viewport (if it's the type of the reflection), see
 //                GEVulkanHiZDepth, generated right after the g-buffer pass,
 //                used by the lighting and displace pass]
-//   lighting   : the solid materials reflect the output of the tonemap pass
-//                of the previous frame (converted back to hdr), see
-//                GEVulkanDrawCall::renderSolidSSR and solid_ssr.frag, which
-//                needs the output to be a texture
+//   [reflection: compute shaders only, the glossy solid materials reflect
+//                the output of the tonemap pass of the previous frame
+//                (converted back to hdr), see GEVulkanSolidReflection and
+//                solid_reflection_ssr.comp, which needs the output to be a
+//                texture, it's added by the lighting pass]
 //
 // When direct swapchain output is requested, tonemap writes to the swapchain
 // only when neither displace nor solid SSR is active; otherwise it uses the
@@ -101,6 +103,9 @@ private:
     // The diffuse global illumination which the lighting pass samples, NULL if
     // it is not enabled (see isSurfelGI())
     std::unique_ptr<GEVulkanSurfelGI> m_surfel_gi;
+    // The reflection of the glossy solid materials which the lighting pass
+    // samples, NULL if there is no screen space or ray traced one
+    std::unique_ptr<GEVulkanSolidReflection> m_solid_reflection;
 
     // Same, NULL if bloom is not enabled
     std::unique_ptr<GEVulkanBloom> m_bloom;
@@ -178,17 +183,25 @@ public:
     // sixth binding of GVDFP_HDR)
     bool hasSurfelGI() const                    { return m_surfel_gi != NULL; }
     // ------------------------------------------------------------------------
+    // Same for the reflection of the solid materials (the seventh binding of
+    // GVDFP_HDR), the draw calls create the pipelines of its trace
+    bool hasSolidReflection() const      { return m_solid_reflection != NULL; }
+    // ------------------------------------------------------------------------
+    GEVulkanSolidReflection* getSolidReflection() const
+                                           { return m_solid_reflection.get(); }
+    // ------------------------------------------------------------------------
     // Size of the ray traced shadow relative to the FBO, 1.0 if there is none
     float getRTShadowScale() const;
     // ------------------------------------------------------------------------
     // Same for the blend texture (lens dust) of the bloom
     bool hasBloomBlend() const        { return m_bloom_blend_texture != NULL; }
     // ------------------------------------------------------------------------
-    // Same for GVPT_SOLID_SSR (GVDFP_SOLID_SSR is the layout of it)
+    // Same for the screen space trace of GEVulkanSolidReflection
+    // (GVDFP_SOLID_SSR is the layout of it)
     bool hasSolidSSR() const                           { return m_solid_ssr; }
     // ------------------------------------------------------------------------
-    // Same for GVPT_SOLID_RT (it has its own pipeline layout in
-    // GEVulkanDrawCall)
+    // Same for the ray traced passes (the trace of GEVulkanSolidReflection
+    // has its own pipeline layout in GEVulkanDrawCall)
     bool hasSolidRT() const                              { return m_solid_rt; }
     // ------------------------------------------------------------------------
     // GVDFP_SOLID_SSR uses the layout and the set (the one without HiZ depth)

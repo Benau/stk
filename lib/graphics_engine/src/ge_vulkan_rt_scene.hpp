@@ -184,8 +184,8 @@ private:
     std::unique_ptr<GEVulkanDynamicBuffer> m_geometry_data;
 
     // Set 0 of the ray traced pass: the TLAS, the data buffer and the geometry
-    // buffer (see solid_rt.frag), one for each buffer of m_geometry_data and
-    // updated after the scene is built
+    // buffer (see solid_reflection_rt.comp), one for each buffer of
+    // m_geometry_data and updated after the scene is built
     VkDescriptorSetLayout m_descriptor_layout;
 
     VkDescriptorPool m_descriptor_pool;

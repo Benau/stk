@@ -4,8 +4,9 @@
 // the OpenGL renderer), which ssao_blur.comp and ssao_upsample.comp turn into
 // the full size image that the lighting pass multiplies the ambient light by.
 //
-// The normal is the one of the g-buffer (also used by solid_ssr.frag), the
-// depth is the linear one of the chain (ssao_depth.comp, ssao_depth_down.comp)
+// The normal is the one of the g-buffer (also used by
+// solid_reflection_ssr.comp), the depth is the linear one of the chain
+// (ssao_depth.comp, ssao_depth_down.comp)
 //
 // Only estimateVisibility() depends on the algorithm. It's the Alchemy / SAO
 // one of the OpenGL ssao.frag for now, a GTAO estimator can replace it
@@ -148,7 +149,7 @@ void main()
     {
         initRays();
         vec3 pos = viewRay(vec2(pixel) + 0.5) * z;
-        // View space normal, same as solid_ssr.frag
+        // View space normal, same as solid_reflection_ssr.comp
         vec4 normal_data = texelFetch(u_normal, pixel, 0);
         vec3 normal = (u_camera.m_view_matrix *
             vec4(DecodeNormal(normal_data.xy), 0.0)).xyz;

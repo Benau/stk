@@ -13,6 +13,7 @@
 #include "ge_vulkan_light_scatter.hpp"
 #include "ge_vulkan_skybox_renderer.hpp"
 #include "ge_vulkan_rt_shadow.hpp"
+#include "ge_vulkan_solid_reflection.hpp"
 #include "ge_vulkan_surfel_gi.hpp"
 #include "ge_vulkan_ssao.hpp"
 
@@ -147,7 +148,10 @@ void createSamplerDescriptor(GEVulkanDriver* vk, unsigned count,
         bindings[i].descriptorCount = 1;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[i].pImmutableSamplers = NULL;
-        bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        // The g-buffer is also read by the compute shaders of the trace of
+        // GEVulkanSolidReflection
+        bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT |
+            VK_SHADER_STAGE_COMPUTE_BIT;
     }
 
     VkDescriptorSetLayoutCreateInfo setinfo = {};
@@ -299,6 +303,23 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
             m_surfel_gi.reset();
         }
     }
+    // Also before the descriptor of the g-buffer (it's sampled by the lighting
+    // pass), which reflection is traced is decided every frame
+    if (supports_compute && (m_solid_ssr || m_solid_rt))
+    {
+        try
+        {
+            m_solid_reflection.reset(new GEVulkanSolidReflection(vk,
+                getSize(), m_depth_texture, m_attachments[GVDFT_NORMAL],
+                m_solid_ssr, m_solid_rt));
+        }
+        catch (const std::exception& e)
+        {
+            GE::logMessage(GE::GLL_ERROR,
+                "Failed to initialize solid reflection: %s", e.what());
+            m_solid_reflection.reset();
+        }
+    }
     initSplitGBufferDescriptor(vk);
     if (supports_compute && getGEConfig()->m_glow_outline)
     {
@@ -430,8 +451,10 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
     // deferred_pbr.frag, specialization constant u_rt_shadow_type, a dummy one
     // if it's not used) and 5 = the irradiance of the global illumination (only
     // deferred_pbr.frag, specialization constant u_surfel_gi, a transparent
-    // texture which is not used if there is none)
-    std::array<VkDescriptorImageInfo, 6> image_infos = {};
+    // texture which is not used if there is none) and 6 = the reflection of the
+    // glossy solid materials (only deferred_pbr.frag, specialization constant
+    // u_solid_reflection_image, the same if there is none)
+    std::array<VkDescriptorImageInfo, 7> image_infos = {};
     image_infos[0].sampler = vk->getSampler(GVS_NEAREST);
     image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     image_infos[0].imageView =
@@ -476,6 +499,21 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
         if (vk->getTransparentTexture())
         {
             image_infos[5].imageView =
+                (VkImageView)vk->getTransparentTexture()->getTextureHandler();
+        }
+    }
+    image_infos[6].sampler = vk->getSampler(GVS_NEAREST);
+    if (m_solid_reflection)
+    {
+        image_infos[6].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[6].imageView = m_solid_reflection->getImageView();
+    }
+    else
+    {
+        image_infos[6].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        if (vk->getTransparentTexture())
+        {
+            image_infos[6].imageView =
                 (VkImageView)vk->getTransparentTexture()->getTextureHandler();
         }
     }
@@ -864,6 +902,13 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
     // And the diffuse global illumination of the surfels
     if (m_surfel_gi)
         m_surfel_gi->render(cmd, p);
+    // And the reflection of the glossy solid materials, the screen space one
+    // (if the output of the previous frame is there) or the ray traced one
+    if (m_solid_reflection)
+    {
+        const bool solid_rt = !solid_ssr && m_solid_rt && isSolidRayTracing();
+        m_solid_reflection->render(cmd, solid_rt, solid_ssr, p);
+    }
 
     // 3. lighting, the background is the clear color of hdr
     {
@@ -876,14 +921,9 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         {
             if (multiple_viewports)
                 q.first->prepareViewport(m_vk, q.second->getViewPort(), cmd);
-            q.first->renderDeferredLighting(m_vk, cmd);
+            q.first->renderDeferredLighting(m_vk, cmd,
+                m_solid_reflection && m_solid_reflection->isTraced(q.first));
             q.first->renderSkyBox(m_vk, cmd);
-            // After everything which is lit (it's blended over it), but the
-            // glow outline is above it
-            if (solid_ssr)
-                q.first->renderSolidSSR(m_vk, cmd);
-            else if (m_solid_rt && isSolidRayTracing())
-                q.first->renderSolidRT(m_vk, cmd);
             // Above everything which is lit, the glow outline is not over the
             // meshes
             if (has_glow_outline || has_light_scatter || has_god_rays)
@@ -1046,8 +1086,6 @@ VkRenderPass GEVulkanDeferredFBOSplit::getRenderPassForPipeline(
             VK_NULL_HANDLE;
     case GVPT_DEFERRED_LIGHTING:
     case GVPT_SKYBOX:
-    case GVPT_SOLID_SSR:
-    case GVPT_SOLID_RT:
     case GVPT_LIGHTING_COMPOSITE:
         return getRTTRenderPass(GVDSP_LIGHTING);
     case GVPT_DEFERRED_CONVERT_COLOR:

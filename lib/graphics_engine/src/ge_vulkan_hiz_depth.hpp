@@ -17,9 +17,9 @@ class GEVulkanTexture;
 
 // Max depth mip chain (reverse-Z) of the depth buffer of one viewport (camera),
 // used by the screen space reflection of the displace pass and the solid
-// materials (solid_ssr.frag). It is owned by GEVulkanDeferredFBOSplit (one per
-// viewport), generated right after the g-buffer pass, so the lifetime of it is
-// the one of the FBO
+// materials (solid_reflection_ssr.comp). It is owned by
+// GEVulkanDeferredFBOSplit (one per viewport), generated right after the
+// g-buffer pass, so the lifetime of it is the one of the FBO
 class GEVulkanHiZDepth
 {
 private:

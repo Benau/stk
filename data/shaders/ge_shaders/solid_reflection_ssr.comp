@@ -1,28 +1,27 @@
-// Screen space reflection of the solid materials (GEVulkanDrawCall::
-// renderSolidSSR), a fullscreen draw at the end of the lighting pass (after
-// the sky, before the glow outline and light scattering are added).
+// Screen space reflection of the solid materials (GEVulkanSolidReflection, see
+// utils/solid_reflection.glsl), one thread per glossy pixel of the list.
 //
 // u_history is the tonemapped output of the previous frame (the attachment of
 // the tonemap pass, so it has the bloom, the ghost and transparent materials
 // too), converted back to hdr. The traced color replaces the specular IBL of
 // the (already lit) color of the glossy pixel, scaled by the weight of
-// SSRBlendWeight and the Fresnel of the IBL (reflectionSpecularAlbedo), so the
-// output is hit - ibl added to it (m_additive, it can be negative, the diffuse
-// is not changed). Pixels without a hit, or not glossy, are discarded.
+// SSRBlendWeight. A pixel without a hit keeps the specular IBL.
 //
 // Set 0 is the one of GEVulkanHiZDepth::getRenderingDescriptorSet() (same
 // layout as the displace pass, the first image is the history instead of the
-// current frame, and the hiz is a transparent texture if u_hiz_iterations
-// is 0), set 1 the camera and set 2 GVDFP_HDR (g-buffer, same as lighting)
+// current frame), or the one of the FBO without the HiZ depth (u_hiz_iterations
+// is 0 then), set 1 the camera, set 2 GVDFP_HDR (g-buffer, same as lighting),
+// set 3 the environment and set 4 the output and the list
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#define SOLID_REFLECTION_SET 4
+
 layout(set = 0, binding = 0) uniform sampler2D u_history;
 layout(set = 0, binding = 1) uniform sampler2DShadow u_depth_shadow;
 layout(set = 0, binding = 2) uniform sampler2D u_hiz_depth;
-layout(set = 2, binding = 0) uniform sampler2D u_color;
 layout(set = 2, binding = 1) uniform sampler2D u_normal;
 layout(set = 2, binding = 2) uniform sampler2D u_depth;
 layout(set = 3, binding = 1) uniform samplerCube u_specular;
-
-layout(location = 0) out vec4 o_color;
 
 #include "utils/camera.glsl"
 #include "utils/constants_utils.glsl"
@@ -37,27 +36,36 @@ const uint u_hiz_iterations =
 
 #define SSR_HIZ
 #include "../utils/ssr.glsl"
+#include "utils/solid_reflection.glsl"
 
-void main()
+// The output of a glossy pixel
+vec4 traceSolidReflection(ivec2 pixel)
 {
-    ivec2 pixel = ivec2(gl_FragCoord.xy);
     vec4 normal_data = texelFetch(u_normal, pixel, 0);
-    // Gloss (specval of the OpenGL renderer), the cheapest rejection first
     float specval = normal_data.z;
     float depth = texelFetch(u_depth, pixel, 0).x;
-    if (specval < 0.5 || depth == 0.0)
-        discard;
 
-    vec3 xpos = getPosFromUVDepth(vec3(gl_FragCoord.xy, depth),
+    vec3 xpos = getPosFromUVDepth(vec3(vec2(pixel) + 0.5, depth),
         u_camera.m_viewport, u_camera.m_inverse_projection_matrix);
     vec3 eyedir = -normalize(xpos);
     vec3 normal = (u_camera.m_view_matrix *
         vec4(DecodeNormal(normal_data.xy), 0.0)).xyz;
     vec3 reflected = reflect(-eyedir, normal);
+    // The same specular IBL as the lighting pass, 0 without image based
+    // lighting
+    float perceptual_roughness = 1.0 - specval;
+    vec4 ibl = vec4(0.0);
+    if (u_ibl)
+    {
+        vec3 world_reflection = (u_camera.m_inverse_view_matrix *
+            vec4(reflected, 0.0)).xyz;
+        ibl.rgb = textureLod(u_specular, world_reflection,
+            perceptual_roughness * u_specular_levels_minus_one).rgb;
+    }
     // Disable raycasts towards camera
     float cosine = dot(reflected, eyedir);
     if (!SSRIsReflective(specval, cosine))
-        discard;
+        return ibl;
 
     vec2 viewport_scale = u_camera.m_viewport.zw / u_camera.m_screensize.xy;
     vec2 viewport_offset = u_camera.m_viewport.xy / u_camera.m_screensize.xy;
@@ -72,7 +80,7 @@ void main()
         vec3 start_ss;
         if (!traceHiZView(xpos, reflected, u_camera.m_projection_matrix,
             coords, start_ss))
-            discard;
+            return ibl;
         coords = coords * viewport_scale + viewport_offset;
     }
     // Never outside of the viewport (the area of the camera, with splitscreen
@@ -80,7 +88,7 @@ void main()
     vec2 viewport_coords = (coords - viewport_offset) / viewport_scale;
     if (viewport_coords.x < 0. || viewport_coords.x > 1. ||
         viewport_coords.y < 0. || viewport_coords.y > 1.)
-        discard;
+        return ibl;
 
     // Disable raycasts onto another reflective surface
     float mirror = texelFetch(u_normal,
@@ -88,25 +96,17 @@ void main()
     float weight = SSRBlendWeight(GetEdgeFade(coords, viewport_scale,
         viewport_offset), cosine, mirror, specval);
     if (weight <= 0.0)
-        discard;
+        return ibl;
 
-    vec3 hdr = inverseConvertColor(texture(u_history, coords).rgb);
-    // Replace the specular IBL of the lit color by the hit, with the same
-    // Fresnel and F0 (metallic) of it, the diffuse is not touched. The
-    // output is added (m_additive) and can be negative
-    float perceptual_roughness = 1.0 - specval;
-    float metallic = normal_data.w;
-    vec3 albedo = texelFetch(u_color, pixel, 0).rgb;
-    float NdotV = max(dot(normal, eyedir), 0.0001);
-    vec3 spec_albedo = reflectionSpecularAlbedo(albedo, metallic,
-        perceptual_roughness, NdotV);
-    vec3 ibl = vec3(0.0);
-    if (u_ibl)
-    {
-        vec3 world_reflection = (u_camera.m_inverse_view_matrix *
-            vec4(reflected, 0.0)).xyz;
-        ibl = textureLod(u_specular, world_reflection,
-            perceptual_roughness * u_specular_levels_minus_one).rgb;
-    }
-    o_color = vec4(weight * spec_albedo * (hdr - ibl), 0.0);
+    // The history has one level, there are no derivatives in a compute shader
+    vec3 hdr = inverseConvertColor(textureLod(u_history, coords, 0.0).rgb);
+    return vec4(mix(ibl.rgb, hdr, clamp(weight, 0.0, 1.0)), 0.0);
+}   // traceSolidReflection
+
+// ----------------------------------------------------------------------------
+void main()
+{
+    ivec2 pixel;
+    if (getSolidReflectionPixel(pixel))
+        imageStore(u_reflection, pixel, traceSolidReflection(pixel));
 }

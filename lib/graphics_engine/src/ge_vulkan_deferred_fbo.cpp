@@ -433,14 +433,16 @@ void GEVulkanDeferredFBO::initConvertColorDescriptor(GEVulkanDriver* vk)
 // ----------------------------------------------------------------------------
 void GEVulkanDeferredFBO::initDisplaceDescriptor(GEVulkanDriver* vk)
 {
-    // m_descriptor_layout[GVDFP_DISPLACE_COLOR]
+    // m_descriptor_layout[GVDFP_DISPLACE_COLOR], also the layout of the screen
+    // space reflection of GEVulkanSolidReflection (a compute shader)
     std::array<VkDescriptorSetLayoutBinding, 3> texture_layout_binding = {};
     texture_layout_binding[0].binding = 0;
     texture_layout_binding[0].descriptorCount = 1;
     texture_layout_binding[0].descriptorType =
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     texture_layout_binding[0].pImmutableSamplers = NULL;
-    texture_layout_binding[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    texture_layout_binding[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT |
+        VK_SHADER_STAGE_COMPUTE_BIT;
     texture_layout_binding[1] = texture_layout_binding[0];
     texture_layout_binding[1].binding = 1;
     texture_layout_binding[2] = texture_layout_binding[0];

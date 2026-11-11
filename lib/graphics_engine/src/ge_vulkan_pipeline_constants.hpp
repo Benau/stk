@@ -11,10 +11,10 @@ namespace GE
 class GEVulkanDriver;
 
 // The specialization constants of utils/constants_utils.glsl, shared by the
-// pipelines which include it (the graphics pipelines of GEVulkanDrawCall, and
-// any compute pipeline which shades like them). Most of them come from the
-// config and the FBO, the rest from the draw call which uses the pipeline
-// (Options).
+// pipelines which include it: the graphics pipelines of GEVulkanDrawCall and
+// the compute pipelines which shade like them (the trace of
+// GEVulkanSolidReflection). Most of them come from the config and the FBO,
+// the rest from the draw call which uses the pipeline (Options).
 //
 // getInfo() points into this object, so it isn't copied.
 class GEVulkanPipelineConstants
@@ -64,8 +64,8 @@ private:
     X(uint32_t, m_rt_shadow_type)         \
     X(float, m_rt_shadow_scale)           \
     X(VkBool32, m_god_rays)               \
-    X(VkBool32, m_surfel_gi)
-
+    X(VkBool32, m_surfel_gi)              \
+    X(VkBool32, m_solid_reflection_image)
     struct Data
     {
 #define GE_DECLARE_MEMBER(type, name) type name;

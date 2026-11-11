@@ -46,6 +46,12 @@ layout (constant_id = 15) const bool u_god_rays = false;
 // Of deferred_pbr.frag, the irradiance of the surfels (GEVulkanSurfelGI) is mixed
 // with the one of the environment map by its coverage
 layout (constant_id = 16) const bool u_surfel_gi = false;
+// Of deferred_pbr.frag, the reflection of the glossy solid materials
+// (GEVulkanSolidReflection) is added to the lit color
+layout (constant_id = 17) const bool u_solid_reflection_image = false;
+// Gloss (specval of the OpenGL renderer) of a pixel which reflects, see
+// SSRIsReflective
+const float SOLID_REFLECTION_MIN_GLOSS = 0.5;
 
 vec3 convertColor(vec3 input_color)
 {

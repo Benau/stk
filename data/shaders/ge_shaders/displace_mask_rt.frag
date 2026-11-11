@@ -5,7 +5,8 @@
 
 #ifdef PBR_ENABLED
 #define DISPLACE_RT
-// The pipeline layout of solid_rt.frag: the scene is set 0 (RT_SCENE_SET is the
+// GEVulkanDrawCall::m_solid_rt_layout (the sets of solid_reflection_rt.comp
+// without the last one): the scene is set 0 (RT_SCENE_SET is the
 // default one), the camera and the global light are set 1, the environment is
 // set 3 and the mesh textures are set 4. The mesh textures are all bound
 // at once with the ray traced scene, so the displace mask is sampled from them

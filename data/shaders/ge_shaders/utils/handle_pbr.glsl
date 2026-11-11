@@ -27,10 +27,14 @@ vec3 gtaoMultiBounce(float visibility, vec3 albedo)
 // the sun is ray traced (u_rt_shadow_type)
 // gi is the irradiance of GEVulkanSurfelGI and its coverage (alpha), it's only
 // used with u_surfel_gi
+// solid_reflection is the specular radiance of GEVulkanSolidReflection (the
+// traced color mixed with the specular IBL), it replaces the specular IBL if
+// has_solid_reflection
 vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
                        vec3 eyedir, vec3 normal, float perceptual_roughness,
                        vec4 world_position, float view_depth, float ao,
-                       float rt_shadow, vec4 gi)
+                       float rt_shadow, vec4 gi, bool has_solid_reflection,
+                       vec3 solid_reflection)
 {
     vec3 ao_diffuse = vec3(1.0);
     vec3 ao_specular = vec3(1.0);
@@ -56,6 +60,10 @@ vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
         irradiance = texture(u_diffuse, world_normal).rgb;
         radiance = textureLod(u_specular, world_reflection, radiance_level).rgb;
     }
+    // The traced reflection replaces the specular IBL (it's the IBL where
+    // nothing is traced)
+    if (has_solid_reflection)
+        radiance = solid_reflection;
     // With or without image based lighting
     float diffuse_ambient_scale = 1.0;
     if (u_surfel_gi)
@@ -88,6 +96,15 @@ vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
         diffuse_ambient_scale,
         perceptual_roughness, pbr.y, pbr.z, shadow, ao_diffuse, ao_specular);
 
+    // Without image based lighting PBRSunAmbientEmitLight has no specular
+    // ambient light, so the reflection is added with the same scale as the
+    // specular IBL would have (the Fresnel of environmentLight)
+    if (has_solid_reflection && !u_ibl)
+    {
+        mixed_color += reflectionSpecularAlbedo(diffuse_color, pbr.y,
+            perceptual_roughness, max(dot(normal, eyedir), 0.0001)) *
+            solid_reflection * ao_specular;
+    }
     return mixed_color;
 }
 
@@ -115,7 +132,7 @@ vec3 handlePBR(vec3 diffuse_color, vec3 pbr, vec4 world_position,
 
     vec3 mixed_color = handlePBRDeferred(diffuse_color, pbr, world_normal,
         eyedir, normal, perceptual_roughness, world_position, xpos.z, 1.0, 1.0,
-        vec4(0.0));
+        vec4(0.0), false, vec3(0.0));
 
     mixed_color += accumulateLights(u_global_light.m_light_count,
         diffuse_color, normal, xpos, eyedir, perceptual_roughness, pbr.y,

@@ -63,6 +63,7 @@ set(GE_SOURCES
     src/ge_vulkan_light_scatter.cpp
     src/ge_vulkan_low_res_effect.cpp
     src/ge_vulkan_rt_shadow.cpp
+    src/ge_vulkan_solid_reflection.cpp
     src/ge_vulkan_ssao.cpp
     src/ge_vulkan_surfel_gi.cpp
     src/ge_vulkan_mesh_cache.cpp

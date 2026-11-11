@@ -19,9 +19,9 @@ class GEVulkanArrayTexture;
 //    its own filter and values, it can't be shared with the HiZ depth (see
 //    GEVulkanHiZDepth) which has the raw closest depth for tracing rays
 // 2. ssao.comp: the visibility at half the size, using the depth chain and
-//    the normal of the g-buffer (the same as solid_ssr.frag uses). The
-//    estimator is a single function of the shader, a different one (GTAO)
-//    can replace it without changing anything else
+//    the normal of the g-buffer (the same as solid_reflection_ssr.comp
+//    uses). The estimator is a single function of the shader, a different one
+//    (GTAO) can replace it without changing anything else
 // 3. ssao_blur.comp: horizontal and then vertical blur of it which doesn't
 //    blur over the edges of the depth, its width is relative to the height of
 //    the viewport (REFERENCE_HEIGHT like the other blurs) so it's resolution

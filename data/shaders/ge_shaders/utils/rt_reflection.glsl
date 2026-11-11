@@ -1,8 +1,9 @@
 // The shading of the hit of a ray traced reflection, shared by the passes
 // which trace a reflected ray in the ray traced scene (GEVulkanRTScene): the
-// reflection of the solid materials (solid_rt.frag, a fullscreen draw of the
-// lighting pass) and the one of the displace materials (displace_mask_rt.frag,
-// which is displace_mask.frag with DISPLACE_RT defined).
+// reflection of the solid materials (solid_reflection_rt.comp, a compute
+// shader before the lighting pass) and the one of the displace materials
+// (displace_mask_rt.frag, which is displace_mask.frag with DISPLACE_RT
+// defined).
 //
 // The hit is lit like solid.frag + deferred_pbr.frag: albedo of the mesh
 // textures (with the hue, vertex color and uv shift of the node, which are

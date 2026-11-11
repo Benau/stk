@@ -1,5 +1,5 @@
 // Ray-traced reflection for the translucent bubble shields
-// Uses the same RT scene/layout and hit shading as solid_rt.frag and
+// Uses the same RT scene/layout and hit shading as solid_reflection_rt.comp and
 // displace_mask_rt.frag. Select it only for the RT pipeline (set 0: RT scene,
 // set 1: camera/global light, set 3: environment, set 4: bindless mesh textures)
 #extension GL_EXT_ray_query : require

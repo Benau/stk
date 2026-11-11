@@ -64,7 +64,7 @@ struct RTSource
 
 // ----------------------------------------------------------------------------
 // The geometries which discard by the alpha of their texture are not opaque,
-// so the ray query gives a candidate to confirm (solid_rt.frag)
+// so the ray query gives a candidate to confirm (solid_reflection_rt.comp)
 VkGeometryFlagsKHR getGeometryFlags(uint32_t shading_type)
 {
     return (shading_type == GRTST_ALPHATEST || shading_type == GRTST_UNLIT ||

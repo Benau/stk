@@ -1199,33 +1199,6 @@ void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
         def_mat.m_additive = false;
     }
 
-    // The color is (traced - specular IBL) scaled by the fresnel of the IBL,
-    // it can be negative (the lit color is a float format), so it's added to
-    // hdr
-    if (m_deferred_layouts[GVDFP_SOLID_SSR] != VK_NULL_HANDLE)
-    {
-        def_mat.m_additive = true;
-        def_mat.m_fragment_shader = "solid_ssr.frag";
-        settings.loadMaterial(def_mat);
-        settings.m_shader_name = "solid_ssr";
-        settings.m_pipeline_type = GVPT_SOLID_SSR;
-        settings.m_custom_pl = m_deferred_layouts[GVDFP_SOLID_SSR];
-        createPipeline(vk, settings, dp_cache);
-        def_mat.m_additive = false;
-    }
-
-    if (m_solid_rt_layout != VK_NULL_HANDLE)
-    {
-        def_mat.m_additive = true;
-        def_mat.m_fragment_shader = "solid_rt.frag";
-        settings.loadMaterial(def_mat);
-        settings.m_shader_name = "solid_rt";
-        settings.m_pipeline_type = GVPT_SOLID_RT;
-        settings.m_custom_pl = m_solid_rt_layout;
-        createPipeline(vk, settings, dp_cache);
-        def_mat.m_additive = false;
-    }
-
     if (has_displace)
     {
         def_mat.m_fragment_shader = "displace_color.frag";
@@ -2474,7 +2447,8 @@ bool GEVulkanDrawCall::renderSkyBox(GEVulkanDriver* vk, VkCommandBuffer cmd)
 
 // ----------------------------------------------------------------------------
 void GEVulkanDrawCall::renderDeferredLighting(GEVulkanDriver* vk,
-                                              VkCommandBuffer cmd)
+                                              VkCommandBuffer cmd,
+                                              bool solid_reflection)
 {
     // Nothing to light, the draw call is for the target of its own (default
     // framebuffer or a separate RTT) so this has nothing to do with the target
@@ -2496,9 +2470,11 @@ void GEVulkanDrawCall::renderDeferredLighting(GEVulkanDriver* vk,
         m_deferred_layouts[GVDFP_HDR], 2, 1, getEnvDescriptorSet(vk), 0, NULL);
     unsigned fullscreen_light = m_light_handler ?
         m_light_handler->getFullscreenLightCount() : 0;
+    // The push constants of deferred_pbr.frag
+    const std::array<uint32_t, 2> constants =
+        {{ fullscreen_light, solid_reflection ? 1u : 0u }};
     vkCmdPushConstants(cmd, m_deferred_layouts[GVDFP_HDR],
-        VK_SHADER_STAGE_ALL_GRAPHICS, 0, sizeof(unsigned),
-        &fullscreen_light);
+        VK_SHADER_STAGE_ALL_GRAPHICS, 0, sizeof(constants), constants.data());
     vkCmdDraw(cmd, 3, 1, 0, 0);
 
     if (m_light_handler &&
@@ -2650,65 +2626,6 @@ void GEVulkanDrawCall::renderLightingComposite(GEVulkanDriver* vk,
         VK_SHADER_STAGE_ALL_GRAPHICS, 0, sizeof(active), &active);
     vkCmdDraw(cmd, 3, 1, 0, 0);
 }   // renderLightingComposite
-
-// ----------------------------------------------------------------------------
-void GEVulkanDrawCall::renderSolidSSR(GEVulkanDriver* vk, VkCommandBuffer cmd)
-{
-    if (m_deferred_layouts.empty() ||
-        m_deferred_layouts[GVDFP_SOLID_SSR] == VK_NULL_HANDLE ||
-        m_visible_nodes.empty())
-        return;
-    // The set of the HiZ depth of this viewport, or the one of the FBO with
-    // the depth only (the pipeline has no iterations of HiZ then)
-    const VkDescriptorSet* set = m_hiz_depth ?
-        m_hiz_depth->getRenderingDescriptorSet() :
-        vk->getRTTTexture()->getDescriptorSet(GVDFP_SOLID_SSR);
-    if (set == NULL || *set == VK_NULL_HANDLE)
-        return;
-    auto& pl = m_graphics_pipelines.at("solid_ssr").m_pipelines;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        *pl[GVPT_SOLID_SSR]);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_deferred_layouts[GVDFP_SOLID_SSR], 0, 1, set, 0, NULL);
-    // Camera
-    int current_buffer_idx = vk->getCurrentBufferIdx();
-    std::vector<uint32_t> dynamic_offsets = getDefaultDynamicOffsets();
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_deferred_layouts[GVDFP_SOLID_SSR],
-        1, 1, &m_data_descriptor_sets[current_buffer_idx],
-        dynamic_offsets.size(), dynamic_offsets.data());
-    // g-buffer (the normal has the gloss)
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_deferred_layouts[GVDFP_SOLID_SSR], 2, 1,
-        vk->getRTTTexture()->getDescriptorSet(GVDFP_HDR), 0, NULL);
-    // Specular IBL (the same as the lighting pass has in its lit color)
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_deferred_layouts[GVDFP_SOLID_SSR], 3, 1, getEnvDescriptorSet(vk), 0,
-        NULL);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
-}   // renderSolidSSR
-
-// ----------------------------------------------------------------------------
-void GEVulkanDrawCall::renderSolidRT(GEVulkanDriver* vk, VkCommandBuffer cmd)
-{
-    int current_buffer_idx = vk->getCurrentBufferIdx();
-    std::vector<uint32_t> dynamic_offsets = getDefaultDynamicOffsets();
-    if (m_visible_nodes.empty() ||
-        !bindRTLayout(vk, cmd, current_buffer_idx, dynamic_offsets))
-        return;
-    auto& pl = m_graphics_pipelines.at("solid_rt").m_pipelines;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        *pl[GVPT_SOLID_RT]);
-    // Camera
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_solid_rt_layout, 1, 1, &m_data_descriptor_sets[current_buffer_idx],
-        dynamic_offsets.size(), dynamic_offsets.data());
-    // g-buffer (the normal has the gloss)
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_solid_rt_layout, 2, 1,
-        vk->getRTTTexture()->getDescriptorSet(GVDFP_HDR), 0, NULL);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
-}   // renderSolidRT
 
 // ----------------------------------------------------------------------------
 bool GEVulkanDrawCall::hasLightScatter() const

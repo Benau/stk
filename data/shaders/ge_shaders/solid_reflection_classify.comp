@@ -1,0 +1,54 @@
+// First pass of GEVulkanSolidReflection (see utils/solid_reflection.glsl), one
+// thread per pixel of the viewport of a camera (pc.m_rect), in 8x8 tiles: the
+// glossy pixels of a tile are added to the list together (one atomic of the
+// list for the tile).
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 2) uniform sampler2D u_normal;
+layout(set = 0, binding = 3) uniform sampler2D u_depth;
+
+layout(push_constant) uniform PushConstants
+{
+    // x0, y0, x1, y1 (exclusive) in pixels
+    ivec4 m_rect;
+} pc;
+
+#include "utils/constants_utils.glsl"
+#include "utils/solid_reflection.glsl"
+
+shared uint s_count;
+shared uint s_first;
+
+void main()
+{
+    if (gl_LocalInvocationIndex == 0u)
+        s_count = 0u;
+    barrier();
+
+    const ivec2 pixel = pc.m_rect.xy + ivec2(gl_GlobalInvocationID.xy);
+    const bool inside = all(lessThan(pixel, pc.m_rect.zw));
+    bool glossy = false;
+    // The sky (reverse z, depth 0) reflects nothing
+    if (inside)
+    {
+        glossy = texelFetch(u_normal, pixel, 0).z >=
+            SOLID_REFLECTION_MIN_GLOSS &&
+            texelFetch(u_depth, pixel, 0).x != 0.0;
+    }
+    uint slot = 0u;
+    if (glossy)
+        slot = atomicAdd(s_count, 1u);
+    barrier();
+    if (gl_LocalInvocationIndex == 0u && s_count != 0u)
+    {
+        s_first = atomicAdd(u_reflection_list.m_count, s_count);
+        atomicMax(u_reflection_list.m_dispatch[0],
+            (s_first + s_count + 63u) / 64u);
+    }
+    barrier();
+    if (glossy)
+    {
+        u_reflection_list.m_pixels[s_first + slot] =
+            packSolidReflectionPixel(pixel);
+    }
+}

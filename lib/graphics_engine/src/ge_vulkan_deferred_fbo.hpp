@@ -34,7 +34,9 @@ enum GEVulkanDeferredFBOPass : unsigned
     // blurred light scattering, sampled by the lighting pass
     GVDFP_LIGHTING_COMPOSITE,
     // Only used by GEVulkanDeferredFBOSplit if solid screen space reflection
-    // is enabled (GEVulkanDrawCall::renderSolidSSR), it has no descriptor set
+    // is enabled (the trace of GEVulkanSolidReflection, a compute pipeline of
+    // GEVulkanDrawCall with this layout and the set of the output and the list
+    // after it), it has no descriptor set
     // layout of its own: set 0 uses the layout of GVDFP_DISPLACE_COLOR (the
     // output of the tonemap pass of the previous frame, the depth and the
     // HiZ depth, see GEVulkanHiZDepth::getRenderingDescriptorSet, or
