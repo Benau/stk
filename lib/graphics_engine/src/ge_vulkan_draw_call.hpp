@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "vulkan_wrapper.h"
+#include "ge_vulkan_pipeline_constants.hpp"
 
 #include "matrix4.h"
 #include "vector3d.h"
@@ -312,10 +313,14 @@ protected:
 
     irr::scene::IMesh* m_lightning_mesh;
 
+    GEVulkanPipelineConstants::Options m_constants_options;
+
     // ------------------------------------------------------------------------
     void initNonPBRFallbackMaterials();
     // ------------------------------------------------------------------------
     void createAllPipelines(GEVulkanDriver* vk);
+    // ------------------------------------------------------------------------
+    void initPipelineConstantOptions();
     // ------------------------------------------------------------------------
     void createPipeline(GEVulkanDriver* vk, const PipelineSettings& settings,
       std::unordered_map<std::string, std::shared_ptr<VkPipeline> >& dp_cache);
