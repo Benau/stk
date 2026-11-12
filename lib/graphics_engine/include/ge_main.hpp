@@ -195,6 +195,12 @@ bool m_ssao;
 GEAutoDeferredType m_auto_deferred_type;
 GESolidReflectionType m_solid_reflection;
 GEDisplaceReflectionType m_displace_reflection;
+// The reflection of the glossy solid materials (m_solid_reflection or the ray
+// traced one) samples the lobe of the specular BRDF with a few rays, filtered
+// at half resolution, instead of tracing a single mirror ray (FidelityFX SSSR,
+// see GEVulkanSolidReflection). Needs the render target to be created again
+// if it changes
+bool m_stochastic_reflection;
 std::unordered_set<std::string> m_ondemand_load_texture_paths;
 float m_render_scale;
 unsigned m_shadow_size;

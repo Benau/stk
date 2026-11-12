@@ -39,6 +39,7 @@ GEConfig g_config =
     GADT_DISABLED,
     GSRT_DISABLED,
     GDRT_DISABLED,
+    false,
     {},
     1.0f,
     0,

@@ -1,0 +1,62 @@
+// Ray traced stochastic reflection of the solid materials
+// (GEVulkanSolidReflection, see utils/stochastic_reflection.glsl), one thread
+// per glossy texel of the list: samples of the lobe of the specular BRDF are
+// traced in the ray traced scene (GEVulkanRTScene), so they have no history and
+// no screen edges, a ray only misses the sky (the specular IBL which the
+// lighting pass mixes by the coverage).
+//
+// The hit is shaded by utils/rt_reflection.glsl (shared with the reflection of
+// the displace materials and solid_reflection_rt.comp). The main is the one of
+// utils/stochastic_reflection.glsl (8 threads trace the rays of a texel).
+//
+// Set 0 is the one of GEVulkanRTScene (acceleration structure, data buffer,
+// geometry buffer, mesh cache), set 1 the camera and the global light, set 2
+// GVDFP_HDR (g-buffer, same as lighting), set 3 the environment, set 4 the
+// mesh textures and set 5 the targets and the list
+#extension GL_EXT_ray_query : require
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#define MESH_TEXTURES_SET 4
+#define SOLID_REFLECTION_SET 5
+#define STOCHASTIC_REFLECTION_SURFACE
+#define STOCHASTIC_REFLECTION_TRACE
+
+layout(set = 2, binding = 1) uniform sampler2D u_normal;
+layout(set = 2, binding = 2) uniform sampler2D u_depth;
+layout(set = 3, binding = 0) uniform samplerCube u_diffuse;
+layout(set = 3, binding = 1) uniform samplerCube u_specular;
+// Only to share pbr_light.glsl, the shadow of a hit is a ray
+layout(set = 3, binding = 3) uniform sampler2DArrayShadow u_shadow_map;
+// Level 0 of the trace target
+layout(set = SOLID_REFLECTION_SET, binding = 0, rgba16f) uniform writeonly
+    image2D u_trace;
+
+#include "utils/camera.glsl"
+#include "utils/constants_utils.glsl"
+#include "utils/pbr_utils.glsl"
+#include "utils/unproject_position.glsl"
+#include "../utils/decodeNormal.frag"
+#include "utils/get_vertex_color.glsl"
+#include "utils/sample_mesh_texture.glsl"
+#include "../utils/rgb_conversion.frag"
+#include "utils/global_light_data.glsl"
+#include "utils/pbr_light.glsl"
+#include "utils/rt_utils.glsl"
+#include "utils/rt_scene.glsl"
+
+// The rays of the roughest surface (see getStochasticReflectionRays), one per
+// thread of the texel
+const uint u_max_rays = 8u;
+
+#include "utils/rt_reflection.glsl"
+#include "utils/stochastic_reflection.glsl"
+
+// ----------------------------------------------------------------------------
+float traceStochasticReflectionRay(StochasticReflectionSurface surface,
+                                   ivec2 pixel, vec3 direction, out vec3 hdr)
+{
+    // A ray only misses the sky, the specular IBL is the environment
+    return traceReflection(surface.m_world_position, direction, hdr) ? 1.0 :
+        0.0;
+}   // traceStochasticReflectionRay

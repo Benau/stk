@@ -39,6 +39,62 @@ layout(push_constant) uniform Constants
 #include "utils/handle_pbr.glsl"
 #include "../utils/decodeNormal.frag"
 
+#ifdef SPLIT
+// ----------------------------------------------------------------------------
+// The stochastic reflection of a pixel (u_stochastic_reflection, see
+// utils/stochastic_reflection.glsl), the radiance premultiplied by its
+// coverage. The target is half size and its texel t is the reflection of the
+// pixel 2t, so an even pixel is at a texel and an odd one half way between 2
+// (or 4): the bilinear weights of the texels around the pixel, times an edge
+// stopping weight (the pixel of the texel is in the viewport, glossy, near the
+// plane of this pixel and of a similar normal), so the reflection of another
+// surface (in front or behind, or a pixel which reflects nothing) is never
+// mixed in. found is false if no texel is of this surface (the specular IBL is
+// used then)
+vec4 getStochasticReflection(ivec2 pixel, vec3 xpos, vec3 normal,
+                             vec3 world_normal, out bool found)
+{
+    ivec2 base = pixel / 2;
+    vec2 f = vec2(pixel - base * 2) * 0.5;
+    ivec2 size = textureSize(u_solid_reflection_texture, 0);
+    ivec4 rect = ivec4(ivec2(u_camera.m_viewport.xy),
+        ivec2(u_camera.m_viewport.xy + u_camera.m_viewport.zw));
+    float tolerance = 0.05 + 0.02 * abs(xpos.z);
+    vec4 sum = vec4(0.0);
+    float weight_sum = 0.0;
+    for (int i = 0; i < 4; i++)
+    {
+        ivec2 offset = ivec2(i & 1, i >> 1);
+        float weight = (offset.x == 1 ? f.x : 1.0 - f.x) *
+            (offset.y == 1 ? f.y : 1.0 - f.y);
+        if (weight <= 0.0)
+            continue;
+        ivec2 texel = base + offset;
+        ivec2 texel_pixel = texel * 2;
+        if (any(greaterThanEqual(texel, size)) ||
+            any(lessThan(texel_pixel, rect.xy)) ||
+            any(greaterThanEqual(texel_pixel, rect.zw)))
+            continue;
+        vec4 normal_data = texelFetch(u_normal, texel_pixel, 0);
+        float depth = texelFetch(u_depth, texel_pixel, 0).x;
+        if (normal_data.z < SOLID_REFLECTION_MIN_GLOSS || depth == 0.0)
+            continue;
+        vec3 texel_xpos = getPosFromUVDepth(vec3(vec2(texel_pixel) + 0.5,
+            depth), u_camera.m_viewport, u_camera.m_inverse_projection_matrix);
+        weight *= max(1.0 - abs(dot(normal, texel_xpos - xpos)) / tolerance,
+            0.0);
+        weight *= pow(max(dot(DecodeNormal(normal_data.xy), world_normal),
+            0.0), 16.0);
+        if (weight <= 0.0)
+            continue;
+        sum += texelFetch(u_solid_reflection_texture, texel, 0) * weight;
+        weight_sum += weight;
+    }
+    found = weight_sum > 1e-4;
+    return found ? sum / weight_sum : vec4(0.0);
+}   // getStochasticReflection
+#endif
+
 void main()
 {
     float depth = GE_LOAD_GBUFFER(u_depth).x;
@@ -59,16 +115,24 @@ void main()
     vec4 gi = vec4(0.0);
     // The specular radiance which replaces the specular IBL
     bool has_reflection = false;
-    vec3 reflection = vec3(0.0);
+    vec4 reflection = vec4(0.0);
 #ifdef SPLIT
     // Only the glossy pixels have it (GEVulkanSolidReflection doesn't write
     // the others)
     if (u_solid_reflection_image && u_push_constants.m_solid_reflection != 0u &&
         pbr.x >= SOLID_REFLECTION_MIN_GLOSS)
     {
-        has_reflection = true;
-        reflection = texelFetch(u_solid_reflection_texture,
-            ivec2(gl_FragCoord.xy), 0).rgb;
+        if (u_stochastic_reflection)
+        {
+            reflection = getStochasticReflection(ivec2(gl_FragCoord.xy), xpos,
+                normal, world_normal, has_reflection);
+        }
+        else
+        {
+            has_reflection = true;
+            reflection = vec4(texelFetch(u_solid_reflection_texture,
+                ivec2(gl_FragCoord.xy), 0).rgb, 1.0);
+        }
     }
     if (u_ssao)
         ao = texelFetch(u_ssao_texture, ivec2(gl_FragCoord.xy), 0).x;

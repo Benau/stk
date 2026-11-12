@@ -49,6 +49,11 @@ layout (constant_id = 16) const bool u_surfel_gi = false;
 // Of deferred_pbr.frag, the reflection of the glossy solid materials
 // (GEVulkanSolidReflection) is added to the lit color
 layout (constant_id = 17) const bool u_solid_reflection_image = false;
+// Of deferred_pbr.frag, the reflection of GEVulkanSolidReflection is the
+// stochastic one (utils/stochastic_reflection.glsl): a half size target of
+// the radiance premultiplied by its coverage, which is upsampled and mixed
+// with the specular IBL by the coverage (needs u_solid_reflection_image)
+layout (constant_id = 18) const bool u_stochastic_reflection = false;
 // Gloss (specval of the OpenGL renderer) of a pixel which reflects, see
 // SSRIsReflective
 const float SOLID_REFLECTION_MIN_GLOSS = 0.5;

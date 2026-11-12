@@ -21,14 +21,8 @@ namespace GE
 namespace
 {
 // ----------------------------------------------------------------------------
-// Groups of 8x8 threads which cover a size
-uint32_t groups8(int32_t size)
-{
-    return (uint32_t)(std::max(size, 0) + 7) / 8;
-}   // groups8
-
-// ----------------------------------------------------------------------------
-// Push constants of solid_reflection_classify.comp
+// Push constants of solid_reflection_classify.comp (and
+// stochastic_reflection_classify.comp)
 struct ClassifyPushConstants
 {
     int32_t m_rect[4];
@@ -39,20 +33,28 @@ struct ClassifyPushConstants
 // ----------------------------------------------------------------------------
 GEVulkanSolidReflection::GEVulkanSolidReflection(GEVulkanDriver* vk,
                                    const irr::core::dimension2d<irr::u32>& size,
-                                   GEVulkanAttachmentTexture* depth,
-                                   GEVulkanAttachmentTexture* normal, bool ssr,
-                                   bool rt)
-                       : GEVulkanPostProcessing(vk, size), m_reflection(NULL),
+                                   bool ssr, bool rt)
+                       : GEVulkanPostProcessing(vk, size), m_options(),
+                         m_has_ssr(ssr), m_has_rt(rt), m_reflection(NULL),
                          m_list(VK_NULL_HANDLE), m_list_memory(VK_NULL_HANDLE),
                          m_layout(VK_NULL_HANDLE), m_pool(VK_NULL_HANDLE),
                          m_set(VK_NULL_HANDLE),
                          m_classify_layout(VK_NULL_HANDLE),
                          m_classify_pipeline(VK_NULL_HANDLE),
-                         m_has_ssr(ssr), m_has_rt(rt),
-                         m_data_layout(VK_NULL_HANDLE), m_options()
+                         m_data_layout(VK_NULL_HANDLE)
 {
     m_trace_layouts.fill(VK_NULL_HANDLE);
     m_trace_pipelines.fill(VK_NULL_HANDLE);
+}   // GEVulkanSolidReflection
+
+// ----------------------------------------------------------------------------
+GEVulkanSolidReflection::GEVulkanSolidReflection(GEVulkanDriver* vk,
+                                   const irr::core::dimension2d<irr::u32>& size,
+                                   GEVulkanAttachmentTexture* depth,
+                                   GEVulkanAttachmentTexture* normal, bool ssr,
+                                   bool rt)
+                       : GEVulkanSolidReflection(vk, size, ssr, rt)
+{
     try
     {
         // The specular radiance is never negative and has no alpha, the same
@@ -64,21 +66,10 @@ GEVulkanSolidReflection::GEVulkanSolidReflection(GEVulkanDriver* vk,
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
             VK_IMAGE_ASPECT_COLOR_BIT);
         initializeGeneralImages(&m_reflection, 1);
-        // The count, the indirect dispatch and every pixel of the FBO (one
-        // viewport at a time uses it)
-        VmaAllocationCreateInfo alloc_info = {};
-        alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-        if (!m_vk->createBuffer(sizeof(uint32_t) *
-            (4 + size.Width * size.Height), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT, alloc_info, m_list,
-            m_list_memory))
-        {
-            throw std::runtime_error("createBuffer failed for "
-                "GEVulkanSolidReflection");
-        }
+        // The count, the indirect dispatch and every pixel of the FBO
+        createList(size, 4);
         createDescriptor(depth, normal);
-        createClassifyPipeline();
+        createClassifyPipeline("solid_reflection_classify.comp");
     }
     catch (...)
     {
@@ -129,6 +120,29 @@ VkImageView GEVulkanSolidReflection::getImageView() const
 {
     return (VkImageView)m_reflection->getTextureHandler();
 }   // getImageView
+
+// ----------------------------------------------------------------------------
+uint32_t GEVulkanSolidReflection::groups8(int32_t size)
+{
+    return (uint32_t)(std::max(size, 0) + 7) / 8;
+}   // groups8
+
+// ----------------------------------------------------------------------------
+void GEVulkanSolidReflection::createList(
+                                   const irr::core::dimension2d<irr::u32>& size,
+                                   unsigned header)
+{
+    VmaAllocationCreateInfo alloc_info = {};
+    alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    if (!m_vk->createBuffer(sizeof(uint32_t) * (header +
+        size.Width * size.Height), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+        VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT, alloc_info, m_list, m_list_memory))
+    {
+        throw std::runtime_error("createBuffer failed for "
+            "GEVulkanSolidReflection");
+    }
+}   // createList
 
 // ----------------------------------------------------------------------------
 void GEVulkanSolidReflection::createDescriptor(GEVulkanAttachmentTexture* depth,
@@ -219,7 +233,7 @@ void GEVulkanSolidReflection::createDescriptor(GEVulkanAttachmentTexture* depth,
 }   // createDescriptor
 
 // ----------------------------------------------------------------------------
-void GEVulkanSolidReflection::createClassifyPipeline()
+void GEVulkanSolidReflection::createClassifyPipeline(const char* shader)
 {
     VkPushConstantRange push_constant = {};
     push_constant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -241,15 +255,14 @@ void GEVulkanSolidReflection::createClassifyPipeline()
     pipeline_info.stage.sType =
         VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     pipeline_info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    pipeline_info.stage.module =
-        GEVulkanShaderManager::getShader("solid_reflection_classify.comp");
+    pipeline_info.stage.module = GEVulkanShaderManager::getShader(shader);
     pipeline_info.stage.pName = "main";
     pipeline_info.layout = m_classify_layout;
     if (vkCreateComputePipelines(m_vk->getDevice(), m_vk->getPipelineCache(),
         1, &pipeline_info, NULL, &m_classify_pipeline) != VK_SUCCESS)
     {
-        throw std::runtime_error("vkCreateComputePipelines failed for "
-            "solid_reflection_classify.comp");
+        throw std::runtime_error(std::string("vkCreateComputePipelines "
+            "failed for ") + shader);
     }
 }   // createClassifyPipeline
 
@@ -333,8 +346,6 @@ void GEVulkanSolidReflection::createTracePipelines(GEVulkanDrawCall* dc)
             *mesh_texture_layout
         };
     }
-    const std::array<const char*, TP_COUNT> shaders =
-        {{ "solid_reflection_ssr.comp", "solid_reflection_rt.comp" }};
     // The same specialization constants as the graphics pipelines of the draw
     // call (the image based lighting, the shadows and the iterations of the
     // HiZ trace)
@@ -360,7 +371,7 @@ void GEVulkanSolidReflection::createTracePipelines(GEVulkanDrawCall* dc)
             VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         pipeline_info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
         pipeline_info.stage.module =
-            GEVulkanShaderManager::getShader(shaders[i]);
+            GEVulkanShaderManager::getShader(getTraceShader(i == TP_RT));
         pipeline_info.stage.pName = "main";
         pipeline_info.stage.pSpecializationInfo = constants.getInfo();
         pipeline_info.layout = m_trace_layouts[i];
@@ -369,7 +380,7 @@ void GEVulkanSolidReflection::createTracePipelines(GEVulkanDrawCall* dc)
             &m_trace_pipelines[i]) != VK_SUCCESS)
         {
             throw std::runtime_error(std::string("vkCreateComputePipelines "
-                "failed for ") + shaders[i]);
+                "failed for ") + getTraceShader(i == TP_RT));
         }
     }
 }   // createTracePipelines
@@ -432,7 +443,8 @@ void GEVulkanSolidReflection::dispatchTrace(VkCommandBuffer cmd,
         set_index, 1, &m_set, 0, NULL);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_trace_pipelines[rt ? TP_RT : TP_SSR]);
-    // The count of the groups is after the count of the pixels
+    // The count of the groups is after the count of the pixels (the same
+    // offset for the stochastic reflection, the dispatch of its trace)
     vkCmdDispatchIndirect(cmd, m_list, sizeof(uint32_t));
 }   // dispatchTrace
 
@@ -441,6 +453,15 @@ bool GEVulkanSolidReflection::isTraced(GEVulkanDrawCall* dc) const
 {
     return std::find(m_traced.begin(), m_traced.end(), dc) != m_traced.end();
 }   // isTraced
+
+// ----------------------------------------------------------------------------
+void GEVulkanSolidReflection::resetList(VkCommandBuffer cmd, bool first)
+{
+    // No pixel and no group of the dispatch (x), it has y and z of 1
+    vkCmdFillBuffer(cmd, m_list, 0, 2 * sizeof(uint32_t), 0);
+    vkCmdFillBuffer(cmd, m_list, 2 * sizeof(uint32_t), 2 * sizeof(uint32_t),
+        1);
+}   // resetList
 
 // ----------------------------------------------------------------------------
 bool GEVulkanSolidReflection::render(VkCommandBuffer cmd, bool rt, bool ssr,
@@ -509,11 +530,8 @@ bool GEVulkanSolidReflection::render(VkCommandBuffer cmd, bool rt, bool ssr,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, NULL, 0,
                 NULL);
         }
+        resetList(cmd, first);
         first = false;
-        // No pixel and no group of the dispatch (x), it has y and z of 1
-        vkCmdFillBuffer(cmd, m_list, 0, 2 * sizeof(uint32_t), 0);
-        vkCmdFillBuffer(cmd, m_list, 2 * sizeof(uint32_t),
-            2 * sizeof(uint32_t), 1);
         {
             VkMemoryBarrier barrier = {};
             barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -534,8 +552,9 @@ bool GEVulkanSolidReflection::render(VkCommandBuffer cmd, bool rt, bool ssr,
             m_classify_layout, 0, 1, &m_set, 0, NULL);
         vkCmdPushConstants(cmd, m_classify_layout, VK_SHADER_STAGE_COMPUTE_BIT,
             0, sizeof(pc), &pc);
-        vkCmdDispatch(cmd, groups8(vp.m_rect[2] - vp.m_rect[0]),
-            groups8(vp.m_rect[3] - vp.m_rect[1]), 1);
+        const std::array<uint32_t, 2> groups =
+            getClassifyGroups(vp.m_rect);
+        vkCmdDispatch(cmd, groups[0], groups[1], 1);
 
         // The list is complete, and its size is the indirect dispatch
         {
@@ -551,6 +570,7 @@ bool GEVulkanSolidReflection::render(VkCommandBuffer cmd, bool rt, bool ssr,
                 0, NULL);
         }
         dispatchTrace(cmd, q.first, rt);
+        finishTrace(cmd, q.first, vp.m_rect);
         m_traced.push_back(q.first);
         traced = true;
     }

@@ -14,6 +14,7 @@
 #include "ge_vulkan_skybox_renderer.hpp"
 #include "ge_vulkan_rt_shadow.hpp"
 #include "ge_vulkan_solid_reflection.hpp"
+#include "ge_vulkan_stochastic_reflection.hpp"
 #include "ge_vulkan_surfel_gi.hpp"
 #include "ge_vulkan_ssao.hpp"
 
@@ -309,9 +310,18 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
     {
         try
         {
-            m_solid_reflection.reset(new GEVulkanSolidReflection(vk,
-                getSize(), m_depth_texture, m_attachments[GVDFT_NORMAL],
-                m_solid_ssr, m_solid_rt));
+            if (getGEConfig()->m_stochastic_reflection)
+            {
+                m_solid_reflection.reset(new GEVulkanStochasticReflection(vk,
+                    getSize(), m_depth_texture, m_attachments[GVDFT_NORMAL],
+                    m_solid_ssr, m_solid_rt));
+            }
+            else
+            {
+                m_solid_reflection.reset(new GEVulkanSolidReflection(vk,
+                    getSize(), m_depth_texture, m_attachments[GVDFT_NORMAL],
+                    m_solid_ssr, m_solid_rt));
+            }
         }
         catch (const std::exception& e)
         {
@@ -433,6 +443,12 @@ void GEVulkanDeferredFBOSplit::initLightingCompositeDescriptor(
         &m_descriptor_set[GVDFP_LIGHTING_COMPOSITE],
         image_infos.data(), "GVDFP_LIGHTING_COMPOSITE");
 }   // initLightingCompositeDescriptor
+
+// ----------------------------------------------------------------------------
+bool GEVulkanDeferredFBOSplit::hasStochasticReflection() const
+{
+    return m_solid_reflection && m_solid_reflection->isStochastic();
+}   // hasStochasticReflection
 
 // ----------------------------------------------------------------------------
 float GEVulkanDeferredFBOSplit::getRTShadowScale() const

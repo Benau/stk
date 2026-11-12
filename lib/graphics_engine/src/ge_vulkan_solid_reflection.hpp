@@ -37,41 +37,14 @@ class GEVulkanAttachmentTexture;
 // the specular IBL, of the viewports which were traced in this frame
 // (isTraced, the others keep the specular IBL: the screen space trace has no
 // output of a previous frame in the first frame, the ray traced scene may not
-// be ready). A pass which resolves rough reflections (a stochastic trace with
-// several rays, or a mip chain of the output which is sampled by the
-// roughness) would go between the trace and the lighting pass.
+// be ready). Rough reflections are a single mirror ray mixed with the
+// specular IBL by the gloss.
+//
+// GEVulkanStochasticReflection is the stochastic reflection, with the same
+// list and traces.
 class GEVulkanSolidReflection : public GEVulkanPostProcessing
 {
 private:
-    // The output (R11G11B10F, RGBA16F if it can't be a storage image), always
-    // in the general layout
-    GEVulkanAttachmentTexture* m_reflection;
-
-    // The glossy pixels of the viewport, with their count and the indirect
-    // dispatch of the trace, see utils/solid_reflection.glsl
-    VkBuffer m_list;
-
-    VmaAllocation m_list_memory;
-
-    // The output, the list, the normal and the depth of the g-buffer (only for
-    // the classify, the traces have the g-buffer in GVDFP_HDR)
-    VkDescriptorSetLayout m_layout;
-
-    VkDescriptorPool m_pool;
-
-    VkDescriptorSet m_set;
-
-    VkPipelineLayout m_classify_layout;
-
-    VkPipeline m_classify_pipeline;
-
-    // The draw calls whose viewport was traced in this frame
-    std::vector<GEVulkanDrawCall*> m_traced;
-
-    // The FBO has the screen space or the ray traced trace (decided when it's
-    // created)
-    const bool m_has_ssr, m_has_rt;
-
     // The pipelines of the trace, the screen space one and the one of the ray
     // traced scene (NULL if the FBO has none of them)
     enum TracePipeline : unsigned
@@ -84,10 +57,6 @@ private:
 
     std::array<VkPipeline, TP_COUNT> m_trace_pipelines;
 
-    // The layout of the camera and the lights, it's the same as the one of
-    // every draw call (GEVulkanDrawCall::createDataLayout), whose set is bound
-    VkDescriptorSetLayout m_data_layout;
-
     // The layout of the mesh textures of the ray traced trace, it's created
     // again when its pool grows, so are the pipelines
     std::weak_ptr<VkDescriptorSetLayout> m_mesh_texture_layout;
@@ -98,13 +67,18 @@ private:
     // are created again if it changes (a track with or without a skybox)
     GEVulkanPipelineConstants::Options m_options;
 
+    // The draw calls whose viewport was traced in this frame
+    std::vector<GEVulkanDrawCall*> m_traced;
+
+    // The FBO has the screen space or the ray traced trace (decided when it's
+    // created)
+    const bool m_has_ssr, m_has_rt;
+
     // ------------------------------------------------------------------------
     void destroy();
     // ------------------------------------------------------------------------
     void createDescriptor(GEVulkanAttachmentTexture* depth,
                           GEVulkanAttachmentTexture* normal);
-    // ------------------------------------------------------------------------
-    void createClassifyPipeline();
     // ------------------------------------------------------------------------
     void destroyTracePipelines();
     // ------------------------------------------------------------------------
@@ -126,6 +100,73 @@ private:
     // ------------------------------------------------------------------------
     // The indirect dispatch of the trace of the list of the viewport
     void dispatchTrace(VkCommandBuffer cmd, GEVulkanDrawCall* dc, bool rt);
+protected:
+    // The output (R11G11B10F, RGBA16F if it can't be a storage image), always
+    // in the general layout
+    GEVulkanAttachmentTexture* m_reflection;
+
+    // The glossy pixels of the viewport, with their count and the indirect
+    // dispatch of the trace, see utils/solid_reflection.glsl
+    VkBuffer m_list;
+
+    VmaAllocation m_list_memory;
+
+    // The output, the list, the normal and the depth of the g-buffer (only for
+    // the classify, the traces have the g-buffer in GVDFP_HDR), the last set
+    // of the traces
+    VkDescriptorSetLayout m_layout;
+
+    VkDescriptorPool m_pool;
+
+    VkDescriptorSet m_set;
+
+    VkPipelineLayout m_classify_layout;
+
+    VkPipeline m_classify_pipeline;
+
+    // The layout of the camera and the lights, it's the same as the one of
+    // every draw call (GEVulkanDrawCall::createDataLayout), whose set is bound
+    VkDescriptorSetLayout m_data_layout;
+
+    // ------------------------------------------------------------------------
+    // Only sets the members, for a derived class which creates everything
+    GEVulkanSolidReflection(GEVulkanDriver* vk,
+                            const irr::core::dimension2d<irr::u32>& size,
+                            bool ssr, bool rt);
+    // ------------------------------------------------------------------------
+    // Groups of 8x8 threads which cover a size
+    static uint32_t groups8(int32_t size);
+    // ------------------------------------------------------------------------
+    // The list of the glossy pixels (or texels): the header (uints) and the
+    // pixels of a size, one viewport at a time uses it
+    void createList(const irr::core::dimension2d<irr::u32>& size,
+                    unsigned header);
+    // ------------------------------------------------------------------------
+    void createClassifyPipeline(const char* shader);
+    // ------------------------------------------------------------------------
+    // The shader of the trace of the ray traced scene or of the screen space
+    // one
+    virtual const char* getTraceShader(bool rt) const
+    {
+        return rt ? "solid_reflection_rt.comp" : "solid_reflection_ssr.comp";
+    }
+    // ------------------------------------------------------------------------
+    // Empties the list before the classify of a viewport (first is the first
+    // traced viewport of the frame). Every command before which read the list
+    // is before a barrier of transfer writes
+    virtual void resetList(VkCommandBuffer cmd, bool first);
+    // ------------------------------------------------------------------------
+    // The groups of the classify of the pixels of the rect of a viewport
+    virtual std::array<uint32_t, 2>
+                    getClassifyGroups(const std::array<int32_t, 4>& rect) const
+    {
+        return {{ groups8(rect[2] - rect[0]), groups8(rect[3] - rect[1]) }};
+    }
+    // ------------------------------------------------------------------------
+    // After the trace of the viewport of the draw call (with its rect in
+    // pixels of the FBO)
+    virtual void finishTrace(VkCommandBuffer cmd, GEVulkanDrawCall* dc,
+                             const std::array<int32_t, 4>& rect)             {}
 public:
     // ------------------------------------------------------------------------
     GEVulkanSolidReflection(GEVulkanDriver* vk,
@@ -134,7 +175,7 @@ public:
                             GEVulkanAttachmentTexture* normal, bool ssr,
                             bool rt);
     // ------------------------------------------------------------------------
-    ~GEVulkanSolidReflection();
+    virtual ~GEVulkanSolidReflection();
     // ------------------------------------------------------------------------
     // The reflection of all the viewports, the ones of the ray traced scene
     // if rt or the screen space ones if ssr (the output of the previous frame
@@ -156,6 +197,9 @@ public:
     bool isTraced(GEVulkanDrawCall* dc) const;
     // ------------------------------------------------------------------------
     VkImageView getImageView() const;
+    // ------------------------------------------------------------------------
+    // The output is the one of GEVulkanStochasticReflection
+    virtual bool isStochastic() const                         { return false; }
 };   // GEVulkanSolidReflection
 
 }
