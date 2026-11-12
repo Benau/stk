@@ -1,0 +1,52 @@
+// First pass of the stochastic reflection of GEVulkanSolidReflection (see
+// utils/stochastic_reflection.glsl), one thread per texel of the half size
+// target which covers the viewport of a camera (pc.m_rect is in pixels of the
+// g-buffer), in 8x8 tiles: the glossy texels of a tile are added to the list
+// together (one atomic of the list for the tile). Same as
+// solid_reflection_classify.comp, at the size of the target.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 2) uniform sampler2D u_normal;
+layout(set = 0, binding = 3) uniform sampler2D u_depth;
+
+layout(push_constant) uniform PushConstants
+{
+    // x0, y0, x1, y1 (exclusive) in pixels
+    ivec4 m_rect;
+} pc;
+
+#include "utils/constants_utils.glsl"
+#include "utils/stochastic_reflection.glsl"
+
+shared uint s_count;
+shared uint s_first;
+
+void main()
+{
+    if (gl_LocalInvocationIndex == 0u)
+        s_count = 0u;
+    barrier();
+
+    // The first texel whose pixel can be in the rect
+    const ivec2 texel = pc.m_rect.xy / 2 + ivec2(gl_GlobalInvocationID.xy);
+    const bool glossy = isStochasticReflectionTexel(texel, pc.m_rect,
+        u_normal, u_depth);
+    uint slot = 0u;
+    if (glossy)
+        slot = atomicAdd(s_count, 1u);
+    barrier();
+    if (gl_LocalInvocationIndex == 0u && s_count != 0u)
+    {
+        s_first = atomicAdd(u_reflection_list.m_count, s_count);
+        // Both dispatches have groups of 64 texels
+        const uint groups = (s_first + s_count + 63u) / 64u;
+        atomicMax(u_reflection_list.m_trace_dispatch[0], groups);
+        atomicMax(u_reflection_list.m_resolve_dispatch[0], groups);
+    }
+    barrier();
+    if (glossy)
+    {
+        u_reflection_list.m_texels[s_first + slot] =
+            packStochasticReflectionTexel(texel);
+    }
+}

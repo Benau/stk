@@ -1,0 +1,165 @@
+// The spatial resolve of the stochastic reflection of GEVulkanSolidReflection
+// (see utils/stochastic_reflection.glsl), one thread per glossy texel of the
+// list: the trace is a few samples of the lobe of the specular BRDF per texel,
+// so it's noisy at the size of its texels, this is the prefilter of the
+// reflection denoiser of FidelityFX SSSR (FidelityFX DNSR,
+// FFX_DNSR_Reflections_Prefilter): the texel and 16 taps of a disk around it,
+// each weighted by
+//   - the distance of the tap to the plane of the texel, the normal and the
+//     gloss, which stop the filter at the edges of the surfaces, so the
+//     reflection of a surface is never averaged with another one,
+//   - the radiance, which gives almost no weight to a tap much brighter than
+//     the average of the neighborhood (a firefly, the noise of one sample).
+//     It's relative to the brightness of the average (the reflection is in
+//     hdr, DNSR weights it by its variance, which there is none of here).
+// The radius of the disk grows with the roughness (the reflection of a mirror
+// is one ray, it isn't filtered), the taps are the points of a Vogel spiral
+// (spread evenly over the disk) rotated by a random angle per texel, and a tap
+// far from the texel reads a lower level of the mip chain of the trace (the
+// average of the traced texels around it, stochastic_reflection_mipmap.comp)
+// instead of a single noisy texel.
+//
+// Both targets store the radiance premultiplied by its coverage, so the
+// weighted average here is the average of the radiance weighted by the
+// coverage, and a tap of the surface whose rays all missed lowers the coverage
+// (the lighting pass takes the specular IBL for the rest).
+//
+// Set 0 is the targets and the list, set 1 the camera
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 2) uniform sampler2D u_normal;
+layout(set = 0, binding = 3) uniform sampler2D u_depth;
+// The trace target with its mip chain (a linear sampler, the taps are between
+// the texels of a level)
+layout(set = 0, binding = 5) uniform sampler2D u_trace;
+layout(set = 0, binding = 6, rgba16f) uniform writeonly image2D u_resolved;
+
+#include "utils/camera.glsl"
+#include "utils/constants_utils.glsl"
+#include "utils/unproject_position.glsl"
+#include "../utils/decodeNormal.frag"
+#include "utils/stochastic_reflection.glsl"
+
+// Radius of the disk of the roughest surface which reflects, in texels
+const float u_max_radius = 8.0;
+const int u_taps = 16;
+const float u_golden_angle = 2.3999632297;
+// Of the edge stopping weights: the distance to the plane of the texel which
+// is accepted (absolute and relative to the distance to the camera, in world
+// units), the power of the dot of the normals and the gloss difference which
+// is accepted (a different material)
+const float u_plane_abs = 0.05;
+const float u_plane_rel = 0.02;
+const float u_normal_power = 32.0;
+const float u_gloss_difference = 0.1;
+// Of the radiance weight, the relative distance to the average radiance at
+// which a tap gets 1 / e of the weight
+const float u_radiance_sigma = 1.5;
+
+// ----------------------------------------------------------------------------
+float getLuminance(vec3 rgb)
+{
+    return dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+}   // getLuminance
+
+// ----------------------------------------------------------------------------
+void main()
+{
+    ivec2 texel;
+    if (!getStochasticReflectionTexel(texel))
+        return;
+    vec4 center = texelFetch(u_trace, texel, 0);
+    ivec2 pixel = getStochasticReflectionPixel(texel);
+    vec4 normal_data = texelFetch(u_normal, pixel, 0);
+    float radius = u_max_radius * clamp((1.0 - normal_data.z) /
+        (1.0 - SOLID_REFLECTION_MIN_GLOSS), 0.0, 1.0);
+    // A mirror (or almost) traced one ray, its reflection is sharp
+    if (radius < 1.0)
+    {
+        imageStore(u_resolved, texel, center);
+        return;
+    }
+
+    vec3 view_position = getPosFromUVDepth(vec3(vec2(pixel) + 0.5,
+        texelFetch(u_depth, pixel, 0).x), u_camera.m_viewport,
+        u_camera.m_inverse_projection_matrix);
+    vec3 world_normal = DecodeNormal(normal_data.xy);
+    vec3 view_normal = (u_camera.m_view_matrix *
+        vec4(world_normal, 0.0)).xyz;
+    float plane_tolerance = u_plane_abs + u_plane_rel *
+        abs(view_position.z);
+    ivec4 rect = getStochasticReflectionRect(u_camera.m_viewport);
+    // The texels whose pixel is in the viewport
+    ivec2 first_texel = (rect.xy + 1) / 2;
+    ivec2 last_texel = (rect.zw + 1) / 2 - 1;
+    vec2 size = vec2(textureSize(u_trace, 0));
+    float max_level = float(textureQueryLevels(u_trace) - 1);
+    float rotation = 2.0 * 3.14159265359 * (float(
+        hashStochasticReflection(uvec2(texel)).x >> 8u) / 16777216.0);
+
+    // The taps and their edge stopping weight (0 if it's another surface)
+    vec4 samples[u_taps + 1];
+    float weights[u_taps + 1];
+    samples[0] = center;
+    weights[0] = 1.0;
+    // The average radiance of the surface, the reference of the radiance
+    // weight
+    vec4 average = center;
+    for (int i = 0; i < u_taps; i++)
+    {
+        float tap_radius = sqrt((float(i) + 0.5) / float(u_taps)) * radius;
+        float tap_angle = float(i) * u_golden_angle + rotation;
+        vec2 position = clamp(vec2(texel) + vec2(cos(tap_angle),
+            sin(tap_angle)) * tap_radius, vec2(first_texel),
+            vec2(last_texel));
+        weights[i + 1] = 0.0;
+        samples[i + 1] = vec4(0.0);
+        // The surface under the tap is the one of the nearest texel
+        ivec2 tap_texel = ivec2(position + 0.5);
+        if (!isStochasticReflectionTexel(tap_texel, rect, u_normal, u_depth))
+            continue;
+        ivec2 tap_pixel = getStochasticReflectionPixel(tap_texel);
+        vec4 tap_normal_data = texelFetch(u_normal, tap_pixel, 0);
+        vec3 tap_view_position = getPosFromUVDepth(vec3(vec2(tap_pixel) + 0.5,
+            texelFetch(u_depth, tap_pixel, 0).x), u_camera.m_viewport,
+            u_camera.m_inverse_projection_matrix);
+        float plane = abs(dot(view_normal, tap_view_position -
+            view_position));
+        float weight = max(1.0 - plane / plane_tolerance, 0.0);
+        weight *= pow(max(dot(DecodeNormal(tap_normal_data.xy),
+            world_normal), 0.0), u_normal_power);
+        weight *= 1.0 - smoothstep(0.5 * u_gloss_difference,
+            u_gloss_difference, abs(tap_normal_data.z - normal_data.z));
+        if (weight <= 1e-3)
+            continue;
+        // A tap of 2^(l + 1) texels away or more reads level l: the taps are
+        // about that far from each other there
+        float level = clamp(floor(log2(max(tap_radius, 1.0))) - 1.0, 0.0,
+            max_level);
+        samples[i + 1] = textureLod(u_trace, (position + 0.5) / size, level);
+        weights[i + 1] = weight;
+        average += samples[i + 1] * weight;
+    }
+    vec3 average_radiance = average.rgb / max(average.a, 1e-5);
+    float average_luminance = getLuminance(average_radiance);
+
+    vec4 sum = vec4(0.0);
+    float weight_sum = 0.0;
+    for (int i = 0; i < u_taps + 1; i++)
+    {
+        if (weights[i] <= 0.0)
+            continue;
+        float weight = weights[i];
+        // A tap without a hit has no radiance, only its coverage
+        if (samples[i].a > 0.0 && average.a > 0.0)
+        {
+            vec3 radiance = samples[i].rgb / samples[i].a;
+            float difference = length(radiance - average_radiance) /
+                (1.0 + average_luminance);
+            weight *= max(exp(-difference / u_radiance_sigma), 1e-2);
+        }
+        sum += samples[i] * weight;
+        weight_sum += weight;
+    }
+    imageStore(u_resolved, texel, sum / weight_sum);
+}

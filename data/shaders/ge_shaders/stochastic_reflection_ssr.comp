@@ -1,0 +1,113 @@
+// Screen space stochastic reflection of the solid materials
+// (GEVulkanSolidReflection, see utils/stochastic_reflection.glsl), one thread
+// per glossy texel of the list: samples of the lobe of the specular BRDF are
+// traced over the depth buffer (SOLID_REFLECTION_SSR_FAST) or the HiZ depth,
+// the same traces as solid_reflection_ssr.comp.
+//
+// u_history is the tonemapped output of the previous frame (the attachment of
+// the tonemap pass, so it has the bloom, the ghost and transparent materials
+// too), converted back to hdr. The confidence of a hit is the weight of
+// SSRBlendWeight (the edges of the screen, the rays towards the camera and the
+// hits on another reflective surface fade out, like solid_reflection_ssr.comp)
+// and it's rejected on the sky, on a back face and on the pixel itself (the
+// trace over the depth buffer always ends somewhere, the FFX_SSSR_ValidateHit
+// of FidelityFX SSSR). The main is the one of utils/stochastic_reflection.glsl
+// (8 threads trace the rays of a texel).
+//
+// Set 0 is the one of GEVulkanHiZDepth::getRenderingDescriptorSet() (same
+// layout as the displace pass, the first image is the history instead of the
+// current frame), or the one of the FBO without the HiZ depth (u_hiz_iterations
+// is 0 then), set 1 the camera, set 2 GVDFP_HDR (g-buffer, same as lighting),
+// set 3 the environment and set 4 the targets and the list
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#define SOLID_REFLECTION_SET 4
+#define STOCHASTIC_REFLECTION_SURFACE
+#define STOCHASTIC_REFLECTION_TRACE
+
+layout(set = 0, binding = 0) uniform sampler2D u_history;
+layout(set = 0, binding = 1) uniform sampler2DShadow u_depth_shadow;
+layout(set = 0, binding = 2) uniform sampler2D u_hiz_depth;
+layout(set = 2, binding = 1) uniform sampler2D u_normal;
+layout(set = 2, binding = 2) uniform sampler2D u_depth;
+// Level 0 of the trace target
+layout(set = SOLID_REFLECTION_SET, binding = 0, rgba16f) uniform writeonly
+    image2D u_trace;
+
+#include "utils/camera.glsl"
+#include "utils/constants_utils.glsl"
+// Iteration limit of the hiz trace (0 uses the depth buffer)
+const uint u_hiz_iterations =
+    u_solid_reflection == SOLID_REFLECTION_SSR_HIZ400 ? 400u :
+    u_solid_reflection == SOLID_REFLECTION_SSR_HIZ200 ? 200u :
+    u_solid_reflection == SOLID_REFLECTION_SSR_HIZ100 ? 100u : 0u;
+// The rays of the roughest surface (see getStochasticReflectionRays), more
+// with a longer trace (2 per thread of the texel at most)
+const uint u_max_rays =
+    u_solid_reflection == SOLID_REFLECTION_SSR_HIZ400 ? 16u :
+    u_solid_reflection == SOLID_REFLECTION_SSR_HIZ200 ? 12u :
+    u_solid_reflection == SOLID_REFLECTION_SSR_HIZ100 ? 8u : 4u;
+#include "utils/pbr_utils.glsl"
+#include "utils/unproject_position.glsl"
+#include "../utils/decodeNormal.frag"
+
+#define SSR_HIZ
+#include "../utils/ssr.glsl"
+#include "utils/stochastic_reflection.glsl"
+
+// ----------------------------------------------------------------------------
+float traceStochasticReflectionRay(StochasticReflectionSurface surface,
+                                   ivec2 pixel, vec3 direction, out vec3 hdr)
+{
+    hdr = vec3(0.0);
+    // The trace is in view space
+    vec3 reflected = (u_camera.m_view_matrix * vec4(direction, 0.0)).xyz;
+    // Never towards the camera
+    float cosine = dot(reflected, surface.m_view_eyedir);
+    if (!SSRIsReflective(1.0, cosine))
+        return 0.0;
+
+    vec2 viewport_scale = u_camera.m_viewport.zw / u_camera.m_screensize.xy;
+    vec2 viewport_offset = u_camera.m_viewport.xy / u_camera.m_screensize.xy;
+    vec2 coords;
+    if (u_hiz_iterations == 0)
+    {
+        coords = RayCast(reflected, surface.m_view_position,
+            u_camera.m_projection_matrix, viewport_scale, viewport_offset,
+            u_depth_shadow);
+    }
+    else
+    {
+        vec3 start_ss;
+        if (!traceHiZView(surface.m_view_position, reflected,
+            u_camera.m_projection_matrix, coords, start_ss))
+            return 0.0;
+        coords = coords * viewport_scale + viewport_offset;
+    }
+    // Never outside of the viewport (the area of the camera, with splitscreen
+    // it's a part of the FBO)
+    vec2 viewport_coords = (coords - viewport_offset) / viewport_scale;
+    if (viewport_coords.x < 0. || viewport_coords.x > 1. ||
+        viewport_coords.y < 0. || viewport_coords.y > 1.)
+        return 0.0;
+
+    ivec2 hit_pixel = clamp(ivec2(coords * u_camera.m_screensize.xy),
+        ivec2(0), ivec2(u_camera.m_screensize.xy) - 1);
+    // The ray didn't leave the pixel, it's an immediate self reflection
+    if (all(lessThanEqual(abs(hit_pixel - pixel), ivec2(1))))
+        return 0.0;
+    // The sky has no radiance of a surface, the IBL is the environment
+    if (texelFetch(u_depth, hit_pixel, 0).x == 0.0)
+        return 0.0;
+    vec4 hit_normal = texelFetch(u_normal, hit_pixel, 0);
+    // A surface hit from its back is not what the ray reflects
+    if (dot(DecodeNormal(hit_normal.xy), direction) > 0.0)
+        return 0.0;
+    float weight = SSRBlendWeight(GetEdgeFade(coords, viewport_scale,
+        viewport_offset), cosine, hit_normal.z, 1.0);
+    if (weight <= 0.0)
+        return 0.0;
+    // The history has one level, there are no derivatives in a compute shader
+    hdr = inverseConvertColor(textureLod(u_history, coords, 0.0).rgb);
+    return clamp(weight, 0.0, 1.0);
+}   // traceStochasticReflectionRay

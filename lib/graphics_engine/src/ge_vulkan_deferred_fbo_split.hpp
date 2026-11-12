@@ -187,6 +187,10 @@ public:
     // GVDFP_HDR), the draw calls create the pipelines of its trace
     bool hasSolidReflection() const      { return m_solid_reflection != NULL; }
     // ------------------------------------------------------------------------
+    // The reflection is the stochastic one (GEConfig::m_stochastic_reflection
+    // when the FBO was created), the lighting pass upsamples it
+    bool hasStochasticReflection() const;
+    // ------------------------------------------------------------------------
     GEVulkanSolidReflection* getSolidReflection() const
                                            { return m_solid_reflection.get(); }
     // ------------------------------------------------------------------------

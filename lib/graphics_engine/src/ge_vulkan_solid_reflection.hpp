@@ -37,15 +37,45 @@ class GEVulkanAttachmentTexture;
 // the specular IBL, of the viewports which were traced in this frame
 // (isTraced, the others keep the specular IBL: the screen space trace has no
 // output of a previous frame in the first frame, the ray traced scene may not
-// be ready). A pass which resolves rough reflections (a stochastic trace with
-// several rays, or a mip chain of the output which is sampled by the
-// roughness) would go between the trace and the lighting pass.
+// be ready). Rough reflections are a single mirror ray mixed with the
+// specular IBL by the gloss.
+//
+// With GEConfig::m_stochastic_reflection (decided when it's created, see
+// isStochastic()) it's the stochastic reflection of FidelityFX SSSR instead,
+// with the same traces (see utils/stochastic_reflection.glsl): the classify
+// and the trace are at half size, a few samples of the lobe of the specular
+// BRDF per texel (stochastic_reflection_classify.comp,
+// stochastic_reflection_ssr.comp and stochastic_reflection_rt.comp), then
+//
+//   mipmap  : stochastic_reflection_mipmap.comp, the mip chain of the trace
+//             (the average of the traced texels)
+//   resolve : stochastic_reflection_resolve.comp, the spatial filter of the
+//             trace (the prefilter of FidelityFX DNSR) into the output
+//
+// and the output is the radiance premultiplied by its coverage (RGBA16F, half
+// size), which the lighting pass upsamples and mixes with the specular IBL.
+// Nothing else changes without it: the same shaders, output and commands.
 class GEVulkanSolidReflection : public GEVulkanPostProcessing
 {
 private:
     // The output (R11G11B10F, RGBA16F if it can't be a storage image), always
-    // in the general layout
+    // in the general layout. The resolved stochastic reflection (RGBA16F, half
+    // size) if m_stochastic
     GEVulkanAttachmentTexture* m_reflection;
+
+    // The trace of the stochastic reflection (RGBA16F, half size), with its
+    // mip chain (m_trace_levels levels), always in the general layout
+    VkImage m_trace_image;
+
+    VmaAllocation m_trace_memory;
+
+    // All the levels (sampled by the resolve) and each level (written by the
+    // trace and the mipmap, the unused ones are the last level)
+    VkImageView m_trace_view;
+
+    std::array<VkImageView, 4> m_trace_level_views;
+
+    unsigned m_trace_levels;
 
     // The glossy pixels of the viewport, with their count and the indirect
     // dispatch of the trace, see utils/solid_reflection.glsl
@@ -54,7 +84,10 @@ private:
     VmaAllocation m_list_memory;
 
     // The output, the list, the normal and the depth of the g-buffer (only for
-    // the classify, the traces have the g-buffer in GVDFP_HDR)
+    // the classify, the traces have the g-buffer in GVDFP_HDR). If
+    // m_stochastic: the level 0 of the trace instead of the output, the list,
+    // the normal, the depth, the levels of the trace, the trace (sampled) and
+    // the output, see utils/stochastic_reflection.glsl
     VkDescriptorSetLayout m_layout;
 
     VkDescriptorPool m_pool;
@@ -65,12 +98,25 @@ private:
 
     VkPipeline m_classify_pipeline;
 
+    // The mipmap and the resolve of the stochastic reflection
+    VkPipelineLayout m_mipmap_layout;
+
+    VkPipeline m_mipmap_pipeline;
+
+    VkPipelineLayout m_resolve_layout;
+
+    VkPipeline m_resolve_pipeline;
+
     // The draw calls whose viewport was traced in this frame
     std::vector<GEVulkanDrawCall*> m_traced;
 
     // The FBO has the screen space or the ray traced trace (decided when it's
     // created)
     const bool m_has_ssr, m_has_rt;
+
+    // The reflection is the stochastic one (GEConfig::m_stochastic_reflection
+    // when it's created)
+    const bool m_stochastic;
 
     // The pipelines of the trace, the screen space one and the one of the ray
     // traced scene (NULL if the FBO has none of them)
@@ -106,6 +152,27 @@ private:
     // ------------------------------------------------------------------------
     void createClassifyPipeline();
     // ------------------------------------------------------------------------
+    // The set of the stochastic reflection (m_layout and m_set, see
+    // StochasticBinding)
+    void createStochasticDescriptor(GEVulkanAttachmentTexture* depth,
+                                    GEVulkanAttachmentTexture* normal);
+    // ------------------------------------------------------------------------
+    // The trace target of the stochastic reflection, half of the size of the
+    // FBO, with its views
+    void createTraceImage(const irr::core::dimension2d<irr::u32>& size);
+    // ------------------------------------------------------------------------
+    void createStochasticPipelines();
+    // ------------------------------------------------------------------------
+    // Clears the levels of an image of the stochastic reflection to 0 (it's
+    // in the general layout)
+    void clearStochasticImages(VkCommandBuffer cmd, VkImage image,
+                               unsigned levels);
+    // ------------------------------------------------------------------------
+    // The mipmap and the resolve of the stochastic reflection of the viewport
+    // (after its trace)
+    void dispatchStochasticResolve(VkCommandBuffer cmd, GEVulkanDrawCall* dc,
+                                   const int* rect);
+    // ------------------------------------------------------------------------
     void destroyTracePipelines();
     // ------------------------------------------------------------------------
     // Creates the pipelines of the trace if there are none, or if they were
@@ -132,7 +199,7 @@ public:
                             const irr::core::dimension2d<irr::u32>& size,
                             GEVulkanAttachmentTexture* depth,
                             GEVulkanAttachmentTexture* normal, bool ssr,
-                            bool rt);
+                            bool rt, bool stochastic);
     // ------------------------------------------------------------------------
     ~GEVulkanSolidReflection();
     // ------------------------------------------------------------------------
@@ -156,6 +223,8 @@ public:
     bool isTraced(GEVulkanDrawCall* dc) const;
     // ------------------------------------------------------------------------
     VkImageView getImageView() const;
+    // ------------------------------------------------------------------------
+    bool isStochastic() const                          { return m_stochastic; }
 };   // GEVulkanSolidReflection
 
 }

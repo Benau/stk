@@ -110,6 +110,7 @@ enum DebugMenuCommand
     DEBUG_GE_GI,
     DEBUG_GE_GI_FRAME_CACHE,
     DEBUG_GE_SR,
+    DEBUG_GE_STOCHASTIC_REFLECTION,
     DEBUG_GE_DR,
     DEBUG_GE_RT,
     DEBUG_SP_RESET,
@@ -459,6 +460,23 @@ bool handleContextMenuAction(s32 cmd_id)
                 GE::GSRT_COUNT;
             GE::getGEConfig()->m_solid_reflection =
                 GE::GESolidReflectionType(next);
+            vk->updateDriver(true/*scale_changed*/);
+        }
+        break;
+    }
+#endif
+    case DEBUG_GE_STOCHASTIC_REFLECTION:
+#ifndef SERVER_ONLY
+    {
+        GE::GEVulkanDriver* vk = GE::getVKDriver();
+        if (vk)
+        {
+            // The reflection has other passes and a half size output, the
+            // render target is created again
+            GE::GEConfig* config = GE::getGEConfig();
+            config->m_stochastic_reflection = !config->m_stochastic_reflection;
+            Log::info("Debug", "Stochastic solid reflection %s",
+                config->m_stochastic_reflection ? "on" : "off");
             vk->updateDriver(true/*scale_changed*/);
         }
         break;
@@ -1417,6 +1435,8 @@ bool onEvent(const SEvent &event)
             sub->addItem(L"Toggle GE GI frame cache",
                 DEBUG_GE_GI_FRAME_CACHE);
             sub->addItem(L"Toggle GE Solid Reflection", DEBUG_GE_SR);
+            sub->addItem(L"Toggle GE stochastic reflection",
+                DEBUG_GE_STOCHASTIC_REFLECTION);
             sub->addItem(L"Toggle GE Displace Reflection", DEBUG_GE_DR);
             sub->addItem(L"Ray tracing settings...", DEBUG_GE_RT);
 

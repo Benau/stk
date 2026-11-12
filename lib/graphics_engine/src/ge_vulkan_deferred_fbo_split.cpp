@@ -311,7 +311,8 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
         {
             m_solid_reflection.reset(new GEVulkanSolidReflection(vk,
                 getSize(), m_depth_texture, m_attachments[GVDFT_NORMAL],
-                m_solid_ssr, m_solid_rt));
+                m_solid_ssr, m_solid_rt,
+                getGEConfig()->m_stochastic_reflection));
         }
         catch (const std::exception& e)
         {
@@ -433,6 +434,12 @@ void GEVulkanDeferredFBOSplit::initLightingCompositeDescriptor(
         &m_descriptor_set[GVDFP_LIGHTING_COMPOSITE],
         image_infos.data(), "GVDFP_LIGHTING_COMPOSITE");
 }   // initLightingCompositeDescriptor
+
+// ----------------------------------------------------------------------------
+bool GEVulkanDeferredFBOSplit::hasStochasticReflection() const
+{
+    return m_solid_reflection && m_solid_reflection->isStochastic();
+}   // hasStochasticReflection
 
 // ----------------------------------------------------------------------------
 float GEVulkanDeferredFBOSplit::getRTShadowScale() const

@@ -1,0 +1,94 @@
+// The mip chain of the trace target of the stochastic reflection of
+// GEVulkanSolidReflection (see utils/stochastic_reflection.glsl), levels 1 to
+// 3 from level 0, for the texels of the viewport of a camera (pc.m_rect, in
+// pixels of the g-buffer). A group of 8x8 threads reads an 8x8 tile of level 0
+// (pc.m_origin is the first tile, a multiple of 8), whose 4x4, 2x2 and 1x1
+// texels of the next levels it writes.
+//
+// A texel of a level is the average of the texels of level 0 under it which
+// were traced in this frame (isStochasticReflectionTexel, the test of the
+// classify) and not of all of them: the other ones are 0 (the target is
+// cleared every frame), and an average with them would lower the coverage of
+// the edges of a glossy surface, which the lighting pass would take as rays
+// without a hit. A texel which has none is 0, the resolve doesn't use it (it
+// tests the texel of level 0 under its taps).
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 2) uniform sampler2D u_normal;
+layout(set = 0, binding = 3) uniform sampler2D u_depth;
+
+#include "utils/constants_utils.glsl"
+#include "utils/stochastic_reflection.glsl"
+
+layout(set = 0, binding = 4, rgba16f) uniform image2D
+    u_levels[STOCHASTIC_REFLECTION_LEVELS];
+
+layout(push_constant) uniform PushConstants
+{
+    // x0, y0, x1, y1 (exclusive) in pixels
+    ivec4 m_rect;
+    // The first texel of level 0 of the dispatch
+    ivec2 m_origin;
+    // Levels of the target (STOCHASTIC_REFLECTION_LEVELS at most)
+    int m_levels;
+} pc;
+
+// The sum of the traced texels of level 0 under a texel of the current level
+// and their count, a texel of level l of the tile is at its x + 8 * y
+shared vec4 s_sum[64];
+shared float s_count[64];
+
+// ----------------------------------------------------------------------------
+// The array of images can only be indexed by a constant
+void storeLevel(int level, ivec2 texel, vec4 value)
+{
+    if (level == 1 && all(lessThan(texel, imageSize(u_levels[1]))))
+        imageStore(u_levels[1], texel, value);
+    else if (level == 2 && all(lessThan(texel, imageSize(u_levels[2]))))
+        imageStore(u_levels[2], texel, value);
+    else if (level == 3 && all(lessThan(texel, imageSize(u_levels[3]))))
+        imageStore(u_levels[3], texel, value);
+}   // storeLevel
+
+// ----------------------------------------------------------------------------
+void main()
+{
+    const ivec2 local = ivec2(gl_LocalInvocationID.xy);
+    const ivec2 texel = pc.m_origin + ivec2(gl_GlobalInvocationID.xy);
+    const uint index = uint(local.x + 8 * local.y);
+    bool traced = all(lessThan(texel, imageSize(u_levels[0]))) &&
+        isStochasticReflectionTexel(texel, pc.m_rect, u_normal, u_depth);
+    s_sum[index] = traced ? imageLoad(u_levels[0], texel) : vec4(0.0);
+    s_count[index] = traced ? 1.0 : 0.0;
+    for (int level = 1; level < STOCHASTIC_REFLECTION_LEVELS; level++)
+    {
+        barrier();
+        // The texels of this level in the tile
+        const bool in_level = all(lessThan(local, ivec2(8 >> level)));
+        vec4 sum = vec4(0.0);
+        float count = 0.0;
+        if (in_level)
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                ivec2 child = local * 2 + ivec2(i & 1, i >> 1);
+                sum += s_sum[child.x + 8 * child.y];
+                count += s_count[child.x + 8 * child.y];
+            }
+        }
+        barrier();
+        if (in_level)
+        {
+            s_sum[index] = sum;
+            s_count[index] = count;
+            if (level < pc.m_levels)
+            {
+                // The tile of the group is 8 texels of level 0 after the one
+                // of the group before it
+                storeLevel(level, ((pc.m_origin +
+                    ivec2(gl_WorkGroupID.xy) * 8) >> level) + local,
+                    count > 0.0 ? sum / count : vec4(0.0));
+            }
+        }
+    }
+}
