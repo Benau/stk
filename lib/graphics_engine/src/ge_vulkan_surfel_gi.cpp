@@ -6,7 +6,6 @@
 #include "ge_vulkan_draw_call.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_environment_map.hpp"
-#include "ge_vulkan_features.hpp"
 #include "ge_vulkan_rt_scene.hpp"
 #include "ge_vulkan_shader_manager.hpp"
 #include "ge_vulkan_skybox_renderer.hpp"
@@ -67,7 +66,7 @@ GEVulkanSurfelGI::GEVulkanSurfelGI(GEVulkanDriver* vk,
                   m_history(), m_layout(VK_NULL_HANDLE),
                   m_pool(VK_NULL_HANDLE), m_sets(),
                   m_data_layout(VK_NULL_HANDLE),
-                  m_pipeline_layout(VK_NULL_HANDLE), m_ibl(false),
+                  m_pipeline_layout(VK_NULL_HANDLE), m_options(),
                   m_pipelines(), m_frame(0), m_time(0), m_last_render(0),
                   m_rt_build_count(0), m_needs_reset(true), m_surfel_count(0),
                   m_cleared(false), m_prev_cameras(), m_prev_camera_count(0),
@@ -341,13 +340,6 @@ void GEVulkanSurfelGI::createPipeline(const char* shader, VkPipeline* pipeline,
 }   // createPipeline
 
 // ----------------------------------------------------------------------------
-bool GEVulkanSurfelGI::isIBL()
-{
-    return getGEConfig()->m_pbr && getGEConfig()->m_ibl &&
-        GEVulkanFeatures::supportsComputeInMainQueue();
-}   // isIBL
-
-// ----------------------------------------------------------------------------
 bool GEVulkanSurfelGI::isFrameCache()
 {
     return getGEConfig()->m_ray_tracing.m_gi_frame_cache;
@@ -386,38 +378,17 @@ void GEVulkanSurfelGI::createPipelines()
             "GEVulkanSurfelGI");
     }
 
-    // The trace shades the hits like the reflection, which reads the image
-    // based lighting setting and the number of levels of the specular map, the
-    // same as GEVulkanDrawCall::createPipeline (the environment maps only
-    // exist then). A ray which misses samples the skybox, which doesn't need
-    // them
-    struct Constants
-    {
-        VkBool32 m_ibl;
-        float m_specular_levels_minus_one;
-    };
-    Constants constants = {};
-    m_ibl = isIBL();
-    constants.m_ibl = m_ibl;
-    constants.m_specular_levels_minus_one = std::floor(std::log2(
-        GEVulkanEnvironmentMap::getSpecularEnvironmentMapSize().Width));
-    std::array<VkSpecializationMapEntry, 2> entries = {};
-    entries[0].constantID = 0;
-    entries[0].offset = offsetof(Constants, m_ibl);
-    entries[0].size = sizeof(VkBool32);
-    entries[1].constantID = 1;
-    entries[1].offset = offsetof(Constants, m_specular_levels_minus_one);
-    entries[1].size = sizeof(float);
-    VkSpecializationInfo specialization = {};
-    specialization.mapEntryCount = entries.size();
-    specialization.pMapEntries = entries.data();
-    specialization.dataSize = sizeof(Constants);
-    specialization.pData = &constants;
-
+    // The trace shades the hits like the reflection, so it has the same
+    // specialization constants as the draw call (GEVulkanPipelineConstants):
+    // image based lighting and the number of levels of the specular map (the
+    // environment maps only exist then), and the shadow types, without them
+    // the sun of a hit would never have a shadow. A ray which misses samples
+    // the skybox, which doesn't need them
+    GEVulkanPipelineConstants constants(m_vk, m_options);
     createPipeline("surfel_gi_clear.comp", &m_pipelines[PI_CLEAR]);
     createPipeline("surfel_gi_update.comp", &m_pipelines[PI_UPDATE]);
     createPipeline("surfel_gi_trace.comp", &m_pipelines[PI_TRACE],
-        &specialization);
+        constants.getInfo());
     createPipeline("surfel_gi_apply.comp", &m_pipelines[PI_APPLY]);
     createPipeline("surfel_gi_gather.comp", &m_pipelines[PI_GATHER]);
     createPipeline("surfel_gi_spawn.comp", &m_pipelines[PI_SPAWN]);
@@ -512,10 +483,12 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
         m_vk->waitIdle();
         destroyPipelines();
     }
-    // Image based lighting was toggled: the trace has its specialization
-    // constant, and the irradiance of the surfels was traced with the other
-    // ambient
-    if (m_pipeline_layout != VK_NULL_HANDLE && m_ibl != isIBL())
+    // The options of the draw call changed (for example image based lighting
+    // or the shadow map was toggled): the trace has the specialization
+    // constants of them, and the irradiance of the surfels was traced with the
+    // other ambient or shadow
+    if (m_pipeline_layout != VK_NULL_HANDLE &&
+        !(m_options == p[0].first->getPipelineConstantOptions()))
     {
         m_vk->waitIdle();
         destroyPipelines();
@@ -525,6 +498,7 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
     {
         try
         {
+            m_options = p[0].first->getPipelineConstantOptions();
             createPipelines();
         }
         catch (const std::exception& e)

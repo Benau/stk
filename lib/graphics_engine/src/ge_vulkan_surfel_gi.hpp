@@ -2,6 +2,7 @@
 #define HEADER_GE_VULKAN_SURFEL_GI_HPP
 
 #include "ge_vma.hpp"
+#include "ge_vulkan_pipeline_constants.hpp"
 #include "ge_vulkan_post_processing.hpp"
 
 #include <array>
@@ -201,10 +202,11 @@ private:
     // pipelines are created again then
     std::weak_ptr<VkDescriptorSetLayout> m_mesh_texture_layout;
 
-    // u_ibl of the trace (isIBL()) when the pipelines were created, they are
-    // created again if it changes (GEVulkanDriver::updateDriver doesn't create
-    // this again when only image based lighting is toggled)
-    bool m_ibl;
+    // GEVulkanPipelineConstants::Options of the trace when the pipelines were
+    // created, they are created again if it changes
+    // (GEVulkanDriver::updateDriver doesn't create this again when only image
+    // based lighting is toggled)
+    GEVulkanPipelineConstants::Options m_options;
 
     enum PipelineIndex : unsigned
     {
@@ -255,10 +257,6 @@ private:
                            GEVulkanAttachmentTexture* normal);
     // ------------------------------------------------------------------------
     void createPipelines();
-    // ------------------------------------------------------------------------
-    // Same as u_ibl of GEVulkanDrawCall::createPipeline, the environment maps
-    // only exist then
-    static bool isIBL();
     // ------------------------------------------------------------------------
     // GERayTracingConfig::m_gi_frame_cache
     static bool isFrameCache();
