@@ -1033,9 +1033,31 @@ namespace UserConfigParams
     PARAM_PREFIX BoolUserConfigParam        m_speed_streaks
             PARAM_DEFAULT(BoolUserConfigParam(false, "enable_speed_streaks",
             &m_graphics_quality, "Enable Speed Streaks"));
+    // Screen space reflection of the solid and the water materials: 0 is
+    // disabled, 1 to 4 the GE::GESolidReflectionType (GEDisplaceReflectionType)
+    // of the same value, from the trace over the depth buffer to the HiZ one
+    // with the most steps (OptionsScreenVideo::setSSR). The ray traced
+    // reflections (m_ray_tracing_reflection) override them. -1 (default) is
+    // a config of before these settings, which OptionsScreenVideo::setSSR
+    // converts from m_ssr once
+    PARAM_PREFIX IntUserConfigParam         m_solid_reflection
+            PARAM_DEFAULT(IntUserConfigParam(-1, "solid_reflection",
+            &m_graphics_quality, "Screen space reflection of the solid "
+            "materials (0 = disabled, 1 = low ... 4 = very high)"));
+    PARAM_PREFIX IntUserConfigParam         m_water_reflection
+            PARAM_DEFAULT(IntUserConfigParam(-1, "water_reflection",
+            &m_graphics_quality, "Screen space reflection of the water "
+            "(0 = disabled, 1 = low ... 4 = very high)"));
+    // Replaced by m_solid_reflection and m_water_reflection, only read to
+    // convert an old config
     PARAM_PREFIX BoolUserConfigParam        m_ssr
             PARAM_DEFAULT(BoolUserConfigParam(false, "ssr",
-            &m_graphics_quality, "Enable screen space reflection"));
+            &m_graphics_quality, "Enable screen space reflection (old, see "
+            "solid_reflection and water_reflection)"));
+    PARAM_PREFIX BoolUserConfigParam        m_stochastic_reflection
+            PARAM_DEFAULT(BoolUserConfigParam(false, "stochastic_reflection",
+            &m_graphics_quality, "Blur the reflection of the rough solid "
+            "materials (stochastic reflection, Vulkan only)"));
 
     // Mirrored to GE::GERayTracingConfig (RayTracingSettingsDialog)
     PARAM_PREFIX BoolUserConfigParam        m_ray_tracing

@@ -3,205 +3,216 @@
     <div x="2%" y="2%" width="96%" height="96%" layout="vertical-row" >
         <header id="title" width="100%" height="fit" text_align="center" word_wrap="true" text="Graphics Settings" />
 
-        <spacer height="20" width="10" />
+        <spacer height="10" width="10" />
 
-        <!--
-        <div layout="horizontal-row" width="100%" height="fit">
-            <checkbox id="pixelshaders"/>
-            <spacer width="10" height="10"/>
-            <label text="Pixel shaders" I18N="Video settings"/>
-        </div>
+        <tabs id="settings_tabs" height="2f" width="100%" align="center">
+            <icon-button id="tab_lighting" width="128" height="128" icon="gui/icons/options_display.png"
+                I18N="Video settings" text="Lighting"/>
+            <icon-button id="tab_effects" width="128" height="128" icon="gui/icons/options_video.png"
+                I18N="Video settings" text="Effects"/>
+            <icon-button id="tab_quality" width="128" height="128" icon="gui/icons/options_general.png"
+                I18N="Video settings" text="Quality"/>
+        </tabs>
 
-        <spacer height="4" width="10" />
-        -->
+        <spacer height="10" width="10" />
 
-        <div layout="horizontal-row" width="100%" proportion="1">
-            <checkbox id="dynamiclight"/>
-            <spacer width="10" height="10"/>
-            <label text="Advanced pipeline (lights, etc.)" I18N="Video settings"/>
-        </div>
+        <!-- The pages of the tabs are on top of each other (a div without
+             layout places its children at their own coordinates), only the one
+             of the selected tab is visible (CustomVideoSettingsDialog::
+             showTab). Each page has 7 rows of the same height, a page with
+             less rows fills the rest with a spacer -->
+        <div id="pages" width="100%" proportion="1">
 
-        <spacer height="4" width="10" />
+            <!-- ************ Lighting ************ -->
+            <div id="page_lighting" x="0" y="0" width="100%" height="100%" layout="vertical-row">
+                <div layout="horizontal-row" width="100%" proportion="1">
+                    <checkbox id="dynamiclight"/>
+                    <spacer width="10" height="10"/>
+                    <label text="Advanced pipeline (lights, etc.)" I18N="Video settings"/>
+                </div>
 
-        <div layout="horizontal-row" width="100%" proportion="1">
-            <spacer width="70" height="10" />
-            
-            <div layout="horizontal-row" proportion="1" height="fit">
-                <label text="Shadows" I18N="Video settings"/>
-                <spacer width="10" height="10"/>
-                <gauge id="shadows" min_value="0" max_value="4" proportion="1"/>
+                <div layout="horizontal-row" width="100%" proportion="1">
+                    <spacer width="70" height="10" />
+
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <label text="Shadows" I18N="Video settings"/>
+                        <spacer width="10" height="10"/>
+                        <gauge id="shadows" min_value="0" max_value="4" proportion="1"/>
+                    </div>
+
+                    <spacer height="4" width="10" />
+
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <checkbox id="pointlight_shadows"/>
+                        <spacer width="10" height="10"/>
+                        <label text="Point light shadows" I18N="Video settings"/>
+                    </div>
+                </div>
+
+                <div layout="horizontal-row" width="100%" proportion="1">
+                    <spacer width="70" height="10"/>
+
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <checkbox id="ibl"/>
+                        <spacer width="10" height="10"/>
+                        <label text="Image-based lighting" I18N="Video settings"/>
+                    </div>
+
+                    <spacer height="4" width="10" />
+
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <checkbox id="ssao"/>
+                        <spacer width="10" height="10"/>
+                        <label text="Ambient occlusion" I18N="Video settings"/>
+                    </div>
+                </div>
+
+                <div layout="horizontal-row" width="100%" proportion="1">
+                    <spacer width="70" height="10"/>
+
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <checkbox id="lightscattering"/>
+                        <spacer width="10" height="10"/>
+                        <label text="Light Scattering" I18N="Video settings"/>
+                    </div>
+
+                    <spacer height="4" width="10" />
+
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <checkbox id="lightshaft"/>
+                        <spacer width="10" height="10"/>
+                        <label text="Light shaft (God rays)" I18N="Video settings"/>
+                    </div>
+                </div>
+
+                <div layout="horizontal-row" width="100%" proportion="1">
+                    <spacer width="70" height="10"/>
+
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <label text="Solid reflection" I18N="Video settings"/>
+                        <spacer width="10" height="10"/>
+                        <spinner id="solid_reflection" proportion="1"/>
+                    </div>
+
+                    <spacer height="4" width="10" />
+
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <label text="Water reflection" I18N="Video settings"/>
+                        <spacer width="10" height="10"/>
+                        <spinner id="water_reflection" proportion="1"/>
+                    </div>
+                </div>
+
+                <div layout="horizontal-row" width="100%" proportion="1">
+                    <spacer width="70" height="10"/>
+
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <checkbox id="stochastic_reflection"/>
+                        <spacer width="10" height="10"/>
+                        <label text="Soft reflections on rough surfaces" I18N="Video settings"/>
+                    </div>
+                </div>
+
+                <spacer proportion="1" width="10"/>
             </div>
 
-            <spacer height="4" width="10" />
+            <!-- ************ Effects ************ -->
+            <div id="page_effects" x="0" y="0" width="100%" height="100%" layout="vertical-row">
+                <div layout="horizontal-row" width="100%" proportion="1">
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <label text="Anti-aliasing" I18N="Video settings"/>
+                        <spacer width="10" height="10"/>
+                        <spinner id="anti_aliasing" proportion="1"/>
+                    </div>
 
-            <div layout="horizontal-row" proportion="1" height="fit">
-                <label text="Anti-aliasing" I18N="Video settings"/>
-                <spacer width="10" height="10"/>
-                <spinner id="anti_aliasing" proportion="1"/>
-            </div>
-        </div>
+                    <spacer height="4" width="10" />
 
-        <spacer height="4" width="10" />
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <label text="Particle effects" I18N="Video settings"/>
+                        <spacer width="10" height="10"/>
+                        <gauge id="particles_effects" min_value="1" max_value="2" proportion="1"/>
+                    </div>
+                </div>
 
-        <div layout="horizontal-row" width="100%" proportion="1">
-            <spacer width="70" height="10"/>
+                <div layout="horizontal-row" width="100%" proportion="1">
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <checkbox id="glow"/>
+                        <spacer width="10" height="10"/>
+                        <label text="Glow (Outlines)" I18N="Video settings"/>
+                    </div>
 
-            <div layout="horizontal-row" proportion="1" height="fit">
-                <checkbox id="pointlight_shadows"/>
-                <spacer width="10" height="10"/>
-                <label text="Point light shadows" I18N="Video settings"/>
-            </div>
+                    <spacer height="4" width="10" />
 
-            <spacer height="4" width="10" />
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <checkbox id="bloom"/>
+                        <spacer width="10" height="10"/>
+                        <label text="Bloom" I18N="Video settings"/>
+                    </div>
+                </div>
 
-            <div layout="horizontal-row" proportion="1" height="fit">
-                <checkbox id="lightscattering"/>
-                <spacer width="10" height="10"/>
-                <label text="Light Scattering" I18N="Video settings"/>
-            </div>
-        </div>
+                <div layout="horizontal-row" width="100%" proportion="1">
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <checkbox id="motionblur"/>
+                        <spacer width="10" height="10"/>
+                        <label text="Motion blur" I18N="Video settings"/>
+                    </div>
 
-        <spacer height="4" width="10" />
+                    <spacer height="4" width="10" />
 
-        <div layout="horizontal-row" width="100%" proportion="1">
-            <spacer width="70" height="10"/>
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <checkbox id="dof"/>
+                        <spacer width="10" height="10"/>
+                        <label text="Depth of field" I18N="Video settings"/>
+                    </div>
+                </div>
 
-            <div layout="horizontal-row" proportion="1" height="fit">
-                <checkbox id="glow"/>
-                <spacer width="10" height="10"/>
-                <label text="Glow (Outlines)" I18N="Video settings"/>
-            </div>
+                <div layout="horizontal-row" width="100%" proportion="1">
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <checkbox id="speedstreaks"/>
+                        <spacer width="10" height="10"/>
+                        <label text="Speed streaks" I18N="Video settings"/>
+                    </div>
 
-            <spacer height="4" width="10" />
+                    <spacer height="4" width="10" />
 
-            <div layout="horizontal-row" proportion="1" height="fit">
-                <checkbox id="ssr"/>
-                <spacer width="10" height="10"/>
-                <label text="Screen space reflection" I18N="Video settings"/>
-            </div>
-        </div>
+                    <div layout="horizontal-row" proportion="1" height="fit">
+                        <checkbox id="animated_characters"/>
+                        <spacer width="10" height="10"/>
+                        <label text="Animated characters" I18N="Video settings"/>
+                    </div>
+                </div>
 
-        <div layout="horizontal-row" width="100%" proportion="1">
-            <spacer width="70" height="10"/>
-
-            <div layout="horizontal-row" proportion="1" height="fit">
-                <checkbox id="speedstreaks"/>
-                <spacer width="10" height="10"/>
-                <label text="Speed streaks" I18N="Video settings"/>
-            </div>
-
-            <spacer height="4" width="10" />
-
-            <div layout="horizontal-row" proportion="1" height="fit">
-                <checkbox id="ibl"/>
-                <spacer width="10" height="10"/>
-                <label text="Image-based lighting" I18N="Video settings"/>
-            </div>
-        </div>
-
-        <spacer height="4" width="10" />
-
-        <div layout="horizontal-row" width="100%" proportion="1">
-            <spacer width="70" height="10"/>
-
-            <div layout="horizontal-row" proportion="1" height="fit">
-                <checkbox id="lightshaft"/>
-                <spacer width="10" height="10"/>
-                <label text="Light shaft (God rays)" I18N="Video settings"/>
+                <spacer proportion="3" width="10"/>
             </div>
 
-            <spacer height="4" width="10" />
+            <!-- ************ Quality ************ -->
+            <div id="page_quality" x="0" y="0" width="100%" height="100%" layout="vertical-row">
+                <div layout="horizontal-row" width="100%" proportion="1">
+                    <label text="Rendered image quality" I18N="Video settings" width="40%"/>
+                    <spacer width="10" height="10"/>
+                    <gauge id="image_quality" min_value="0" max_value="2" width="50%" />
+                </div>
 
-            <div layout="horizontal-row" proportion="1" height="fit">
-                <checkbox id="bloom"/>
-                <spacer width="10" height="10"/>
-                <label text="Bloom" I18N="Video settings"/>
+                <div layout="horizontal-row" width="100%" proportion="1">
+                    <label text="Geometry detail" I18N="Video settings" width="40%"/>
+                    <spacer width="10" height="10"/>
+                    <gauge id="geometry_detail" min_value="0" max_value="5" width="50%" />
+                </div>
+
+                <div layout="horizontal-row" width="100%" proportion="1">
+                    <label text="Render Driver" I18N="Video settings" id="render_driver_label" width="40%"/>
+                    <spacer width="10" height="10"/>
+                    <spinner id="render_driver" width="50%" />
+                </div>
+
+                <div layout="horizontal-row" width="100%" proportion="1">
+                    <checkbox id="texture_compression"/>
+                    <spacer width="10" height="10"/>
+                    <label text="Texture compression" I18N="Video settings"/>
+                </div>
+
+                <spacer proportion="3" width="10"/>
             </div>
-        </div>
-        
-        <spacer height="4" width="10" />
-
-        <div layout="horizontal-row" width="100%" proportion="1">
-            <spacer width="70" height="10"/>
-
-            <div layout="horizontal-row" proportion="1" height="fit">
-                <checkbox id="ssao"/>
-                <spacer width="10" height="10"/>
-                <label text="Ambient occlusion" I18N="Video settings"/>
-            </div>
-
-            <spacer height="4" width="10" />
-        </div>
-        
-        <spacer height="4" width="10" />
-
-        <div layout="horizontal-row" width="100%" proportion="1">
-            <spacer width="70" height="10"/>
-
-            <div layout="horizontal-row" proportion="1" height="fit">
-                <checkbox id="motionblur"/>
-                <spacer width="10" height="10"/>
-                <label text="Motion blur" I18N="Video settings"/>
-            </div>
-
-            <spacer height="4" width="10" />
-
-            <div layout="horizontal-row" proportion="1" height="fit">
-                <checkbox id="dof"/>
-                <spacer width="10" height="10"/>
-                <label text="Depth of field" I18N="Video settings"/>
-            </div>
-        </div>
-        
-        <spacer height="4" width="10" />
-
-        <div layout="horizontal-row" width="100%" proportion="1">
-            <div layout="horizontal-row" proportion="1" height="fit">
-                <checkbox id="animated_characters"/>
-                <spacer width="10" height="10"/>
-                <label text="Animated characters" I18N="Video settings"/>
-            </div>
-
-            <spacer height="4" width="10" />
-
-            <div layout="horizontal-row" proportion="1" height="fit">
-                <checkbox id="texture_compression"/>
-                <spacer width="10" height="10"/>
-                <label text="Texture compression" I18N="Video settings"/>
-            </div>
-        </div>
-
-        <spacer height="20" width="10" />
-
-        <div layout="horizontal-row" width="100%" proportion="1">
-            <label text="Particle effects" I18N="Video settings" width="40%"/>
-            <spacer width="10" height="10"/>
-            <gauge id="particles_effects" min_value="1" max_value="2" width="50%" />
-        </div>
-
-        <spacer height="4" width="10" />
-
-        <div layout="horizontal-row" width="100%" proportion="1">
-            <label text="Rendered image quality" I18N="Video settings" width="40%"/>
-            <spacer width="10" height="10"/>
-            <gauge id="image_quality" min_value="0" max_value="2" width="50%" />
-        </div>
-
-        <spacer height="4" width="10" />
-
-        <div layout="horizontal-row" width="100%" proportion="1">
-            <label text="Geometry detail" I18N="Video settings" width="40%"/>
-            <spacer width="10" height="10"/>
-            <gauge id="geometry_detail" min_value="0" max_value="5" width="50%" />
-        </div>
-
-        <spacer height="10" width="10"/>
-
-        <!-- ************ Render Driver ************ -->
-        <div layout="horizontal-row" width="100%" proportion="1">
-            <label text="Render Driver" I18N="Video settings" id="render_driver_label" width="40%"/>
-            <spacer width="10" height="10"/>
-            <spinner id="render_driver" width="50%" />
         </div>
 
         <spacer height="10" width="10"/>

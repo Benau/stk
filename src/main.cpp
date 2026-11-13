@@ -1041,9 +1041,21 @@ int handleCmdLinePreliminary()
         UserConfigParams::m_pcss = false;
     // screen space reflections
     if (CommandLine::has("--enable-ssr"))
-        UserConfigParams::m_ssr = true;
+    {
+        // A reflection which is disabled gets the level which the geometry
+        // detail selected before the reflections had their own setting
+        const int level = UserConfigParams::m_geometry_level >= 3 ?
+            std::min((int)UserConfigParams::m_geometry_level - 1, 4) : 1;
+        if (UserConfigParams::m_solid_reflection <= 0)
+            UserConfigParams::m_solid_reflection = level;
+        if (UserConfigParams::m_water_reflection <= 0)
+            UserConfigParams::m_water_reflection = level;
+    }
     else if (CommandLine::has("--disable-ssr"))
-        UserConfigParams::m_ssr = false;
+    {
+        UserConfigParams::m_solid_reflection = 0;
+        UserConfigParams::m_water_reflection = 0;
+    }
     // light scattering
     if (CommandLine::has("--enable-light-scatter"))
         UserConfigParams::m_light_scatter = true;
