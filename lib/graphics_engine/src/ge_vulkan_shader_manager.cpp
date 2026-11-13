@@ -152,6 +152,15 @@ std::vector<uint32_t> compileShader(shaderc_shader_kind kind,
             std::string("File ") + name + " failed to be read");
     }
     r->drop();
+    // The ray traced shaders are only used when ray query is supported, they
+    // need the mesh textures as a runtime array which can't be compiled
+    // without descriptor indexing (V3DV, lavapipe...), so skip them instead
+    // of logging their errors at each start, getShader() reports them missing
+    // if they are ever used. Ray query support doesn't change after the
+    // device is created.
+    if (!GEVulkanFeatures::supportsRayQuery() &&
+        shader_data.find("#extension GL_EXT_ray_query") != std::string::npos)
+        return std::vector<uint32_t>();
     using namespace GEVulkanShaderManager;
     if (set_reload_data)
     {
