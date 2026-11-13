@@ -212,7 +212,9 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
         VK_TRUE);
 
     // Vulkan 1.4 implementations only have to support local read for storage
-    // resources and single sampled color attachments
+    // resources and single sampled color attachments, the depth / stencil
+    // attachments are needed on top of the feature itself, so it can only
+    // turn the support off
     if (vk->getPhysicalDeviceProperties().apiVersion >= VK_MAKE_VERSION(1, 4, 0))
     {
         VkPhysicalDeviceProperties2 properties = {};
@@ -223,7 +225,7 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
         properties.pNext = &vk_14_prop;
 
         vkGetPhysicalDeviceProperties2(vk->getPhysicalDevice(), &properties);
-        g_supports_dynamic_rendering_local_read = vk_14_prop
+        g_supports_dynamic_rendering_local_read &= vk_14_prop
             .dynamicRenderingLocalReadDepthStencilAttachments == VK_TRUE;
     }
 
