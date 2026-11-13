@@ -38,7 +38,10 @@ namespace GraphicalPresets
         bool degraded_ibl;
         int geometry_detail;
         bool pc_soft_shadows;
-        bool ssr;
+        /** Level of the screen space reflection of the solid materials and
+         *  of the water (UserConfigParams::m_solid_reflection), 0 is
+         *  disabled. */
+        int reflection;
     };
 
     struct BlurPreset

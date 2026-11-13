@@ -405,9 +405,12 @@ void OptionsScreenVideo::updateTooltip()
     tooltip = tooltip + L"\n" +
         (UserConfigParams::m_ssao ? _("Ambient occlusion: Enabled") :
                                     _("Ambient occlusion: Disabled"));
-    tooltip = tooltip + L"\n" +
-        (UserConfigParams::m_ssr ? _("Screen space reflection: Enabled") :
-                                   _("Screen space reflection: Disabled"));
+    //I18N: in the graphical options
+    tooltip = tooltip + L"\n" + _("Solid reflection: %s",
+        getReflectionLevelName(UserConfigParams::m_solid_reflection));
+    //I18N: in the graphical options
+    tooltip = tooltip + L"\n" + _("Water reflection: %s",
+        getReflectionLevelName(UserConfigParams::m_water_reflection));
     //I18N: in the graphical options
     tooltip = tooltip + L"\n" +
         (UserConfigParams::m_animated_characters ? _("Animated characters: Enabled") :
@@ -620,33 +623,53 @@ bool OptionsScreenVideo::onEscapePressed()
 // --------------------------------------------------------------------------------------------
 void OptionsScreenVideo::setSSR()
 {
-    GE::GESolidReflectionType solid = GE::GSRT_DISABLED;
-    GE::GEDisplaceReflectionType displace = GE::GDRT_DISABLED;
-    if (UserConfigParams::m_ssr)
+    // A config of before the separate settings has only m_ssr, the level was
+    // chosen by the geometry detail (FAST below 3, then HiZ100 to HiZ400)
+    if (UserConfigParams::m_solid_reflection < 0 ||
+        UserConfigParams::m_water_reflection < 0)
     {
-        switch (UserConfigParams::m_geometry_level)
-        {
-        case 3:
-            solid = GE::GSRT_SSR_HIZ100;
-            displace = GE::GDRT_SSR_HIZ100;
-            break;
-        case 4:
-            solid = GE::GSRT_SSR_HIZ200;
-            displace = GE::GDRT_SSR_HIZ200;
-            break;
-        case 5:
-            solid = GE::GSRT_SSR_HIZ400;
-            displace = GE::GDRT_SSR_HIZ400;
-            break;
-        default:
-            solid = GE::GSRT_SSR_FAST;
-            displace = GE::GDRT_SSR_FAST;
-            break;
-        }
+        const int geometry = UserConfigParams::m_geometry_level;
+        const int level = !UserConfigParams::m_ssr ? 0 :
+            geometry >= 3 ? std::min(geometry - 1, 4) : 1;
+        if (UserConfigParams::m_solid_reflection < 0)
+            UserConfigParams::m_solid_reflection = level;
+        if (UserConfigParams::m_water_reflection < 0)
+            UserConfigParams::m_water_reflection = level;
     }
-    GE::getGEConfig()->m_solid_reflection = solid;
-    GE::getGEConfig()->m_displace_reflection = displace;
+    // The levels of the settings are the values of the GE types (0 is
+    // disabled, then the trace over the depth buffer and the HiZ ones with
+    // more and more steps). OpenGL only has the trace over the depth buffer
+    // (FAST), a higher level of the config is kept for Vulkan. It's called
+    // before the device is created too, so the render driver of the config
+    // decides
+    const bool vk = std::string(UserConfigParams::m_render_driver) == "vulkan";
+    const int max_solid = vk ? (int)GE::GSRT_SSR_HIZ400 :
+        (int)GE::GSRT_SSR_FAST;
+    const int max_displace = vk ? (int)GE::GDRT_SSR_HIZ400 :
+        (int)GE::GDRT_SSR_FAST;
+    const int solid = std::max(0, std::min((int)UserConfigParams::
+        m_solid_reflection, max_solid));
+    const int displace = std::max(0, std::min((int)UserConfigParams::
+        m_water_reflection, max_displace));
+    GE::getGEConfig()->m_solid_reflection = GE::GESolidReflectionType(solid);
+    GE::getGEConfig()->m_displace_reflection =
+        GE::GEDisplaceReflectionType(displace);
+    GE::getGEConfig()->m_stochastic_reflection =
+        UserConfigParams::m_stochastic_reflection;
 }   // setSSR
+
+// --------------------------------------------------------------------------------------------
+irr::core::stringw OptionsScreenVideo::getReflectionLevelName(int level)
+{
+    switch (level)
+    {
+    case 1:  return _C("Reflection", "Low");
+    case 2:  return _C("Reflection", "Medium");
+    case 3:  return _C("Reflection", "High");
+    case 4:  return _C("Reflection", "Very high");
+    default: return _C("Reflection", "Disabled");
+    }
+}   // getReflectionLevelName
 
 // --------------------------------------------------------------------------------------------
 void OptionsScreenVideo::setRayTracing()

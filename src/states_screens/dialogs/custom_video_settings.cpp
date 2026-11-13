@@ -48,6 +48,9 @@ CustomVideoSettingsDialog::CustomVideoSettingsDialog(const float w, const float 
         ModalDialog(w, h)
 {
     loadFromFile("custom_video_settings.stkgui");
+    getWidget<RibbonWidget>("settings_tabs")->select("tab_lighting",
+        PLAYER_ID_GAME_MASTER);
+    showTab("tab_lighting");
     updateActivation();
 }
 
@@ -109,7 +112,11 @@ void CustomVideoSettingsDialog::beforeAddingWidgets()
     getWidget<CheckBoxWidget>("speedstreaks")->setState(UserConfigParams::m_speed_streaks);
     getWidget<CheckBoxWidget>("glow")->setState(UserConfigParams::m_glow);
     getWidget<CheckBoxWidget>("ssao")->setState(UserConfigParams::m_ssao);
-    getWidget<CheckBoxWidget>("ssr")->setState(UserConfigParams::m_ssr);
+    const bool vk = std::string(UserConfigParams::m_render_driver) == "vulkan";
+    fillReflection("solid_reflection", vk, UserConfigParams::m_solid_reflection);
+    fillReflection("water_reflection", vk, UserConfigParams::m_water_reflection);
+    getWidget<CheckBoxWidget>("stochastic_reflection")
+        ->setState(UserConfigParams::m_stochastic_reflection);
     getWidget<CheckBoxWidget>("bloom")->setState(UserConfigParams::m_bloom);
     getWidget<CheckBoxWidget>("lightscattering")->setState(UserConfigParams::m_light_scatter);
     getWidget<CheckBoxWidget>("pointlight_shadows")->setState(UserConfigParams::m_pointlight_shadows);
@@ -206,6 +213,67 @@ void CustomVideoSettingsDialog::fillAntiAliasing(bool vk,
 
 // -----------------------------------------------------------------------------
 
+void CustomVideoSettingsDialog::fillReflection(const std::string& name,
+                                               bool vk, int level)
+{
+#ifndef SERVER_ONLY
+    SpinnerWidget* reflection = getWidget<SpinnerWidget>(name.c_str());
+    assert(reflection != NULL);
+    reflection->clearLabels();
+    level = std::max(0, std::min(level, 4));
+    if (vk)
+    {
+        // The value of a label is the level saved in the config
+        for (int i = 0; i <= 4; i++)
+        {
+            reflection->addLabel(
+                OptionsScreenVideo::getReflectionLevelName(i));
+        }
+        reflection->setValue(level);
+    }
+    else
+    {
+        // OpenGL only has the trace over the depth buffer (the level 1 of
+        // GE), so it's on or off, getReflectionLevel() keeps the level of
+        // the config when it stays on
+        reflection->addLabel(_C("Reflection", "Disabled"));
+        reflection->addLabel(_C("Reflection", "Enabled"));
+        reflection->setValue(level != 0 ? 1 : 0);
+    }
+#endif
+}   // fillReflection
+
+// -----------------------------------------------------------------------------
+
+int CustomVideoSettingsDialog::getReflectionLevel(const std::string& name,
+                                                  int config_level)
+{
+    int value = getWidget<SpinnerWidget>(name.c_str())->getValue();
+    // The spinner of OpenGL has 2 labels: enabled keeps the level which
+    // Vulkan uses (or the lowest one if it was disabled)
+    if (getWidget<SpinnerWidget>(name.c_str())->getMax() == 1 && value == 1)
+        value = std::max(1, std::min(config_level, 4));
+    return value;
+}   // getReflectionLevel
+
+// -----------------------------------------------------------------------------
+
+void CustomVideoSettingsDialog::showTab(const std::string& tab)
+{
+    // The pages are on top of each other in the dialog, a widget which is not
+    // visible can't be focused or clicked (EventHandler skips them)
+    const char* pages[][2] =
+    {
+        { "tab_lighting", "page_lighting" },
+        { "tab_effects",  "page_effects"  },
+        { "tab_quality",  "page_quality"  },
+    };
+    for (auto& page : pages)
+        getWidget(page[1])->setVisible(tab == page[0]);
+}   // showTab
+
+// -----------------------------------------------------------------------------
+
 GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::string& eventSource)
 {
 #ifndef SERVER_ONLY
@@ -226,7 +294,20 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
         const unsigned aa_value = aa->getValue();
         fillAntiAliasing(rd == "vulkan", aa_value < m_anti_aliasing_names.size() ?
             m_anti_aliasing_names[aa_value] : std::string("off"));
+        // Same for the levels of the reflections, the choice is kept
+        fillReflection("solid_reflection", rd == "vulkan",
+            getReflectionLevel("solid_reflection",
+            UserConfigParams::m_solid_reflection));
+        fillReflection("water_reflection", rd == "vulkan",
+            getReflectionLevel("water_reflection",
+            UserConfigParams::m_water_reflection));
         updateActivation();
+    }
+    if (eventSource == "settings_tabs")
+    {
+        showTab(getWidget<RibbonWidget>("settings_tabs")->
+            getSelectionIDString(PLAYER_ID_GAME_MASTER));
+        return GUIEngine::EVENT_BLOCK;
     }
     if (eventSource == "buttons")
     {
@@ -320,8 +401,19 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
                 GE::getGEConfig()->m_ssao = ssao;
             }
             UserConfigParams::m_ssao = ssao;
-            UserConfigParams::m_ssr =
-                advanced_pipeline && getWidget<CheckBoxWidget>("ssr")->getState();
+            // When a reflection is ray traced its spinner is disabled and
+            // keeps the level of the config, which is used again when ray
+            // tracing is off
+            UserConfigParams::m_solid_reflection = advanced_pipeline ?
+                getReflectionLevel("solid_reflection",
+                UserConfigParams::m_solid_reflection) : 0;
+            UserConfigParams::m_water_reflection = advanced_pipeline ?
+                getReflectionLevel("water_reflection",
+                UserConfigParams::m_water_reflection) : 0;
+            // Kept as it is without the advanced pipeline, it's only an option
+            // of the solid reflection
+            UserConfigParams::m_stochastic_reflection =
+                getWidget<CheckBoxWidget>("stochastic_reflection")->getState();
             bool god_rays_changed = false;
             bool god_rays = advanced_pipeline &&
                 getWidget<CheckBoxWidget>("lightshaft")->getState();
@@ -402,12 +494,18 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
             OptionsScreenVideo::getInstance()->updateBlurSlider();
             GE::GESolidReflectionType prev_solid = GE::getGEConfig()->m_solid_reflection;
             GE::GEDisplaceReflectionType prev_displace = GE::getGEConfig()->m_displace_reflection;
+            const bool prev_stochastic =
+                GE::getGEConfig()->m_stochastic_reflection;
             OptionsScreenVideo::setSSR();
             if (GE::getDriver()->getDriverType() == video::EDT_VULKAN)
             {
+                // The stochastic reflection has other passes and a half size
+                // target, the render target is created again
                 bool need_recreate_swapchain =
                     GE::getGEConfig()->m_solid_reflection != prev_solid ||
-                    GE::getGEConfig()->m_displace_reflection != prev_displace;
+                    GE::getGEConfig()->m_displace_reflection != prev_displace ||
+                    GE::getGEConfig()->m_stochastic_reflection !=
+                    prev_stochastic;
                 // Which shadows are ray traced (the FBO has the ray traced
                 // shadow only if there is one), also changed by the size 0
                 if (prev_rt_shadow_type != GE::getRTShadowType())
@@ -445,7 +543,8 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
             return GUIEngine::EVENT_BLOCK;
         }
     }
-    else if (eventSource == "dynamiclight" || eventSource == "shadows")
+    else if (eventSource == "dynamiclight" || eventSource == "shadows" ||
+             eventSource == "solid_reflection")
     {
         updateActivation();
     }
@@ -498,7 +597,24 @@ void CustomVideoSettingsDialog::updateActivation()
     getWidget<SpinnerWidget>("shadows")->setActive(light || (vk && real_light));
     getWidget<SpinnerWidget>("anti_aliasing")->setActive(light || vk);
     getWidget<CheckBoxWidget>("ssao")->setActive(light || (vk && real_light));
-    getWidget<CheckBoxWidget>("ssr")->setActive(light || (vk && real_light));
+    // The ray traced reflections (RayTracingSettingsDialog) override the
+    // screen space ones, their spinners only show it then
+    const bool solid_rt = vk && GE::isRayTracing() &&
+        GE::getGEConfig()->m_ray_tracing.m_solid_reflection;
+    const bool water_rt = vk && GE::isRayTracing() &&
+        GE::getGEConfig()->m_ray_tracing.m_displace_reflection;
+    SpinnerWidget* solid = getWidget<SpinnerWidget>("solid_reflection");
+    SpinnerWidget* water = getWidget<SpinnerWidget>("water_reflection");
+    solid->setActive(!solid_rt && (light || (vk && real_light)));
+    water->setActive(!water_rt && (light || (vk && real_light)));
+    if (solid_rt)
+        solid->setCustomText(_C("Reflection", "Ray traced"));
+    if (water_rt)
+        water->setCustomText(_C("Reflection", "Ray traced"));
+    // GE only, it samples the reflection of the solid materials (screen space
+    // or ray traced)
+    getWidget<CheckBoxWidget>("stochastic_reflection")->setActive(vk &&
+        real_light && (solid_rt || solid->getValue() != 0));
     getWidget<CheckBoxWidget>("lightshaft")->setActive(light || (vk && real_light));
     getWidget<CheckBoxWidget>("ibl")->setActive(light || (vk && real_light));
     getWidget<CheckBoxWidget>("glow")->setActive(light || (vk && real_light));

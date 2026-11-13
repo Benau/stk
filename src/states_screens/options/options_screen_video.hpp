@@ -65,7 +65,14 @@ public:
     void         updateBlurSlider();
     void         updateScaleRTTsSlider();
     static void updateImageQuality(bool force_reload_texture);
+    /** Sets the GE screen space reflections (and the stochastic one) from
+     *  UserConfigParams::m_solid_reflection, m_water_reflection and
+     *  m_stochastic_reflection. */
     static void setSSR();
+    /** The name of a level of UserConfigParams::m_solid_reflection or
+     *  m_water_reflection (0 is disabled), the labels of the spinners of
+     *  CustomVideoSettingsDialog. */
+    static irr::core::stringw getReflectionLevelName(int level);
     /** Mirrors the ray tracing user config to GE::GERayTracingConfig. */
     static void setRayTracing();
     /** Resolves UserConfigParams::m_anti_aliasing to the GE anti-aliasing. */

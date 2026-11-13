@@ -42,6 +42,18 @@ private:
      *  and selects selected (or the default one of the render driver if it
      *  has no such choice). */
     void fillAntiAliasing(bool vk, const std::string& selected);
+
+    /** Fills a spinner of the screen space reflections with the levels of
+     *  UserConfigParams::m_solid_reflection (m_water_reflection) of the
+     *  render driver (OpenGL only has on and off), and selects level. */
+    void fillReflection(const std::string& name, bool vk, int level);
+
+    /** The level of the config which the spinner of a reflection selects,
+     *  config_level is the one kept when the OpenGL spinner is on. */
+    int getReflectionLevel(const std::string& name, int config_level);
+
+    /** Shows the page (div) of the tab, hides the others. */
+    void showTab(const std::string& tab);
 public:
     /**
      * Creates a modal dialog with given percentage of screen width and height
