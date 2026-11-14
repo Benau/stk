@@ -2721,11 +2721,9 @@ bool GEVulkanDrawCall::doDepthOnlyRenderingFirst()
         if (!getGEConfig()->m_pbr)
             return DISABLED_NOT_PBR;
         // https://developer.arm.com/documentation/101897/0304/Optimizing-application-logic/Avoid-using-depth-prepasses
-#if defined(TILED_GPU)
-        return DISABLED_TILED_GPU;
-#else
+        if (GEVulkanFeatures::isTiledGPU())
+            return DISABLED_TILED_GPU;
         return ENABLED;
-#endif
     };
     Status prev_status = status;
     status = ret();

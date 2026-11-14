@@ -54,7 +54,42 @@ std::string g_driver_info;
 bool g_slow_bind_all_textures = false;
 // Can force g_slow_bind_all_textures, 1 is per material, 0 is bound at once
 const char* SLOW_BIND_ALL_TEXTURES_ENV = "GE_NO_BIND_ALL_TEXTURES";
+// See isTiledGPU()
+bool g_tiled_gpu = false;
 }   // GEVulkanFeatures
+
+// ----------------------------------------------------------------------------
+// Whether the GPU of a driver (a VkDriverId, 0 if unknown) renders the
+// framebuffer a tile at a time, see GEVulkanFeatures::isTiledGPU(). The GPUs
+// of the ARM and RISC-V devices are (Adreno, Mali, PowerVR, Apple, V3D...),
+// except a desktop GPU on a PCIe slot of such a board (a Raspberry Pi 5 or a
+// RISC-V board can have a Radeon), which is known by its driver. The other
+// ones (x86) have a desktop GPU, except a PowerVR card of Imagination
+static bool isTiledGPUDriver(int driver_id)
+{
+    switch (driver_id)
+    {
+    case VK_DRIVER_ID_AMD_PROPRIETARY:
+    case VK_DRIVER_ID_AMD_OPEN_SOURCE:
+    case VK_DRIVER_ID_MESA_RADV:
+    case VK_DRIVER_ID_NVIDIA_PROPRIETARY:
+    case VK_DRIVER_ID_MESA_NVK:
+    case VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS:
+    case VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA:
+        return false;
+    case VK_DRIVER_ID_IMAGINATION_PROPRIETARY:
+    case VK_DRIVER_ID_IMAGINATION_OPEN_SOURCE_MESA:
+        return true;
+    default:
+        break;
+    }
+#if defined(__arm__) || defined(__aarch64__) || defined(_M_ARM) || \
+    defined(_M_ARM64) || defined(__riscv)
+    return true;
+#else
+    return false;
+#endif
+}   // isTiledGPUDriver
 
 extern "C" int enableRayQuery();
 // ============================================================================
@@ -281,6 +316,7 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
     const char* force_per_material = std::getenv(SLOW_BIND_ALL_TEXTURES_ENV);
     if (force_per_material != NULL && force_per_material[0] != '\0')
         g_slow_bind_all_textures = atoi(force_per_material) != 0;
+    g_tiled_gpu = isTiledGPUDriver(g_driver_id);
 
     // Ray query needs Vulkan 1.2 (buffer device address and SPIR-V 1.4 are
     // core), the mesh textures (as an array) for hit shading, and a few
@@ -357,6 +393,8 @@ void GEVulkanFeatures::printStats()
         driver_id.erase(driver_id.begin());
         os::Printer::log("Vulkan driver id", driver_id.c_str());
     }
+    os::Printer::log("Vulkan GPU is tile-based",
+        g_tiled_gpu ? "true" : "false");
     os::Printer::log(
         "Vulkan has slow bind all textures at once (per material)",
         g_slow_bind_all_textures ? "true" : "false");
@@ -464,6 +502,12 @@ int GEVulkanFeatures::getDriverID()
 {
     return g_driver_id;
 }   // getDriverID
+
+// ----------------------------------------------------------------------------
+bool GEVulkanFeatures::isTiledGPU()
+{
+    return g_tiled_gpu;
+}   // isTiledGPU
 
 // ----------------------------------------------------------------------------
 bool GEVulkanFeatures::supportsMultiDrawIndirect()

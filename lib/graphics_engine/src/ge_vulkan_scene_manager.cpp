@@ -10,6 +10,7 @@
 #include "ge_vulkan_deferred_fbo.hpp"
 #include "ge_vulkan_draw_call.hpp"
 #include "ge_vulkan_driver.hpp"
+#include "ge_vulkan_features.hpp"
 #include "ge_vulkan_mesh_cache.hpp"
 #include "ge_vulkan_mesh_scene_node.hpp"
 #include "ge_vulkan_shadow_fbo.hpp"
@@ -321,11 +322,9 @@ GEAutoDeferredType GEVulkanSceneManager::getDetectDeferredResult() const
 {
     if (m_displace_count > 0)
         return GADT_DISPLACE;
-#if defined(TILED_GPU)
-    if (m_spotlight_count > 0 ||
-        m_pointlight_count > getGEConfig()->m_max_pointlights / 2)
+    if (GEVulkanFeatures::isTiledGPU() && (m_spotlight_count > 0 ||
+        m_pointlight_count > getGEConfig()->m_max_pointlights / 2))
         return GADT_SINGLE_PASS;
-#endif
     return GADT_DISABLED;
 }   // getDetectDeferredResult
 

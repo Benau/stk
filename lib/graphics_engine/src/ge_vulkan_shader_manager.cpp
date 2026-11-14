@@ -120,9 +120,8 @@ void updatePredefines()
     if (getGEConfig()->m_deferred_split != 0)
         oss << "#define SPLIT\n";
 
-#if defined(TILED_GPU)
-    oss << "#define TILED_GPU\n";
-#endif
+    if (GEVulkanFeatures::isTiledGPU())
+        oss << "#define TILED_GPU\n";
     g_predefines = oss.str();
 }   // updatePredefines
 

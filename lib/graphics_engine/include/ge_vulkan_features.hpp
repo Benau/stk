@@ -35,6 +35,11 @@ bool needsRTMeshTextureMirror();
 // VkDriverId of VkPhysicalDeviceDriverProperties, 0 if unknown
 int getDriverID();
 // ----------------------------------------------------------------------------
+// The GPU renders the framebuffer a tile at a time (the GPUs of the ARM and
+// RISC-V devices, except a desktop GPU on a PCIe slot): no depth prepass,
+// shaders which use fewer registers (TILED_GPU in the shaders)...
+bool isTiledGPU();
+// ----------------------------------------------------------------------------
 bool supportsMultiDrawIndirect();
 // ----------------------------------------------------------------------------
 bool supportsBaseVertexRendering();

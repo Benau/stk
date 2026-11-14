@@ -26,9 +26,3 @@ extern PFN_vkGetPhysicalDeviceMetalFeaturesMVK vkGetPhysicalDeviceMetalFeaturesM
 #endif
 
 #endif
-
-#ifndef TILED_GPU
-#if defined(__arm__) || defined(__aarch64__) || defined(_M_ARM) || defined (_M_ARM64)
-#define TILED_GPU 1
-#endif
-#endif
