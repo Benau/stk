@@ -2,8 +2,8 @@
 // surfel of the pool: SURFEL_RAYS cosine weighted rays from the surfel, traced
 // in the static scene only (RT_MASK_STATIC). A hit is lit like the hit of a ray
 // traced reflection (shadeHit of utils/rt_reflection.glsl: the sun with a
-// shadow ray of the static scene and the ambient of the environment, which
-// stands for the next bounces), a ray which hits the back of a triangle is
+// shadow ray of the static scene and the ambient color, without the environment
+// maps, see RT_HIT_NO_ENVIRONMENT), a ray which hits the back of a triangle is
 // inside of a mesh and sees nothing, and a ray which hits nothing sees the
 // skybox (the cosine weighted rays average it like the diffuse environment map
 // does, so it doesn't need image based lighting). The mean of the rays is added
@@ -28,6 +28,21 @@ layout(local_size_x = 64) in;
 #define MESH_TEXTURES_SET 3
 #define RT_SHADOW_MASK RT_MASK_STATIC
 #define RT_SHADOW_NO_FADE
+// A hit isn't lit by the environment maps: they are the light of the whole
+// sky, a wall of a tunnel or of the inside of a barn would get all of it
+// (and its colour) as the bounce of the sky. The surfels get the sky from
+// their rays which hit nothing (getSkyRadiance), so only the sky which they
+// see lights them. The ambient color is kept, a ray which hits nothing has it
+// too
+#define RT_HIT_NO_ENVIRONMENT
+// Without the environment maps a hit only has the sun and the ambient color
+// (a grey of the track, not the sky), the inside of a tunnel or a barn is
+// darker than with the unoccluded sky which it had before: the ambient color
+// of a hit is brighter instead, it adds no sky light where there is none. A
+// ray which hits nothing has the ambient color once, a hit has it times its
+// albedo and this, so with an albedo up to 1 / RT_HIT_AMBIENT_SCALE a closed
+// space is still not brighter than an open one
+#define RT_HIT_AMBIENT_SCALE 3.0
 
 layout(set = 4, binding = 0) uniform samplerCube u_diffuse;
 layout(set = 4, binding = 1) uniform samplerCube u_specular;

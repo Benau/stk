@@ -224,9 +224,15 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
             view_depth);
     }
 
-    // Same as handlePBRDeferred, in world space (no sun disk, no ssao)
-    vec3 irradiance = getAmbientIrradiance();
+    // Same as handlePBRDeferred, in world space (no sun disk, no ssao).
+    // RT_HIT_NO_ENVIRONMENT: the environment maps (and the irradiance of the
+    // ambient without them) are the light of the whole sky, unoccluded, a
+    // shader which gets the sky from its own rays defines it (see
+    // surfel_gi_trace.comp)
+    vec3 irradiance = vec3(0.0);
     vec3 radiance = vec3(0.0);
+#ifndef RT_HIT_NO_ENVIRONMENT
+    irradiance = getAmbientIrradiance();
     if (u_ibl)
     {
         vec3 reflection = reflect(ray_direction, normal);
@@ -234,10 +240,14 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
         radiance = textureLod(u_specular, reflection,
             perceptual_roughness * u_specular_levels_minus_one).rgb;
     }
+#endif
+#ifndef RT_HIT_AMBIENT_SCALE
+#define RT_HIT_AMBIENT_SCALE 1.0
+#endif
     vec3 hdr = PBRSunAmbientEmitLight(normal, eyedir, sun_direction,
         diffuse_color, irradiance, radiance, u_global_light.m_sun_color,
-        u_global_light.m_ambient_color, 1.0, perceptual_roughness, pbr.y, pbr.z,
-        shadow, vec3(1.0), vec3(1.0));
+        u_global_light.m_ambient_color, RT_HIT_AMBIENT_SCALE,
+        perceptual_roughness, pbr.y, pbr.z, shadow, vec3(1.0), vec3(1.0));
 
     // TODO: point lights (accumulateLights of the lighting pass, in world
     // space, with the shadows of the lights as a ray too)
