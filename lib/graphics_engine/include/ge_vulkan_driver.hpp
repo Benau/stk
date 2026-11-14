@@ -13,6 +13,7 @@
 #include "SIrrCreationParameters.h"
 #include "SColor.h"
 #include <array>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -35,6 +36,7 @@ namespace GE
     class GEVulkanFinalChain;
     class GEVulkanMeshCache;
     class GEVulkanRTScene;
+    class GEVulkanScreenShot;
     class GEVulkanSkyBoxRenderer;
     class GEVulkanTextureDescriptor;
     enum GEVulkanSampler : unsigned
@@ -293,6 +295,14 @@ namespace GE
         //! Returns an image created from the last rendered frame.
         virtual IImage* createScreenShot(video::ECOLOR_FORMAT format=video::ECF_UNKNOWN, video::E_RENDER_TARGET target=video::ERT_FRAME_BUFFER) { return NULL; }
 
+        // The image of a frame can only be read after the gpu rendered it,
+        // which createScreenShot would have to wait for: the next frame which
+        // is presented is saved to path (png) without stalling, callback is
+        // called by the main thread in a later frame with true if it was
+        // written (see GEVulkanScreenShot)
+        void addScreenShot(const std::string& path,
+                           std::function<void(bool)> callback);
+
         //! Set/unset a clipping plane.
         virtual bool setClipPlane(u32 index, const core::plane3df& plane, bool enable=false) { return true; }
 
@@ -366,6 +376,10 @@ namespace GE
         std::vector<VkImageView>& getSwapChainImageViews()
                                         { return m_vk->swap_chain_image_views; }
         VkFormat getSwapChainImageFormat() { return m_swap_chain_image_format; }
+        bool isSwapChainTransferSrc() const
+                                           { return m_swap_chain_transfer_src; }
+        VkSurfaceTransformFlagBitsKHR getSurfaceTransform() const
+                             { return m_surface_capabilities.currentTransform; }
         std::vector<VkFramebuffer>& getSwapChainFramebuffers()
                                        { return m_vk->swap_chain_framebuffers; }
 
@@ -555,6 +569,9 @@ namespace GE
         };
         std::unique_ptr<VK> m_vk;
         VkFormat m_swap_chain_image_format;
+        // The swapchain images can be copied (for GEVulkanScreenShot)
+        bool m_swap_chain_transfer_src;
+        GEVulkanScreenShot* m_screenshot;
         VkExtent2D m_swap_chain_extent;
         VkPhysicalDevice m_physical_device;
         std::vector<const char*> m_device_extensions;

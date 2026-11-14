@@ -2139,14 +2139,6 @@ void IrrDriver::doScreenShot()
 {
     m_request_screenshot = false;
 
-    video::IImage* image = m_video_driver->createScreenShot();
-    if(!image)
-    {
-        Log::error("irr_driver", "Could not create screen shot.");
-        return;
-    }
-
-    // Screenshot was successful.
     time_t rawtime;
     time ( &rawtime );
     tm* timeInfo = localtime( &rawtime );
@@ -2160,6 +2152,35 @@ void IrrDriver::doScreenShot()
     if (World::getWorld() == NULL) track_name = "menu";
     std::string path = file_manager->getScreenshotDir()+track_name+"-"
                      + time_buffer+".png";
+
+#ifndef SERVER_ONLY
+    // Vulkan saves the next frame later without waiting for the gpu
+    if (GE::GEVulkanDriver* vk = GE::getVKDriver())
+    {
+        vk->addScreenShot(path, [path](bool written)
+            {
+                if (written)
+                {
+                    MessageQueue::add(MessageQueue::MT_GENERIC,
+                        _("Screenshot saved to %s", path.c_str()));
+                }
+                else
+                {
+                    MessageQueue::add(MessageQueue::MT_GENERIC,
+                        _("Failed to save the screenshot to %s",
+                        path.c_str()));
+                }
+            });
+        return;
+    }
+#endif
+
+    video::IImage* image = m_video_driver->createScreenShot();
+    if(!image)
+    {
+        Log::error("irr_driver", "Could not create screen shot.");
+        return;
+    }
 
     if (irr_driver->getVideoDriver()->writeImageToFile(image, path.c_str(), 0))
         MessageQueue::add(MessageQueue::MT_GENERIC, _("Screenshot saved to %s", path.c_str()));
