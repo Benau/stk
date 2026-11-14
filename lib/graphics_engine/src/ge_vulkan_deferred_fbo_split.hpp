@@ -121,9 +121,6 @@ private:
     // Decided when the FBO is created, see needsSolidSSR()
     const bool m_solid_ssr;
 
-    // Decided when the FBO is created, see needsSolidRT()
-    const bool m_solid_rt;
-
     // History is available from the second frame onward; the first frame has
     // no previous tonemap output to sample
     bool m_solid_ssr_ready;
@@ -135,10 +132,13 @@ public:
     // ------------------------------------------------------------------------
     static bool needsSolidSSR();
     // ------------------------------------------------------------------------
-    // True when ray tracing is on (the FBO has the passes of it, which of them
-    // is rendered is decided every frame by isSolidRayTracing() and
-    // getRTShadowType(), so the FBO doesn't change with them)
-    static bool needsSolidRT();
+    // True when ray tracing is on with the pbr shaders (the ray traced scene is
+    // needed and the draw calls have the layout of the ray traced pipelines,
+    // displace mask and bubble). It says nothing about which passes exist:
+    // the shadow, the global illumination and the solid reflection are
+    // created by their own setting (getRTShadowType(), isSurfelGI(),
+    // isSolidRayTracing())
+    static bool needsRT();
     // ------------------------------------------------------------------------
     static bool resolveSwapchainOutput(GEVulkanDriver* vk,
                                        const core::dimension2d<u32>& size,
@@ -203,10 +203,6 @@ public:
     // Same for the screen space trace of GEVulkanSolidReflection
     // (GVDFP_SOLID_SSR is the layout of it)
     bool hasSolidSSR() const                           { return m_solid_ssr; }
-    // ------------------------------------------------------------------------
-    // Same for the ray traced passes (the trace of GEVulkanSolidReflection
-    // has its own pipeline layout in GEVulkanDrawCall)
-    bool hasSolidRT() const                              { return m_solid_rt; }
     // ------------------------------------------------------------------------
     // GVDFP_SOLID_SSR uses the layout and the set (the one without HiZ depth)
     // of the displace pass, see GVDFP_SOLID_SSR
