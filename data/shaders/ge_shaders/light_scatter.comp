@@ -53,59 +53,69 @@ shared uint s_count;
 shared uint s_index[MAX_RENDERING_LIGHT];
 // View space position (xyz) and radius (w)
 shared vec4 s_light[MAX_RENDERING_LIGHT];
+// The shadow matrices which the steps of the tile use: the 3 sun cascades,
+// then OMNI_FACES_PER_LIGHT for every light with a shadow (the first
+// u_point_shadow_limit lights), only the ones of the lights of the tile are
+// copied. The face (or cascade) of a step depends on its position, so every
+// thread would load its own matrix from the light buffer, and the shadow
+// sample has to wait for it in every step: the steps are bound by these loads
+const uint SHADOW_MATRIX_COUNT = 3u +
+    u_point_shadow_limit * uint(OMNI_FACES_PER_LIGHT);
+shared mat4 s_shadow_matrix[SHADOW_MATRIX_COUNT];
 
-// A single depth comparison is sufficient for a volume sample. Unlike a
-// surface, it has no normal and needs neither PCF filtering nor normal bias.
-float sampleSunCascadeSingle(int cascade, vec3 world_pos)
+// The steps of the scattering are bound by the latency of their shadow
+// samples: a step which samples and adds the result waits for it before the
+// next step starts. The steps are done SHADOW_BATCH at a time instead, the
+// coordinates of all the samples of a batch first, then the samples together
+// (in flight at once), then their results. A sample outside of its shadow map
+// is lit, it's sampled anyway (clamped, no branch which would keep the
+// samples apart) and its result is replaced
+const int SHADOW_BATCH = 4;
+
+// The coordinate (uv, layer, depth) of the shadow sample of a clip position
+// in a layer of the shadow map, valid is false outside of it. A single depth
+// comparison is sufficient for a volume sample: unlike a surface, it has no
+// normal and needs neither PCF filtering nor normal bias
+vec4 getShadowCoord(vec4 clip, float layer, out bool valid)
 {
-    vec4 clip = u_global_light.m_shadow_projection_view_matrix[cascade] *
-        vec4(world_pos, 1.0);
-    if (clip.w <= 0.0)
-        return 1.0;
     vec3 ndc = clip.xyz / clip.w;
     vec2 uv = ndc.xy * 0.5 + 0.5;
-    if (any(lessThan(uv, vec2(0.0))) ||
-        any(greaterThan(uv, vec2(1.0))) || ndc.z < 0.0 || ndc.z > 1.0)
-        return 1.0;
-    return texture(u_shadow_map, vec4(uv, float(cascade), ndc.z));
+    valid = clip.w > 0.0 && all(greaterThanEqual(uv, vec2(0.0))) &&
+        all(lessThanEqual(uv, vec2(1.0))) && ndc.z >= 0.0 && ndc.z <= 1.0;
+    return vec4(clamp(uv, vec2(0.0), vec2(1.0)), layer,
+        clamp(ndc.z, 0.0, 1.0));
 }
 
-// Select one cascade from view-space depth. Do not blend neighboring
-// cascades: each volumetric step needs only one comparison sample.
-float sampleSunShadowSingle(vec3 world_pos, float view_depth)
+// The shadow coordinate of the sun at a world position, one cascade selected
+// from the view space depth. Neighboring cascades are not blended: each
+// volumetric step needs only one comparison sample
+vec4 getSunShadowCoord(vec3 world_pos, float view_depth, out bool valid)
 {
     int level = view_depth < 10.0 ? 0 :
         (view_depth < 45.0 ? 1 : 2);
-    return sampleSunCascadeSingle(level, world_pos);
+    return getShadowCoord(s_shadow_matrix[level] * vec4(world_pos, 1.0),
+        float(level), valid);
 }
 
-float sampleOmniShadowSingle(int light_id, vec3 world_pos)
+// The shadow coordinate of a point or spot light at a world position,
+// light_to_pos is the position of the light minus it (world space) and d its
+// length
+vec4 getOmniShadowCoord(int light_id, vec3 world_pos, vec3 light_to_pos,
+                        float d, bool spot, out bool valid)
 {
-    vec3 light_pos = u_global_light.m_lights[light_id].m_position_radius.xyz;
-    vec3 surface_to_light = light_pos - world_pos;
-    vec3 to_light = surface_to_light / max(length(surface_to_light), 0.0001);
+    vec3 to_light = light_to_pos / max(d, 0.0001);
     // A small depth bias avoids precision self-shadowing. There is no normal
     // bias because the volume sample has no surface normal.
     vec3 biased_pos = world_pos + to_light * 0.08;
-    float spot_scale =
-        u_global_light.m_lights[light_id].m_direction_scale_offset.z;
-    int face = spot_scale != 0.0 ? 0 : getFaceIndex(biased_pos - light_pos);
+    // The face of the biased position (biased_pos minus the light)
+    int face = spot ? 0 : getFaceIndex(to_light * 0.08 - light_to_pos);
     int layer = light_id * OMNI_FACES_PER_LIGHT + face;
     // The combined shadow array stores sun-cascade layers before omni layers.
     if (u_shadow_type == GST_COMBINED)
         layer += 3;
-
-    mat4 pv = u_global_light.m_lights[light_id]
-        .m_shadow_projection_view_matrix[face];
-    vec4 clip = pv * vec4(biased_pos, 1.0);
-    if (clip.w <= 0.0)
-        return 1.0;
-    vec3 ndc = clip.xyz / clip.w;
-    vec2 uv = ndc.xy * 0.5 + 0.5;
-    if (any(lessThan(uv, vec2(0.0))) ||
-        any(greaterThan(uv, vec2(1.0))) || ndc.z < 0.0 || ndc.z > 1.0)
-        return 1.0;
-    return texture(u_shadow_map, vec4(uv, float(layer), ndc.z));
+    return getShadowCoord(
+        s_shadow_matrix[3 + light_id * OMNI_FACES_PER_LIGHT + face] *
+        vec4(biased_pos, 1.0), float(layer), valid);
 }
 
 // Henyey-Greenstein phase function, cos_theta is the cosine between the
@@ -168,6 +178,7 @@ vec3 sunScatter(vec3 ray_dir, float scene_distance, vec2 pixel)
     const float phase = phaseHG(dot(world_ray_dir, getSunDirection()), 0.7);
     const vec3 scatter_radiance = sun_radiance * phase;
 
+    // The cascades are in s_shadow_matrix with this condition, see main()
     const bool shadow_enabled = (u_shadow_type & GST_SUN) != 0u &&
         u_shadow_size != 0u;
 
@@ -181,35 +192,46 @@ vec3 sunScatter(vec3 ray_dir, float scene_distance, vec2 pixel)
     vec3 scatter = vec3(0.0);
     float transmittance = 1.0;
     float jitter = interleavedGradientNoise(pixel);
+    // The steps march in world space from the camera (ray_dir is in view
+    // space, the view depth of a step is ray_dir.z times its distance)
+    const vec3 camera = u_camera.m_inverse_view_matrix[3].xyz;
 
     const int sun_steps = 12;
-    for (int i = 0; i < sun_steps; i++)
+    for (int b = 0; b < sun_steps; b += SHADOW_BATCH)
     {
-        float u0 = float(i) / float(sun_steps);
-        float u1 = float(i + 1) / float(sun_steps);
+        vec4 coords[SHADOW_BATCH];
+        bool valid[SHADOW_BATCH];
+        for (int k = 0; k < SHADOW_BATCH; k++)
+        {
+            // Jitter only the shadow sampling position.
+            float u = (float(b + k) + jitter) / float(sun_steps);
+            float sample_t = far_distance * u * u;
+            coords[k] = getSunShadowCoord(camera + world_ray_dir * sample_t,
+                ray_dir.z * sample_t, valid[k]);
+        }
+        float shadows[SHADOW_BATCH];
+        for (int k = 0; k < SHADOW_BATCH; k++)
+            shadows[k] = texture(u_shadow_map, coords[k]);
+        for (int k = 0; k < SHADOW_BATCH; k++)
+        {
+            int i = b + k;
+            float u0 = float(i) / float(sun_steps);
+            float u1 = float(i + 1) / float(sun_steps);
 
-        float t0 = far_distance * u0 * u0;
-        float t1 = far_distance * u1 * u1;
+            float t0 = far_distance * u0 * u0;
+            float t1 = far_distance * u1 * u1;
 
-        // Jitter only the shadow sampling position.
-        float u = (float(i) + jitter) / float(sun_steps);
-        float sample_t = far_distance * u * u;
+            float extinction = density * (t1 - t0);
+            float segment_transmittance = exp(-extinction);
 
-        float extinction = density * (t1 - t0);
-        float segment_transmittance = exp(-extinction);
+            // Exact integrated extinction over this segment.
+            float weight = transmittance *
+                (1.0 - segment_transmittance);
 
-        // Exact integrated extinction over this segment.
-        float weight = transmittance *
-            (1.0 - segment_transmittance);
-
-        vec3 xpos = ray_dir * sample_t;
-        vec3 world_pos = (u_camera.m_inverse_view_matrix *
-            vec4(xpos, 1.0)).xyz;
-
-        float shadow = sampleSunShadowSingle(world_pos, xpos.z);
-
-        scatter += scatter_radiance * shadow * weight;
-        transmittance *= segment_transmittance;
+            float shadow = valid[k] ? shadows[k] : 1.0;
+            scatter += scatter_radiance * shadow * weight;
+            transmittance *= segment_transmittance;
+        }
     }
     return scatter;
 }
@@ -265,6 +287,36 @@ void main()
     }
     barrier();
 
+    // The shadow matrices of the tile (see s_shadow_matrix), a column per
+    // thread
+    const bool sun_shadow = (u_shadow_type & GST_SUN) != 0u &&
+        u_shadow_size != 0u;
+    const bool light_shadow = (u_shadow_type & GST_POINTLIGHT) != 0u &&
+        u_shadow_size != 0u;
+    if (sun_shadow)
+    {
+        for (uint i = thread; i < 3u * 4u; i += TILE_THREADS)
+        {
+            s_shadow_matrix[i / 4u][i % 4u] =
+                u_global_light.m_shadow_projection_view_matrix[i / 4u][i % 4u];
+        }
+    }
+    if (light_shadow)
+    {
+        const uint columns = uint(OMNI_FACES_PER_LIGHT) * 4u;
+        for (uint i = thread; i < s_count * columns; i += TILE_THREADS)
+        {
+            uint light_idx = s_index[i / columns];
+            if (light_idx >= u_point_shadow_limit)
+                continue;
+            uint face = (i % columns) / 4u;
+            s_shadow_matrix[3u + light_idx * uint(OMNI_FACES_PER_LIGHT) +
+                face][i % 4u] = u_global_light.m_lights[light_idx]
+                .m_shadow_projection_view_matrix[face][i % 4u];
+        }
+    }
+    barrier();
+
     if (!inside)
         return;
 
@@ -291,6 +343,9 @@ void main()
     float scene_distance = depth > 0.0 ? length(pixel_pos) : 1.0e30;
 
     const float density = u_global_light.m_fog_density;
+    const vec3 camera = u_camera.m_inverse_view_matrix[3].xyz;
+    const vec3 world_ray_dir =
+        mat3(u_camera.m_inverse_view_matrix) * ray_dir;
     vec3 scatter = vec3(0.0);
     if (sun_scatter_enabled)
     {
@@ -298,9 +353,8 @@ void main()
         // it)
         scatter += sunScatter(ray_dir, scene_distance, vec2(dst));
     }
-    // Same condition as the lighting pass (pbr_light.glsl)
-    const bool light_shadow = (u_shadow_type & GST_POINTLIGHT) != 0u &&
-        u_shadow_size != 0u;
+    // light_shadow is the same condition as the lighting pass
+    // (pbr_light.glsl)
     // Same noise for every light, shifted per light, see below
     float jitter = 0.0;
     if (light_shadow)
@@ -377,39 +431,72 @@ void main()
             fog_factor = light_color * density * step_size * 20.0;
         }
 
-        // Spotlight direction calculation
+        // Spotlight direction calculation (world space)
         float sscale = u_global_light.m_lights[light_idx]
             .m_direction_scale_offset.z;
+        float soffset = u_global_light.m_lights[light_idx]
+            .m_direction_scale_offset.w;
         vec3 sdir = vec3(0.0);
         if (sscale != 0.0)
         {
             sdir = vec3(u_global_light.m_lights[light_idx]
                 .m_direction_scale_offset.xy, 0.0);
             sdir.z = sqrt(1.0 - dot(sdir, sdir)) * sign(sscale);
-            sdir = (u_camera.m_view_matrix * vec4(sdir, 0.0)).xyz;
         }
 
+        if (handle_shadow)
+        {
+            // In world space, the shadow samples need the world position
+            // of a step (the distances are the same in view space)
+            vec3 light_w = u_global_light.m_lights[light_idx]
+                .m_position_radius.xyz;
+            for (int b = 0; b < STEPS; b += SHADOW_BATCH)
+            {
+                vec4 coords[SHADOW_BATCH];
+                bool valid[SHADOW_BATCH];
+                vec3 atts[SHADOW_BATCH];
+                for (int k = 0; k < SHADOW_BATCH; k++)
+                {
+                    float theta = theta_begin +
+                        (float(b + k) + offset) * theta_step;
+                    float t = along + h * tan(theta);
+                    float l = t - closest;
+                    vec3 world_pos = camera + world_ray_dir * t;
+                    vec3 light_to_pos = light_w - world_pos;
+                    float d = length(light_to_pos);
+                    // The falloff is already part of the angle step
+                    vec3 base_att = fog_factor *
+                        (max((radius - d) / radius, 0.0) *
+                        exp(-density * (d + l)));
+                    if (sscale != 0.0)
+                    {
+                        float sattenuation = clamp(dot(-sdir,
+                            light_to_pos / d) * abs(sscale) + soffset,
+                            0.0, 1.0);
+                        base_att *= sattenuation * sattenuation;
+                    }
+                    atts[k] = base_att;
+                    coords[k] = getOmniShadowCoord(int(light_idx), world_pos,
+                        light_to_pos, d, sscale != 0.0, valid[k]);
+                }
+                float shadows[SHADOW_BATCH];
+                for (int k = 0; k < SHADOW_BATCH; k++)
+                    shadows[k] = texture(u_shadow_map, coords[k]);
+                for (int k = 0; k < SHADOW_BATCH; k++)
+                    scatter += atts[k] * (valid[k] ? shadows[k] : 1.0);
+            }
+            continue;
+        }
+
+        sdir = (u_camera.m_view_matrix * vec4(sdir, 0.0)).xyz;
         for (int j = 0; j < STEPS; j++)
         {
-            float t;
-            float l;
-            if (handle_shadow)
-            {
-                float theta = theta_begin + (float(j) + offset) * theta_step;
-                t = along + h * tan(theta);
-                l = t - closest;
-            }
-            else
-            {
-                t = farthest - float(j) * step_size;
-                l = float(STEPS - j) * step_size;
-            }
+            float t = farthest - float(j) * step_size;
+            float l = float(STEPS - j) * step_size;
             vec3 xpos = ray_dir * t;
             vec3 light_to_pos = light_pos - xpos;
             float d = length(light_to_pos);
-            // The falloff is already part of the angle step if sampled by it
-            vec3 base_att = handle_shadow ?
-                fog_factor : fog_factor / (1.0 + d * d);
+            vec3 base_att = fog_factor / (1.0 + d * d);
             base_att = base_att *
                 max((radius - d) / radius, 0.0) * exp(-density * (d + l));
 
@@ -417,15 +504,8 @@ void main()
             if (sscale != 0.0)
             {
                 float sattenuation = clamp(dot(-sdir, normalize(light_to_pos)) *
-                    abs(sscale) + u_global_light.m_lights[light_idx]
-                    .m_direction_scale_offset.w, 0.0, 1.0);
+                    abs(sscale) + soffset, 0.0, 1.0);
                 base_att *= sattenuation * sattenuation;
-            }
-            if (handle_shadow)
-            {
-                vec3 world_pos = (u_camera.m_inverse_view_matrix *
-                    vec4(xpos, 1.0)).xyz;
-                base_att *= sampleOmniShadowSingle(int(light_idx), world_pos);
             }
             scatter += base_att;
         }
