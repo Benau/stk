@@ -419,8 +419,14 @@ uint getSurfelTile(ivec2 pixel)
 // what is behind the faces around it (their back is culled), and a surfel there
 // would be inside of the mesh too, so all its rays see the back of a triangle
 // and it's black. The ray from the camera must not cross the back of a triangle
-// before the surface (or at it, the mesh can touch the surface)
-bool isStaticSurface(vec3 camera, vec3 position)
+// before the surface (or at it, the mesh can touch the surface). The distance
+// of the hit has some tolerance, so the surfel is at the hit with the normal
+// of the static scene (without the normal map of the g-buffer), not at the
+// pixel: something which moves and stands on the static scene (an item on the
+// ground) is at the distance of the ground behind it at its bottom, a surfel
+// there had its normal and stayed when it turned, lighting other parts of it
+bool isStaticSurface(vec3 camera, vec3 position, out vec3 hit_position,
+                     out vec3 hit_normal)
 {
     vec3 to_position = position - camera;
     float position_distance = length(to_position);
@@ -437,6 +443,24 @@ bool isStaticSurface(vec3 camera, vec3 position)
     float hit = rayQueryGetIntersectionTEXT(ray_query, true);
     if (abs(hit - position_distance) >= position_distance * 0.02 + 0.05)
         return false;
+    hit_position = camera + direction * hit;
+    // The interpolated normal of the hit like shadeHit
+    RTGeometry geometry = u_rt_geometries[
+        uint(rayQueryGetIntersectionInstanceCustomIndexEXT(ray_query, true)) +
+        uint(rayQueryGetIntersectionGeometryIndexEXT(ray_query, true))];
+    uint primitive =
+        uint(rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true));
+    vec2 b = rayQueryGetIntersectionBarycentricsEXT(ray_query, true);
+    hit_normal =
+        getRTVertexNormal(geometry, getRTIndex(geometry, primitive * 3u)) *
+        (1.0 - b.x - b.y) +
+        getRTVertexNormal(geometry, getRTIndex(geometry, primitive * 3u + 1u)) *
+        b.x +
+        getRTVertexNormal(geometry, getRTIndex(geometry, primitive * 3u + 2u)) *
+        b.y;
+    // The inverse transpose of object to world (row vector times matrix)
+    hit_normal = normalize(hit_normal *
+        mat3(rayQueryGetIntersectionWorldToObjectEXT(ray_query, true)));
 
     rayQueryEXT back_query;
     rayQueryInitializeEXT(back_query, u_tlas,
@@ -465,9 +489,14 @@ void spawnSurfel(SurfelPixel p, SurfelGather g)
 {
     if (u_pool.m_free_count <= 0)
         return;
+    vec3 position;
+    vec3 normal;
     if (!isStaticSurface(u_camera.m_inverse_view_matrix[3].xyz,
-        p.m_position) || !trySpawnSurfelInCell(getSurfelCell(p.m_position,
-        getSurfelLevel(p.m_camera_distance))))
+        p.m_position, position, normal))
+        return;
+    float camera_distance = getSurfelCameraDistance(position);
+    if (!trySpawnSurfelInCell(getSurfelCell(position,
+        getSurfelLevel(camera_distance))))
         return;
     int free_count = atomicAdd(u_pool.m_free_count, -1);
     if (free_count <= 0)
@@ -477,9 +506,9 @@ void spawnSurfel(SurfelPixel p, SurfelGather g)
     }
     uint id = u_pool.m_free[free_count - 1];
     Surfel surfel;
-    surfel.m_position = p.m_position;
-    surfel.m_radius = getSurfelRadius(p.m_camera_distance);
-    surfel.m_normal = p.m_normal;
+    surfel.m_position = position;
+    surfel.m_radius = getSurfelRadius(camera_distance);
+    surfel.m_normal = normal;
     surfel.m_last_seen = pc.m_time;
     // What is already there, so it doesn't start black
     surfel.m_irradiance = g.m_weight_sum > 0.0 ?
