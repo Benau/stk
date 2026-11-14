@@ -1,3 +1,5 @@
+#extension GL_EXT_control_flow_attributes : require
+
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0) uniform sampler2D u_depth;
@@ -69,8 +71,22 @@ shared mat4 s_shadow_matrix[SHADOW_MATRIX_COUNT];
 // coordinates of all the samples of a batch first, then the samples together
 // (in flight at once), then their results. A sample outside of its shadow map
 // is lit, it's sampled anyway (clamped, no branch which would keep the
-// samples apart) and its result is replaced
+// samples apart) and its result is replaced.
+//
+// A tiled gpu (Adreno, Mali, Apple, V3D) hides the latency of the samples
+// with the other waves of its cores instead, as many as their registers
+// allow: the samples in flight together need more registers, so fewer waves
+// fit and it's slower (on Adreno half the waves, and its compiler unrolls the
+// branch-free loops of the steps completely, which needs even more). There
+// a batch is a single step and the loops of the batches are not unrolled,
+// which uses as many registers as one sample per step in a loop
+#ifdef TILED_GPU
+const int SHADOW_BATCH = 1;
+#define SHADOW_BATCH_LOOP [[dont_unroll]]
+#else
 const int SHADOW_BATCH = 4;
+#define SHADOW_BATCH_LOOP
+#endif
 
 // The coordinate (uv, layer, depth) of the shadow sample of a clip position
 // in a layer of the shadow map, valid is false outside of it. A single depth
@@ -197,6 +213,7 @@ vec3 sunScatter(vec3 ray_dir, float scene_distance, vec2 pixel)
     const vec3 camera = u_camera.m_inverse_view_matrix[3].xyz;
 
     const int sun_steps = 12;
+    SHADOW_BATCH_LOOP
     for (int b = 0; b < sun_steps; b += SHADOW_BATCH)
     {
         vec4 coords[SHADOW_BATCH];
@@ -450,6 +467,7 @@ void main()
             // of a step (the distances are the same in view space)
             vec3 light_w = u_global_light.m_lights[light_idx]
                 .m_position_radius.xyz;
+            SHADOW_BATCH_LOOP
             for (int b = 0; b < STEPS; b += SHADOW_BATCH)
             {
                 vec4 coords[SHADOW_BATCH];
