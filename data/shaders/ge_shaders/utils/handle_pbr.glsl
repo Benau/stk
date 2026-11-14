@@ -78,6 +78,20 @@ vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
     float diffuse_ambient_scale = 1.0;
     if (u_surfel_gi)
     {
+        // Where the surfels only partly cover the pixel (a kart, which only
+        // has the surfels around it, or a surface far away) the rest is the
+        // environment, which is the unoccluded sky: in a tunnel it's many
+        // times brighter than the surfels and blue, so the parts of a kart
+        // further from the surfels (the ears) were tinted by the sky. The
+        // irradiance of the surfels is a mean (not scaled by the coverage),
+        // so the environment is limited to it (it sees at most as much of
+        // the sky as the surfels around), as much as the coverage makes them
+        // reliable
+        if (gi.a > 0.0)
+        {
+            irradiance = mix(irradiance, min(irradiance, gi.rgb),
+                min(gi.a * 4.0, 1.0));
+        }
         irradiance = mix(irradiance, gi.rgb, gi.a);
         // With or without image based lighting the ambient color is lit by
         // PBRSunAmbientEmitLight too (the rest of the sky), the surfels have
