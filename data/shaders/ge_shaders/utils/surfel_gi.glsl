@@ -98,6 +98,16 @@ layout(std430, set = SURFEL_SET, binding = 3) buffer SurfelBuffer
     Surfel u_surfels[];
 };
 
+// The same as u_surfels, 16 bytes at a time: the position and the radius of
+// surfel i are at 3 * i, the normal and the last time seen (its bits) at
+// 3 * i + 1, the irradiance and the samples at 3 * i + 2, so the loops which
+// test many surfels can read the first of many together and the rest only for
+// the ones which are close enough
+layout(std430, set = SURFEL_SET, binding = 3) buffer SurfelBufferVec4
+{
+    vec4 u_surfels_vec4[];
+};
+
 // The stack of the free surfels, m_free_count is signed so a pop which finds it
 // empty can be undone
 layout(std430, set = SURFEL_SET, binding = 4) buffer SurfelPool
@@ -118,6 +128,12 @@ layout(std430, set = SURFEL_SET, binding = 5) buffer SurfelCellCount
 layout(std430, set = SURFEL_SET, binding = 6) buffer SurfelCellSurfels
 {
     uint u_cell_surfels[];
+};
+
+// The same, 4 surfels at a time (SURFEL_CELL_CAPACITY is a multiple of 4)
+layout(std430, set = SURFEL_SET, binding = 6) buffer SurfelCellSurfels4
+{
+    uvec4 u_cell_surfels4[];
 };
 
 // Number of surfels spawned in every cell in this frame (cleared with the
@@ -241,6 +257,28 @@ float getSurfelRadius(float camera_distance)
         (SURFEL_CELL_SIZE / (4.0 * SURFEL_LEVEL_DISTANCE));
     return min(radius,
         getSurfelCellSize(getSurfelLevel(camera_distance)) * 0.5);
+}
+
+// The largest radius of a surfel which can touch a position at a distance from
+// the closest camera: the distance of the surfel to it is at most its radius
+// more or less (the distance to the closest camera can't change faster than
+// the position), and its radius grows with that distance like
+// getSurfelRadius(), so a cell farther than it from the position has no
+// surfel which touches it (with a little margin for the rounding)
+float getSurfelMaxRadius(float camera_distance)
+{
+    const float scale = SURFEL_CELL_SIZE / (4.0 * SURFEL_LEVEL_DISTANCE);
+    return max(camera_distance * (scale / (1.0 - scale)),
+        SURFEL_LEVEL_DISTANCE * scale) * 1.01 + 0.001;
+}
+
+// The squared distance of a position to a cell of the grid (0 inside)
+float getSurfelCellDistance2(vec3 position, ivec3 cell, float cell_size)
+{
+    vec3 cell_min = vec3(cell) * cell_size;
+    vec3 gap = max(max(cell_min - position,
+        position - (cell_min + cell_size)), vec3(0.0));
+    return dot(gap, gap);
 }
 
 // The cells of the levels are in one hash table, a collision only puts surfels

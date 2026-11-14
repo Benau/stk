@@ -155,37 +155,75 @@ SurfelGather gatherSurfels(SurfelPixel p)
     g.m_min_samples = SURFEL_CACHED_MAX_SAMPLES;
     uint level = getSurfelLevel(p.m_camera_distance);
     float cell_size = getSurfelCellSize(level);
-    g.m_cell_full = u_cell_count[getSurfelCell(p.m_position, level)] >=
-        SURFEL_CELL_CAPACITY;
+    g.m_cell_full = false;
+    // The cell of the pixel is one of the nearest ones, and never skipped
+    ivec3 pixel_cell = ivec3(floor(p.m_position / cell_size));
     ivec3 first = getSurfelNearestCells(p.m_position, cell_size);
+    // The loops are bound by the surfels which they go through (few of them
+    // touch the pixel), so the cells which are too far to have one are
+    // skipped: near the cameras the surfels are much smaller than half a cell
+    float max_radius = getSurfelMaxRadius(p.m_camera_distance);
     for (int c = 0; c < 8; c++)
     {
-        uint cell = getSurfelCell(first + ivec3(c & 1, (c >> 1) & 1, c >> 2),
-            level);
+        ivec3 cell_position = first + ivec3(c & 1, (c >> 1) & 1, c >> 2);
+        if (getSurfelCellDistance2(p.m_position, cell_position, cell_size) >=
+            max_radius * max_radius)
+            continue;
+        uint cell = getSurfelCell(cell_position, level);
         uint count = min(u_cell_count[cell], SURFEL_CELL_CAPACITY);
-        for (uint i = 0u; i < count; i++)
+        if (all(equal(cell_position, pixel_cell)))
+            g.m_cell_full = count >= SURFEL_CELL_CAPACITY;
+        uint list = cell * (SURFEL_CELL_CAPACITY / 4u);
+        for (uint i = 0u; i < count; i += 4u)
         {
-            uint id = u_cell_surfels[cell * SURFEL_CELL_CAPACITY + i];
-            Surfel surfel = u_surfels[id];
-            vec3 offset = p.m_position - surfel.m_position;
-            float offset_distance = length(offset);
-            float plane_distance = dot(offset, surfel.m_normal);
-            if (offset_distance >= surfel.m_radius)
-                continue;
-            float facing = dot(p.m_normal, surfel.m_normal);
-            // Not on the same side of a thin wall, or on another plane
-            if (facing <= 0.0 || abs(plane_distance) > surfel.m_radius * 0.5)
-                continue;
-            float falloff = 1.0 - offset_distance / surfel.m_radius;
-            float weight = falloff * falloff * facing;
-            g.m_coverage += weight;
-            g.m_min_samples = min(g.m_min_samples, surfel.m_samples);
-            // A new surfel has a noisy mean
-            float confidence =
-                min(surfel.m_samples / SURFEL_CONFIDENT_SAMPLES, 1.0);
-            g.m_irradiance += surfel.m_irradiance * (weight * confidence);
-            g.m_weight_sum += weight * confidence;
-            u_surfels[id].m_last_seen = pc.m_time;
+            // The ids 4 at a time, the loop is bound by the loads which wait
+            // for the one before (the id, then the surfel of the id)
+            uvec4 ids = u_cell_surfels4[list + i / 4u];
+            // And their positions and radii together (the ids past the
+            // count are not used, they can be anything)
+            vec4 spheres[4];
+            for (uint j = 0u; j < 4u; j++)
+            {
+                spheres[j] = u_surfels_vec4[
+                    min(ids[j], pc.m_surfel_count - 1u) * 3u];
+            }
+            for (uint j = 0u; j < 4u && i + j < count; j++)
+            {
+                uint id = ids[j];
+                // Most of them don't touch the pixel, the rest of a surfel
+                // is only read if it's close enough
+                vec3 offset = p.m_position - spheres[j].xyz;
+                float radius = spheres[j].w;
+                float offset_distance = length(offset);
+                if (offset_distance >= radius)
+                    continue;
+                // The rest together (the normal and the last time seen, the
+                // irradiance and the samples)
+                vec4 normal_seen = u_surfels_vec4[id * 3u + 1u];
+                vec4 irradiance_samples = u_surfels_vec4[id * 3u + 2u];
+                vec3 normal = normal_seen.xyz;
+                float plane_distance = dot(offset, normal);
+                float facing = dot(p.m_normal, normal);
+                // Not on the same side of a thin wall, or on another plane
+                if (facing <= 0.0 || abs(plane_distance) > radius * 0.5)
+                    continue;
+                float samples = irradiance_samples.w;
+                float falloff = 1.0 - offset_distance / radius;
+                float weight = falloff * falloff * facing;
+                g.m_coverage += weight;
+                g.m_min_samples = min(g.m_min_samples, samples);
+                // A new surfel has a noisy mean
+                float confidence =
+                    min(samples / SURFEL_CONFIDENT_SAMPLES, 1.0);
+                g.m_irradiance += irradiance_samples.xyz *
+                    (weight * confidence);
+                g.m_weight_sum += weight * confidence;
+                // Most surfels are used by many pixels, the ones of the
+                // groups after the first which used it in the frame don't
+                // write it again
+                if (floatBitsToUint(normal_seen.w) != pc.m_time)
+                    u_surfels[id].m_last_seen = pc.m_time;
+            }
         }
     }
     return g;
@@ -203,26 +241,47 @@ vec4 getNearbyIrradiance(SurfelPixel p)
     float weight_sum = 0.0;
     for (int c = 0; c < 27; c++)
     {
-        uint cell = getSurfelCell(center + ivec3(c % 3, (c / 3) % 3, c / 9) -
-            1, level);
+        ivec3 cell_position =
+            center + ivec3(c % 3, (c / 3) % 3, c / 9) - 1;
+        // Too far to have a surfel within a cell of the pixel
+        if (getSurfelCellDistance2(p.m_position, cell_position, cell_size) >=
+            cell_size * cell_size)
+            continue;
+        uint cell = getSurfelCell(cell_position, level);
         uint count = min(u_cell_count[cell], SURFEL_CELL_CAPACITY);
-        for (uint i = 0u; i < count; i++)
+        uint list = cell * (SURFEL_CELL_CAPACITY / 4u);
+        for (uint i = 0u; i < count; i += 4u)
         {
-            Surfel surfel =
-                u_surfels[u_cell_surfels[cell * SURFEL_CELL_CAPACITY + i]];
-            vec3 offset = p.m_position - surfel.m_position;
-            float offset_distance = length(offset);
-            // Behind it is the other side of its wall
-            if (offset_distance >= cell_size ||
-                dot(offset, surfel.m_normal) < -0.05 * cell_size)
-                continue;
-            float facing = 0.5 + 0.5 * dot(p.m_normal, surfel.m_normal);
-            float falloff = 1.0 - offset_distance / cell_size;
-            // A new surfel has a noisy mean
-            float weight = falloff * falloff * facing * facing *
-                min(surfel.m_samples / SURFEL_CONFIDENT_SAMPLES, 1.0);
-            irradiance += surfel.m_irradiance * weight;
-            weight_sum += weight;
+            // The ids 4 at a time like gatherSurfels()
+            uvec4 ids = u_cell_surfels4[list + i / 4u];
+            vec4 spheres[4];
+            for (uint j = 0u; j < 4u; j++)
+            {
+                spheres[j] = u_surfels_vec4[
+                    min(ids[j], pc.m_surfel_count - 1u) * 3u];
+            }
+            for (uint j = 0u; j < 4u && i + j < count; j++)
+            {
+                uint id = ids[j];
+                // The rest of a surfel is only read if it's close enough
+                vec3 offset = p.m_position - spheres[j].xyz;
+                float offset_distance = length(offset);
+                if (offset_distance >= cell_size)
+                    continue;
+                // The rest together, most of them are used
+                vec3 normal = u_surfels_vec4[id * 3u + 1u].xyz;
+                vec4 irradiance_samples = u_surfels_vec4[id * 3u + 2u];
+                // Behind it is the other side of its wall
+                if (dot(offset, normal) < -0.05 * cell_size)
+                    continue;
+                float facing = 0.5 + 0.5 * dot(p.m_normal, normal);
+                float falloff = 1.0 - offset_distance / cell_size;
+                // A new surfel has a noisy mean
+                float weight = falloff * falloff * facing * facing *
+                    min(irradiance_samples.w / SURFEL_CONFIDENT_SAMPLES, 1.0);
+                irradiance += irradiance_samples.xyz * weight;
+                weight_sum += weight;
+            }
         }
     }
     if (weight_sum == 0.0)
