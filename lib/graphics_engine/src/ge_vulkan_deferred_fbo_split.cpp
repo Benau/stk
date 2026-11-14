@@ -216,10 +216,10 @@ bool GEVulkanDeferredFBOSplit::needsSolidSSR()
 }   // needsSolidSSR
 
 // ----------------------------------------------------------------------------
-bool GEVulkanDeferredFBOSplit::needsSolidRT()
+bool GEVulkanDeferredFBOSplit::needsRT()
 {
     return getGEConfig()->m_pbr && isRayTracing();
-}   // needsSolidRT
+}   // needsRT
 
 // ----------------------------------------------------------------------------
 bool GEVulkanDeferredFBOSplit::resolveSwapchainOutput(GEVulkanDriver* vk,
@@ -243,7 +243,6 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
                           resolveSwapchainOutput(vk, size, swapchain_output)),
                           m_bloom_blend_texture(NULL),
                           m_solid_ssr(needsSolidSSR()),
-                          m_solid_rt(needsSolidRT()),
                           m_solid_ssr_ready(false)
 {
     // GEVulkanDeferredFBO creates attachments with sampled usage and no input
@@ -270,7 +269,7 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
     // Also before the descriptor of the g-buffer (it's sampled by the lighting
     // pass), inactive if it can't be used
     {
-        const bool rt_shadow = supports_compute && needsSolidRT();
+        const bool rt_shadow = supports_compute && needsRT();
         try
         {
             m_rt_shadow.reset(new GEVulkanRTShadow(vk, getSize(),
@@ -289,7 +288,7 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
     }
     // Also before the descriptor of the g-buffer (it's sampled by the lighting
     // pass)
-    if (supports_compute && needsSolidRT() && isSurfelGI())
+    if (supports_compute && isSurfelGI())
     {
         try
         {
@@ -304,14 +303,17 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
         }
     }
     // Also before the descriptor of the g-buffer (it's sampled by the lighting
-    // pass), which reflection is traced is decided every frame
-    if (supports_compute && (m_solid_ssr || m_solid_rt))
+    // pass), which reflection is traced is decided every frame. Only created if
+    // the solid materials reflect something (ray tracing alone, for the
+    // shadows or the bubbles, doesn't need it)
+    const bool solid_rt = isSolidRayTracing();
+    if (supports_compute && (m_solid_ssr || solid_rt))
     {
         try
         {
             m_solid_reflection.reset(new GEVulkanSolidReflection(vk,
                 getSize(), m_depth_texture, m_attachments[GVDFT_NORMAL],
-                m_solid_ssr, m_solid_rt,
+                m_solid_ssr, solid_rt,
                 getGEConfig()->m_stochastic_reflection));
         }
         catch (const std::exception& e)
@@ -913,7 +915,7 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
     // (if the output of the previous frame is there) or the ray traced one
     if (m_solid_reflection)
     {
-        const bool solid_rt = !solid_ssr && m_solid_rt && isSolidRayTracing();
+        const bool solid_rt = !solid_ssr && isSolidRayTracing();
         m_solid_reflection->render(cmd, solid_rt, solid_ssr, p);
     }
 

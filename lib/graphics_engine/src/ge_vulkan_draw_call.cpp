@@ -276,7 +276,7 @@ GEVulkanDrawCall::GEVulkanDrawCall()
     m_env_descriptor_set = VK_NULL_HANDLE;
     m_pipeline_layout = VK_NULL_HANDLE;
     m_skybox_layout = VK_NULL_HANDLE;
-    m_solid_rt_layout = VK_NULL_HANDLE;
+    m_rt_layout = VK_NULL_HANDLE;
     m_render_layout = VK_NULL_HANDLE;
     m_has_skybox = false;
     GEVulkanDriver* vk = static_cast<GEVulkanDriver*>(getDriver());
@@ -311,8 +311,8 @@ GEVulkanDrawCall::~GEVulkanDrawCall()
         m_graphics_pipelines.clear();
         vkDestroyPipelineLayout(vk->getDevice(), m_pipeline_layout, NULL);
         vkDestroyPipelineLayout(vk->getDevice(), m_skybox_layout, NULL);
-        if (m_solid_rt_layout != VK_NULL_HANDLE)
-            vkDestroyPipelineLayout(vk->getDevice(), m_solid_rt_layout, NULL);
+        if (m_rt_layout != VK_NULL_HANDLE)
+            vkDestroyPipelineLayout(vk->getDevice(), m_rt_layout, NULL);
         for (VkPipelineLayout layout : m_deferred_layouts)
         {
             if (layout != VK_NULL_HANDLE)
@@ -969,17 +969,16 @@ void GEVulkanDrawCall::createPipelineLayout(GEVulkanDriver* vk)
     m_rt_texture_descriptor_set_layout =
         m_texture_descriptor->getRTDescriptorSetLayout();
 
-    // The ray traced reflection of the solid materials (the scene needs the
-    // mesh textures for the hits), the pass is created with the lighting pass
-    if (m_solid_rt_layout != VK_NULL_HANDLE)
+    // The layout of the ray traced forward pipelines (displace mask and
+    // bubble), the scene needs the mesh textures for the hits
+    if (m_rt_layout != VK_NULL_HANDLE)
     {
-        vkDestroyPipelineLayout(vk->getDevice(), m_solid_rt_layout, NULL);
-        m_solid_rt_layout = VK_NULL_HANDLE;
+        vkDestroyPipelineLayout(vk->getDevice(), m_rt_layout, NULL);
+        m_rt_layout = VK_NULL_HANDLE;
     }
     GEVulkanFBOTexture* rtt = vk->getRTTTexture();
-    if (!isShadow() && getGEConfig()->m_pbr && vk->getRTScene() && rtt &&
-        rtt->isSplit() &&
-        static_cast<GEVulkanDeferredFBOSplit*>(rtt)->hasSolidRT())
+    if (!isShadow() && vk->getRTScene() && rtt && rtt->isSplit() &&
+        GEVulkanDeferredFBOSplit::needsRT())
     {
         std::vector<VkDescriptorSetLayout> rt_layouts =
         {
@@ -992,10 +991,10 @@ void GEVulkanDrawCall::createPipelineLayout(GEVulkanDriver* vk)
         pipeline_layout_info.setLayoutCount = rt_layouts.size();
         pipeline_layout_info.pSetLayouts = rt_layouts.data();
         if (vkCreatePipelineLayout(vk->getDevice(), &pipeline_layout_info,
-            NULL, &m_solid_rt_layout) != VK_SUCCESS)
+            NULL, &m_rt_layout) != VK_SUCCESS)
         {
             throw std::runtime_error(
-                "vkCreatePipelineLayout failed for m_solid_rt_layout");
+                "vkCreatePipelineLayout failed for m_rt_layout");
         }
     }
 }   // createPipelineLayout
@@ -1087,9 +1086,9 @@ void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
         else if (p.first == "bubble")
         {
             settings.m_pipeline_type = GVPT_BUBBLE;
-            if (m_solid_rt_layout != VK_NULL_HANDLE)
+            if (m_rt_layout != VK_NULL_HANDLE)
             {
-                settings.m_custom_pl = m_solid_rt_layout;
+                settings.m_custom_pl = m_rt_layout;
                 createPipeline(vk, settings, dp_cache);
             }
             else if (getGEConfig()->m_pbr)
@@ -1134,7 +1133,7 @@ void GEVulkanDrawCall::createAllPipelines(GEVulkanDriver* vk)
         settings.m_shader_name = "displace";
         settings.m_pipeline_type = GVPT_DISPLACE_MASK;
         if (displace_rt)
-            settings.m_custom_pl = m_solid_rt_layout;
+            settings.m_custom_pl = m_rt_layout;
         createPipeline(vk, settings, dp_cache);
         settings.m_custom_pl = VK_NULL_HANDLE;
     }
@@ -2018,7 +2017,7 @@ void GEVulkanDrawCall::bindAllMaterials(VkCommandBuffer cmd)
 // ----------------------------------------------------------------------------
 bool GEVulkanDrawCall::hasDisplaceRT() const
 {
-    return m_solid_rt_layout != VK_NULL_HANDLE && isDisplaceRayTracing();
+    return m_rt_layout != VK_NULL_HANDLE && isDisplaceRayTracing();
 }   // hasDisplaceRT
 
 // ----------------------------------------------------------------------------
@@ -2031,16 +2030,16 @@ bool GEVulkanDrawCall::bindRTLayout(GEVulkanDriver* vk, VkCommandBuffer cmd,
     // is the scene), so all of them are bound again. The mesh textures are the
     // same bindless ones
     GEVulkanRTScene* rt_scene = vk->getRTScene();
-    if (m_solid_rt_layout == VK_NULL_HANDLE || !rt_scene ||
+    if (m_rt_layout == VK_NULL_HANDLE || !rt_scene ||
         !rt_scene->isReady())
         return false;
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_solid_rt_layout, 0, 1,
+        m_rt_layout, 0, 1,
         rt_scene->getDescriptorSet(current_buffer_idx), 0, NULL);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_solid_rt_layout, 3, 1, getEnvDescriptorSet(vk), 0, NULL);
+        m_rt_layout, 3, 1, getEnvDescriptorSet(vk), 0, NULL);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_solid_rt_layout, 4, 1,
+        m_rt_layout, 4, 1,
         m_texture_descriptor->getRTDescriptorSet(), 0, NULL);
     return true;
 }   // bindRTLayout
@@ -2074,7 +2073,7 @@ void GEVulkanDrawCall::renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
                 if (!bindRTLayout(vk, cmd, current_buffer_idx,
                     dynamic_offsets))
                     return;
-                m_render_layout = m_solid_rt_layout;
+                m_render_layout = m_rt_layout;
             }
             else if (dfbo && dfbo->getAttachment<GVDFT_DISPLACE_COLOR>())
             {
@@ -2100,12 +2099,12 @@ void GEVulkanDrawCall::renderPipeline(GEVulkanDriver* vk, VkCommandBuffer cmd,
         }
         case GVPT_BUBBLE:
         {
-            if (m_solid_rt_layout != VK_NULL_HANDLE)
+            if (m_rt_layout != VK_NULL_HANDLE)
             {
                 if (!bindRTLayout(vk, cmd, current_buffer_idx,
                     dynamic_offsets))
                     return;
-                m_render_layout = m_solid_rt_layout;
+                m_render_layout = m_rt_layout;
             }
             else
             {
@@ -2691,8 +2690,8 @@ void GEVulkanDrawCall::bindSingleMaterial(VkCommandBuffer cmd,
     // The ray traced layout has the scene as set 0, its material comes from
     // the object data (the slot) which indexes the array of the mesh textures
     // (set 4, see GEVulkanTextureDescriptor::getRTDescriptorSet)
-    if (m_solid_rt_layout != VK_NULL_HANDLE &&
-        m_render_layout == m_solid_rt_layout)
+    if (m_rt_layout != VK_NULL_HANDLE &&
+        m_render_layout == m_rt_layout)
         return;
     const PipelineData& data = m_graphics_pipelines.at(cur_pipeline);
     if (data.m_pipelines.find(pt) == data.m_pipelines.end())

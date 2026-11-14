@@ -2077,7 +2077,7 @@ bool GEVulkanDriver::endScene()
             break;
         }
     }
-    if (in_game && GEVulkanDeferredFBOSplit::needsSolidRT() && m_rt_scene)
+    if (in_game && GEVulkanDeferredFBOSplit::needsRT() && m_rt_scene)
     {
         // Geometries with alpha tested materials are only in a scene which
         // was built with the setting on
