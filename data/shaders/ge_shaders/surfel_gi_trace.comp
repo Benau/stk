@@ -13,9 +13,10 @@
 // scene, the sun and the sky (the dynamic nodes are not in RT_MASK_STATIC, and
 // shadeHit has no point light). With the frame cache, a surfel which converged
 // only traces in one of SURFEL_CACHED_TRACE_PERIOD frames, and one which
-// didn't traces more rays (SURFEL_YOUNG_RAY_SCALE) with as many threads: the
-// surfels are the ones of the lists of surfel_gi_update.comp (u_trace_lists),
-// the young ones and the converged ones whose turn it is in 2 dispatches.
+// didn't traces more rays (SURFEL_YOUNG_RAY_SCALE), the rays of a surfel are
+// traced by several threads (getSurfelTraceThreads()): the surfels are the
+// ones of the lists of surfel_gi_update.comp (u_trace_lists), the young ones
+// and the converged ones whose turn it is in 2 dispatches.
 //
 // Set 0 is the one of GEVulkanRTScene, set 1 the camera and the global light
 // (of the first viewport), set 2 the surfels, set 3 the mesh textures and set 4
@@ -108,12 +109,12 @@ vec3 traceSurfelRay(vec3 origin, vec3 direction, inout bool back_face)
         origin, direction);
 }
 
-// With the frame cache, the rays of a surfel which didn't converge are traced
-// by SURFEL_YOUNG_RAY_SCALE threads of the group (SURFEL_RAYS each): one
-// thread would trace them one after the other, and there are only a few of
-// these surfels in a frame (a few thousands), so the gpu would mostly wait for
+// With the frame cache, the rays of a surfel are traced by several threads of
+// the group (getSurfelTraceThreads(), SURFEL_RAYS_PER_THREAD each): one
+// thread would trace them one after the other, and there are only a few
+// thousand surfels in the lists of a frame, so the gpu would mostly wait for
 // the rays. The sums of the rays of the threads and their back faces
-shared vec4 s_young_rays[64];
+shared vec4 s_surfel_rays[64];
 
 // ----------------------------------------------------------------------------
 // The radiance of count cosine weighted rays from the surfel (the seed is the
@@ -152,18 +153,22 @@ void main()
     float steps = pc.m_steps;
     float max_samples = SURFEL_MAX_SAMPLES;
     uint ray_count = SURFEL_RAYS;
-    // The thread of the rays of a surfel which didn't converge (the first one
-    // sums them), see s_young_rays
+    // The thread of the rays of a surfel and the threads of a surfel (the
+    // first one sums them), see s_surfel_rays
     uint lane = 0u;
-    bool young = false;
+    uint threads = 1u;
+    uint thread_rays = SURFEL_RAYS;
     uint id = index;
     bool has_surfel = true;
     if ((pc.m_cache & SURFEL_CACHE_FRAME) != 0u)
     {
         // The surfels of the list of this dispatch (see u_trace_lists)
         uint list = pc.m_trace_list;
-        young = list == SURFEL_TRACE_YOUNG;
-        if (young)
+        threads = getSurfelTraceThreads(list);
+        thread_rays = SURFEL_RAYS_PER_THREAD;
+        lane = index % threads;
+        index /= threads;
+        if (list == SURFEL_TRACE_YOUNG)
         {
             // A surfel which didn't converge yet traces
             // SURFEL_YOUNG_RAY_SCALE times the rays, as many samples: the
@@ -171,8 +176,6 @@ void main()
             // and a camera which moves keeps spawning new surfels, so they
             // converge in a quarter of the time (and their mean is less noisy
             // before)
-            lane = index % SURFEL_YOUNG_RAY_SCALE;
-            index /= SURFEL_YOUNG_RAY_SCALE;
             ray_count *= SURFEL_YOUNG_RAY_SCALE;
             steps *= float(SURFEL_YOUNG_RAY_SCALE);
         }
@@ -199,22 +202,21 @@ void main()
         surfel = u_surfels[id];
         // A different seed for every thread of a surfel
         uint seed = id * 9781u + pc.m_frame * 6271u + lane * 7919u;
-        radiance = traceSurfelRays(surfel, seed, SURFEL_RAYS, back_faces);
+        radiance = traceSurfelRays(surfel, seed, thread_rays, back_faces);
     }
-    // A surfel which didn't converge traces more rays than SURFEL_RAYS, which
-    // a thread can't do in time: SURFEL_YOUNG_RAY_SCALE threads of the group
-    // (in the same order as the surfels of the list) sum them, in uniform
-    // control flow for the barrier
-    if (young)
+    // The threads of a surfel (next to each other in the group, a power of 2
+    // which divides its size) sum their rays, in uniform control flow for the
+    // barrier (the same for the whole dispatch)
+    if (threads > 1u)
     {
-        s_young_rays[gl_LocalInvocationIndex] =
+        s_surfel_rays[gl_LocalInvocationIndex] =
             vec4(radiance, float(back_faces));
         barrier();
         if (lane != 0u)
             return;
-        for (uint i = 1u; i < SURFEL_YOUNG_RAY_SCALE; i++)
+        for (uint i = 1u; i < threads; i++)
         {
-            vec4 rays = s_young_rays[gl_LocalInvocationIndex + i];
+            vec4 rays = s_surfel_rays[gl_LocalInvocationIndex + i];
             radiance += rays.xyz;
             back_faces += uint(rays.w);
         }

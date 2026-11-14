@@ -205,6 +205,21 @@ const float SURFEL_CACHED_MAX_SAMPLES =
 // With the frame cache, a surfel with fewer than SURFEL_MAX_SAMPLES traces
 // this many times SURFEL_RAYS in a frame, see surfel_gi_trace.comp
 const uint SURFEL_YOUNG_RAY_SCALE = 4u;
+// With the frame cache, the rays of a surfel in surfel_gi_trace.comp are
+// traced by SURFEL_RAYS_PER_THREAD each of several threads (the threads of a
+// surfel in the lists, see getSurfelTraceThreads()): the lists only have a
+// few thousand surfels, one thread per surfel is so few waves that the gpu
+// mostly waits for the rays one after another
+const uint SURFEL_RAYS_PER_THREAD = 1u;
+
+// The threads of a surfel of a list of u_trace_lists in surfel_gi_trace.comp
+uint getSurfelTraceThreads(uint list)
+{
+    uint rays = list == SURFEL_TRACE_YOUNG ?
+        SURFEL_RAYS * SURFEL_YOUNG_RAY_SCALE : SURFEL_RAYS;
+    return rays / SURFEL_RAYS_PER_THREAD;
+}
+
 // With the frame cache, a pixel which reuses its irradiance looks for its
 // surfels again in one of SURFEL_HISTORY_PERIOD frames at least: it keeps them
 // alive (8 frames are less than SURFEL_MIN_LIFE above 16 FPS), and it follows
