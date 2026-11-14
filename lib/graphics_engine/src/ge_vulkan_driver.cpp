@@ -21,6 +21,7 @@
 #include "ge_vulkan_mesh_cache.hpp"
 #include "ge_vulkan_rt_scene.hpp"
 #include "ge_vulkan_scene_manager.hpp"
+#include "ge_vulkan_screenshot.hpp"
 #include "ge_vulkan_target_group.hpp"
 #include "ge_vulkan_shader_manager.hpp"
 #include "ge_vulkan_shadow_fbo.hpp"
@@ -551,6 +552,8 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
     m_pre_rotation_matrix = core::matrix4(core::matrix4::EM4CONST_IDENTITY);
 
     m_disable_wait_idle = false;
+    m_swap_chain_transfer_src = false;
+    m_screenshot = NULL;
     m_fog_enabled = false;
     m_god_rays_enabled = false;
     m_god_rays_radius = 20.0f;
@@ -645,6 +648,7 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
     {
         // For deferred split fbo, which glow outline maybe needed
         GEVulkanCommandLoader::init(this);
+        m_screenshot = new GEVulkanScreenShot(this);
         GEVulkanShaderManager::init(this);
         // Bloom pipeline needs texture compression for bloom blend texture
         GECompressorBasisUniversal::init();
@@ -770,6 +774,10 @@ void GEVulkanDriver::destroyVulkan()
     GEVulkan2dRenderer::destroy();
     GEVulkanShaderManager::destroy();
 
+    // Before the threads which save the screenshots are joined (the
+    // allocator outlives them)
+    delete m_screenshot;
+    m_screenshot = NULL;
     GEVulkanCommandLoader::destroy();
     for (std::mutex* m : m_graphics_queue_mutexes)
         delete m;
@@ -778,6 +786,16 @@ void GEVulkanDriver::destroyVulkan()
     delete m_vk.get();
     m_vk.release();
 }   // destroyVulkan
+
+// ----------------------------------------------------------------------------
+void GEVulkanDriver::addScreenShot(const std::string& path,
+                                   std::function<void(bool)> callback)
+{
+    if (m_screenshot)
+        m_screenshot->add(path, callback);
+    else if (callback)
+        callback(false);
+}   // addScreenShot
 
 // ----------------------------------------------------------------------------
 void GEVulkanDriver::removeBillboardQuad()
@@ -1470,6 +1488,11 @@ found_mode:
     create_info.imageExtent = actual_extent;
     create_info.imageArrayLayers = 1;
     create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    // For screenshots (GEVulkanScreenShot), if the surface allows it
+    m_swap_chain_transfer_src = (m_surface_capabilities.supportedUsageFlags &
+        VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+    if (m_swap_chain_transfer_src)
+        create_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     uint32_t queueFamilyIndices[] = { m_graphics_family, m_present_family };
     if (m_graphics_family != m_present_family)
@@ -2127,6 +2150,9 @@ bool GEVulkanDriver::endScene()
         return true;
     }
 
+    // The copies of the screenshots of this frame in flight are complete
+    if (m_screenshot)
+        m_screenshot->handleFrame(m_current_frame);
     VkFence fence = m_vk->in_flight_fences[m_current_frame];
     vkResetCommandPool(m_vk->device, m_vk->command_pools[m_current_frame], 0);
 
@@ -3030,6 +3056,12 @@ void GEVulkanDriver::buildCommandBuffers()
     GEVulkan2dRenderer::render();
 
     vkCmdEndRenderPass(getCurrentCommandBuffer());
+    // The swapchain image is complete (in the present layout)
+    if (m_screenshot)
+    {
+        m_screenshot->record(getCurrentCommandBuffer(),
+            m_vk->swap_chain_images[m_image_index], m_current_frame);
+    }
     vkEndCommandBuffer(getCurrentCommandBuffer());
 }   // buildCommandBuffers
 

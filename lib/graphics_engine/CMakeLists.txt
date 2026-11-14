@@ -73,6 +73,7 @@ set(GE_SOURCES
     src/ge_vulkan_omni_shadow_fbo.cpp
     src/ge_vulkan_post_processing.cpp
     src/ge_vulkan_scene_manager.cpp
+    src/ge_vulkan_screenshot.cpp
     src/ge_vulkan_shader_manager.cpp
     src/ge_vulkan_shadow_draw_call.cpp
     src/ge_vulkan_shadow_fbo.cpp
