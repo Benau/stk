@@ -18,23 +18,27 @@
 // would write the same.
 //
 // The shader which includes it defines SOLID_REFLECTION_SET if it's not 0, and
-// includes utils/constants_utils.glsl before it
+// SOLID_REFLECTION_BINDING (the binding of the output, the list is the next
+// one) if it's not 0, and includes utils/constants_utils.glsl before it
 
 #ifndef SOLID_REFLECTION_SET
 #define SOLID_REFLECTION_SET 0
 #endif
+#ifndef SOLID_REFLECTION_BINDING
+#define SOLID_REFLECTION_BINDING 0
+#endif
 
 #ifdef SHADER_STORAGE_IMAGE_EXTENDED_FORMATS
-layout(set = SOLID_REFLECTION_SET, binding = 0, r11f_g11f_b10f) uniform
-    writeonly image2D u_reflection;
+layout(set = SOLID_REFLECTION_SET, binding = SOLID_REFLECTION_BINDING,
+    r11f_g11f_b10f) uniform writeonly image2D u_reflection;
 #else
-layout(set = SOLID_REFLECTION_SET, binding = 0, rgba16f) uniform writeonly
-    image2D u_reflection;
+layout(set = SOLID_REFLECTION_SET, binding = SOLID_REFLECTION_BINDING,
+    rgba16f) uniform writeonly image2D u_reflection;
 #endif
 // The glossy pixels (packSolidReflectionPixel), m_dispatch is the indirect
 // dispatch of the trace (groups of 64 of them)
-layout(std430, set = SOLID_REFLECTION_SET, binding = 1) buffer
-    SolidReflectionList
+layout(std430, set = SOLID_REFLECTION_SET,
+    binding = SOLID_REFLECTION_BINDING + 1) buffer SolidReflectionList
 {
     uint m_count;
     uint m_dispatch[3];

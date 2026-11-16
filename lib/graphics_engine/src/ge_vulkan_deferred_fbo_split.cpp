@@ -134,12 +134,15 @@ VkFramebuffer createFramebuffer(VkDevice device, VkRenderPass render_pass,
 
 // ----------------------------------------------------------------------------
 // Allocates one descriptor set with count combined image samplers (binding 0
-// to count - 1) in the given slot
+// to count - 1) in the given slot. With trace_output, it also has a storage
+// image (binding count) and a storage buffer (count + 1) for the compute
+// shaders, copies of the bindings 0 and 1 of that set
 void createSamplerDescriptor(GEVulkanDriver* vk, unsigned count,
                              VkDescriptorSetLayout* layout,
                              VkDescriptorPool* pool, VkDescriptorSet* set,
                              const VkDescriptorImageInfo* image_infos,
-                             const char* name)
+                             const char* name,
+                             const VkDescriptorSet* trace_output = NULL)
 {
     std::vector<VkDescriptorSetLayoutBinding> bindings(count);
     for (unsigned i = 0; i < count; i++)
@@ -154,6 +157,20 @@ void createSamplerDescriptor(GEVulkanDriver* vk, unsigned count,
         bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT |
             VK_SHADER_STAGE_COMPUTE_BIT;
     }
+    if (trace_output)
+    {
+        const VkDescriptorType types[2] = { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            VK_DESCRIPTOR_TYPE_STORAGE_BUFFER };
+        for (unsigned i = 0; i < 2; i++)
+        {
+            VkDescriptorSetLayoutBinding binding = {};
+            binding.binding = count + i;
+            binding.descriptorCount = 1;
+            binding.descriptorType = types[i];
+            binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            bindings.push_back(binding);
+        }
+    }
 
     VkDescriptorSetLayoutCreateInfo setinfo = {};
     setinfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -166,15 +183,19 @@ void createSamplerDescriptor(GEVulkanDriver* vk, unsigned count,
             "failed for ") + name + " in GEVulkanDeferredFBOSplit");
     }
 
-    VkDescriptorPoolSize pool_size;
-    pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    pool_size.descriptorCount = count;
+    std::array<VkDescriptorPoolSize, 3> pool_sizes = {};
+    pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pool_sizes[0].descriptorCount = count;
+    pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    pool_sizes[1].descriptorCount = 1;
+    pool_sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    pool_sizes[2].descriptorCount = 1;
 
     VkDescriptorPoolCreateInfo pool_info = {};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool_info.maxSets = 1;
-    pool_info.poolSizeCount = 1;
-    pool_info.pPoolSizes = &pool_size;
+    pool_info.poolSizeCount = trace_output ? 3 : 1;
+    pool_info.pPoolSizes = pool_sizes.data();
     if (vkCreateDescriptorPool(vk->getDevice(), &pool_info, NULL,
         pool) != VK_SUCCESS)
     {
@@ -203,7 +224,18 @@ void createSamplerDescriptor(GEVulkanDriver* vk, unsigned count,
     write_descriptor_set.descriptorCount = count;
     write_descriptor_set.dstSet = *set;
     write_descriptor_set.pImageInfo = image_infos;
-    vkUpdateDescriptorSets(vk->getDevice(), 1, &write_descriptor_set, 0, NULL);
+    std::array<VkCopyDescriptorSet, 2> copies = {};
+    for (unsigned i = 0; i < copies.size(); i++)
+    {
+        copies[i].sType = VK_STRUCTURE_TYPE_COPY_DESCRIPTOR_SET;
+        copies[i].srcSet = trace_output ? *trace_output : VK_NULL_HANDLE;
+        copies[i].srcBinding = i;
+        copies[i].dstSet = *set;
+        copies[i].dstBinding = count + i;
+        copies[i].descriptorCount = 1;
+    }
+    vkUpdateDescriptorSets(vk->getDevice(), 1, &write_descriptor_set,
+        trace_output ? copies.size() : 0, copies.data());
 }   // createSamplerDescriptor
 }   // anonymous namespace
 
@@ -471,7 +503,9 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
     // deferred_pbr.frag, specialization constant u_surfel_gi, a transparent
     // texture which is not used if there is none) and 6 = the reflection of the
     // glossy solid materials (only deferred_pbr.frag, specialization constant
-    // u_solid_reflection_image, the same if there is none)
+    // u_solid_reflection_image, the same if there is none). With the screen
+    // space trace of it, 7 and 8 are its output and list (see
+    // solid_reflection_ssr.comp, its pipeline has no other set for them)
     std::array<VkDescriptorImageInfo, 7> image_infos = {};
     image_infos[0].sampler = vk->getSampler(GVS_NEAREST);
     image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -537,7 +571,9 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
     }
     createSamplerDescriptor(vk, image_infos.size(),
         &m_descriptor_layout[GVDFP_HDR], &m_descriptor_pool[GVDFP_HDR],
-        &m_descriptor_set[GVDFP_HDR], image_infos.data(), "GVDFP_HDR");
+        &m_descriptor_set[GVDFP_HDR], image_infos.data(), "GVDFP_HDR",
+        m_solid_reflection && m_solid_ssr ?
+        m_solid_reflection->getTraceOutputSet() : NULL);
 }   // initSplitGBufferDescriptor
 
 // ----------------------------------------------------------------------------

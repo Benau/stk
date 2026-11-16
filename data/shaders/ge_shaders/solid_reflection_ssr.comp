@@ -10,11 +10,15 @@
 // Set 0 is the one of GEVulkanHiZDepth::getRenderingDescriptorSet() (same
 // layout as the displace pass, the first image is the history instead of the
 // current frame), or the one of the FBO without the HiZ depth (u_hiz_iterations
-// is 0 then), set 1 the camera, set 2 GVDFP_HDR (g-buffer, same as lighting),
-// set 3 the environment and set 4 the output and the list
+// is 0 then), set 1 the camera, set 2 GVDFP_HDR (g-buffer, same as lighting,
+// with the output and the list at SOLID_REFLECTION_BINDING) and set 3 the
+// environment. Only 4 sets: Turnip has no more on A6xx (it reserves one), and
+// the screen space trace is the reflection of the GPUs without ray tracing
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-#define SOLID_REFLECTION_SET 4
+#define SOLID_REFLECTION_SET 2
+// After the samplers of GVDFP_HDR, see GEVulkanDeferredFBOSplit
+#define SOLID_REFLECTION_BINDING 7
 
 layout(set = 0, binding = 0) uniform sampler2D u_history;
 layout(set = 0, binding = 1) uniform sampler2DShadow u_depth_shadow;

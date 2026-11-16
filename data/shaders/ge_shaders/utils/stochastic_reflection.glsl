@@ -51,13 +51,18 @@
 // target isn't cleared: the lighting pass only reads its glossy texels, which
 // the resolve writes every frame (it's cleared once when it's created).
 //
-// The shader which includes it defines SOLID_REFLECTION_SET if it's not 0, and
-// includes utils/constants_utils.glsl, utils/pbr_utils.glsl,
+// The shader which includes it defines SOLID_REFLECTION_SET and
+// SOLID_REFLECTION_BINDING if they're not 0, and includes
+// utils/constants_utils.glsl, utils/pbr_utils.glsl,
 // utils/camera.glsl (if it uses getStochasticReflectionSurface),
 // utils/unproject_position.glsl and ../utils/decodeNormal.frag before it
 
 #ifndef SOLID_REFLECTION_SET
 #define SOLID_REFLECTION_SET 0
+#endif
+// The binding of the trace target (level 0), the list is the next one
+#ifndef SOLID_REFLECTION_BINDING
+#define SOLID_REFLECTION_BINDING 0
 #endif
 
 // Levels of the trace target (the mipmap writes 1 to 3)
@@ -73,8 +78,8 @@ const uint STOCHASTIC_REFLECTION_THREADS = 8u;
 // STOCHASTIC_REFLECTION_THREADS) and m_resolve_dispatch the one of the
 // resolve (x groups of 64 texels, one thread each). y and z are written by
 // GEVulkanSolidReflection before the classify
-layout(std430, set = SOLID_REFLECTION_SET, binding = 1) buffer
-    StochasticReflectionList
+layout(std430, set = SOLID_REFLECTION_SET,
+    binding = SOLID_REFLECTION_BINDING + 1) buffer StochasticReflectionList
 {
     uint m_count;
     uint m_trace_dispatch[3];

@@ -198,6 +198,11 @@ public:
     // ------------------------------------------------------------------------
     VkImageView getImageView() const;
     // ------------------------------------------------------------------------
+    // The set whose binding 0 is the output of the trace (the trace target of
+    // GEVulkanStochasticReflection) and 1 the list, GEVulkanDeferredFBOSplit
+    // copies them to GVDFP_HDR for the screen space trace
+    const VkDescriptorSet* getTraceOutputSet() const         { return &m_set; }
+    // ------------------------------------------------------------------------
     // The output is the one of GEVulkanStochasticReflection
     virtual bool isStochastic() const                         { return false; }
 };   // GEVulkanSolidReflection

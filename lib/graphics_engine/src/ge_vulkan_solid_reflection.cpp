@@ -324,7 +324,10 @@ void GEVulkanSolidReflection::createTracePipelines(GEVulkanDrawCall* dc)
     GEVulkanFBOTexture* rtt = m_vk->getRTTTexture();
     // The sets of the fragment shaders which they were before (the lighting
     // pass), and the output and the list, see solid_reflection_ssr.comp and
-    // solid_reflection_rt.comp
+    // solid_reflection_rt.comp. The screen space trace has its output and list
+    // in GVDFP_HDR instead (copies of the descriptors of m_set), it would have
+    // 5 sets otherwise and Turnip only has 4 on A6xx, which have no ray tracing
+    // (the ray traced trace has 6, see GEVulkanFeatures::supportsRayQuery)
     std::array<std::vector<VkDescriptorSetLayout>, TP_COUNT> layouts;
     if (m_has_ssr)
     {
@@ -354,7 +357,8 @@ void GEVulkanSolidReflection::createTracePipelines(GEVulkanDrawCall* dc)
     {
         if (layouts[i].empty())
             continue;
-        layouts[i].push_back(m_layout);
+        if (i == TP_RT)
+            layouts[i].push_back(m_layout);
         VkPipelineLayoutCreateInfo layout_info = {};
         layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         layout_info.setLayoutCount = layouts[i].size();
@@ -414,7 +418,6 @@ void GEVulkanSolidReflection::dispatchTrace(VkCommandBuffer cmd,
                                             GEVulkanDrawCall* dc, bool rt)
 {
     VkPipelineLayout layout = m_trace_layouts[rt ? TP_RT : TP_SSR];
-    unsigned set_index = 0;
     if (rt)
     {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0,
@@ -423,24 +426,27 @@ void GEVulkanSolidReflection::dispatchTrace(VkCommandBuffer cmd,
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 4,
             1, m_vk->getMeshTextureDescriptor()->getRTDescriptorSet(), 0,
             NULL);
-        set_index = 5;
     }
     else
     {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0,
             1, getSSRDescriptorSet(dc), 0, NULL);
-        set_index = 4;
     }
-    // Camera, g-buffer (the normal has the gloss), the specular IBL (the same
-    // as the lighting pass has in its lit color) and the output and the list
+    // Camera, g-buffer (the normal has the gloss, and the output and the list
+    // of the screen space trace) and the specular IBL (the same as the lighting
+    // pass has in its lit color), then the output and the list of the ray
+    // traced one
     dc->bindDataDescriptorSet(m_vk, cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         layout, 1);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 2, 1,
         m_vk->getRTTTexture()->getDescriptorSet(GVDFP_HDR), 0, NULL);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 3, 1,
         dc->getEnvDescriptorSet(m_vk), 0, NULL);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout,
-        set_index, 1, &m_set, 0, NULL);
+    if (rt)
+    {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout,
+            5, 1, &m_set, 0, NULL);
+    }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_trace_pipelines[rt ? TP_RT : TP_SSR]);
     // The count of the groups is after the count of the pixels (the same
