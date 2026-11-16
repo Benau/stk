@@ -319,13 +319,16 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
     g_tiled_gpu = isTiledGPUDriver(g_driver_id);
 
     // Ray query needs Vulkan 1.2 (buffer device address and SPIR-V 1.4 are
-    // core), the mesh textures (as an array) for hit shading, and a few
-    // descriptor sets for the ray traced pass
+    // core), the mesh textures (as an array) for hit shading, and the
+    // descriptor sets of the ray traced passes: the trace of the reflection
+    // of the solid materials has 6 (solid_reflection_rt.comp), the most of
+    // all pipelines. Turnip has 7 on A7xx and later (one is reserved by the
+    // driver)
     g_supports_ray_query = false;
     if (vk->getPhysicalDeviceProperties().apiVersion >= VK_API_VERSION_1_2 &&
         vkGetPhysicalDeviceFeatures2 && original_bind_mesh_textures &&
         g_supports_dynamic_rendering && supportsComputeInMainQueue() &&
-        vk->getPhysicalDeviceProperties().limits.maxBoundDescriptorSets >= 8)
+        vk->getPhysicalDeviceProperties().limits.maxBoundDescriptorSets >= 6)
     {
         bool has_as = false;
         bool has_ray_query = false;
