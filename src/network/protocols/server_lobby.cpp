@@ -1654,7 +1654,22 @@ void ServerLobby::update(int ticks)
     case LOAD_WORLD:
         Log::info("ServerLobbyRoom", "Starting the race loading.");
         // This will create the world instance, i.e. load track and karts
-        loadWorld();
+        try
+        {
+            loadWorld();
+        }
+        catch (AbortWorldUpdateException& e)
+        {
+            // The in-game server (child loop) is shutting down while it was
+            // waiting for the track of the main process, the world is only
+            // half initialised so delete it now and leave
+            (void)e;
+            Log::warn("ServerLobby", "Race loading aborted.");
+            if (World::getWorld())
+                RaceManager::get()->exitRace();
+            m_state = ERROR_LEAVE;
+            break;
+        }
         m_state = WAIT_FOR_WORLD_LOADED;
         break;
     case RACING:

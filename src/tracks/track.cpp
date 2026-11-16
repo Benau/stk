@@ -3192,6 +3192,10 @@ void Track::cleanChildTrack()
 {
     assert(STKProcess::getType() == PT_CHILD);
     Track* child_track = m_current_track[PT_CHILD];
+    // The world can be deleted before the main process copied its track (if
+    // the child loop was aborted while loading)
+    if (!child_track)
+        return;
     child_track->m_item_manager = nullptr;
     delete child_track->m_check_manager;
     delete child_track->m_track_object_manager;

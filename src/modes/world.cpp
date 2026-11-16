@@ -212,8 +212,15 @@ void World::init()
             StkTime::sleep(1);
             child_track = Track::getCurrentTrack();
         }
-        if (!child_loop->isAborted())
-            child_track->initChildTrack();
+        // The track is copied by the main process in its first update of
+        // the world. If the main process shuts down before that (for example
+        // the host leaves after the server started loading but before the
+        // client loaded the world), the child loop is aborted and there may
+        // be no track at all, so stop loading here instead of creating karts
+        // on it. The caller deletes this world.
+        if (child_loop->isAborted())
+            throw AbortWorldUpdateException();
+        child_track->initChildTrack();
     }
 
     // Shuffles the start transforms with playing 3-strikes or free for all battles.

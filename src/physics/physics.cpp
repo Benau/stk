@@ -79,6 +79,12 @@ Physics::Physics() : btSequentialImpulseConstraintSolver()
 {
     m_collision_conf      = new btDefaultCollisionConfiguration();
     m_dispatcher          = new btCollisionDispatcher(m_collision_conf);
+    // Created in init(), which is not called if loading the world is aborted
+    // before the track is ready, the destructor must still work then
+    m_physics_loop_active = false;
+    m_dynamics_world      = NULL;
+    m_debug_drawer        = NULL;
+    m_axis_sweep          = NULL;
 }   // Physics
 
 //-----------------------------------------------------------------------------
