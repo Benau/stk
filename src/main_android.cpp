@@ -45,6 +45,35 @@ extern "C" JNIEXPORT void JNICALL handleLeftRight(JNIEnv* env, jclass cls, jbool
     #error
 #endif
 
+// ----------------------------------------------------------------------------
+/** Tells the java activity if the native methods of it can be called, see
+ *  m_natives_registered in SuperTuxKartActivity.java.
+ */
+void set_natives_registered(bool registered)
+{
+    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+    if (!env)
+        return;
+    const char* stkactivity_class =
+        ANDROID_PACKAGE_CLASS_NAME "/SuperTuxKartActivity";
+    jclass clazz = env->FindClass(stkactivity_class);
+    if (clazz == NULL)
+    {
+        env->ExceptionClear();
+        return;
+    }
+    jfieldID field = env->GetStaticFieldID(clazz, "m_natives_registered", "Z");
+    if (field == NULL)
+    {
+        env->ExceptionClear();
+        Log::error("MainAndroid", "Failed to find m_natives_registered.");
+    }
+    else
+        env->SetStaticBooleanField(clazz, field, registered);
+    env->DeleteLocalRef(clazz);
+}   // set_natives_registered
+
+// ----------------------------------------------------------------------------
 void registering_natives()
 {
     JNINativeMethod stkactivity_tab[] =
@@ -70,6 +99,8 @@ void registering_natives()
         Log::error("MainAndroid", "Failed to register methods of %s.",
             stkactivity_class);
     }
+    else
+        set_natives_registered(true);
 
     JNINativeMethod stkeditbox_tab[] =
     {
@@ -98,7 +129,12 @@ extern "C" int SDL_main(int argc, char *argv[])
 {
     registering_natives();
     override_default_params_for_mobile();
-    return android_main(argc, argv);
+    int ret = android_main(argc, argv);
+    // SDL unloads libmain.so after this returns, the registered methods
+    // would point to unloaded code until the next SDL_main registers them
+    // again (when the activity is opened again in the same process)
+    set_natives_registered(false);
+    return ret;
 }
 #endif
 

@@ -73,6 +73,12 @@ public class SuperTuxKartActivity extends SDLActivity
     private float m_right_padding;
     private AtomicInteger m_keyboard_height;
     private AtomicInteger m_moved_height;
+    // Set by the native code once the native methods below are registered
+    // (in SDL_main, after the SDL thread has loaded libmain.so), and cleared
+    // when SDL_main returns (libmain.so is unloaded after that). Java
+    // callbacks of the activity (onPause...) can run before the SDL thread
+    // got that far, calling a native method then throws UnsatisfiedLinkError.
+    private static volatile boolean m_natives_registered = false;
     // ------------------------------------------------------------------------
     public native static void debugMsg(String msg);
     // ------------------------------------------------------------------------
@@ -285,7 +291,9 @@ public class SuperTuxKartActivity extends SDLActivity
     {
         super.onPause();
         hideKeyboardNative(false/*clear_text*/);
-        if (SDLActivity.mSDLThread != null)
+        // Without registered natives the rendering is not started yet, there
+        // is nothing to pause
+        if (SDLActivity.mSDLThread != null && m_natives_registered)
             pauseRenderingJNI();
     }
     // ------------------------------------------------------------------------
@@ -518,7 +526,8 @@ public class SuperTuxKartActivity extends SDLActivity
     public void onMultiWindowModeChanged(boolean isInMultiWindowMode,
                                          Configuration newConfig)
     {
-        handlePadding(isInMultiWindowMode);
+        if (m_natives_registered)
+            handlePadding(isInMultiWindowMode);
     }
     // ------------------------------------------------------------------------
     public int getKeyboardHeight()          { return m_keyboard_height.get(); }
