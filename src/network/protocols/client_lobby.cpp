@@ -340,7 +340,23 @@ void ClientLobby::addAllPlayers(Event* event)
     getPlayersAddonKartType(data, players);
     configRemoteKart(players, isSpectator() ? 1 :
         (int)NetworkConfig::get()->getNetworkPlayers().size());
-    loadWorld();
+    try
+    {
+        loadWorld();
+    }
+    catch (std::exception& e)
+    {
+        // A broken track (see RaceManager::startNextRace()), delete the half
+        // loaded world and leave the server, the main loop shows the message
+        (void)e;
+        if (World::getWorld())
+            RaceManager::get()->exitRace();
+        STKHost::get()->setErrorMessage(
+            _("Failed to load the race, the track may be broken."));
+        STKHost::get()->disconnectAllPeers(false/*timeout_waiting*/);
+        STKHost::get()->requestShutdown();
+        return;
+    }
     // Disable until render gui during loading is bug free
     //StateManager::get()->enterGameState();
 

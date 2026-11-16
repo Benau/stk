@@ -1658,13 +1658,13 @@ void ServerLobby::update(int ticks)
         {
             loadWorld();
         }
-        catch (AbortWorldUpdateException& e)
+        catch (std::exception& e)
         {
             // The in-game server (child loop) is shutting down while it was
-            // waiting for the track of the main process, the world is only
+            // waiting for the track of the main process, or the track is
+            // broken (see RaceManager::startNextRace()). The world is only
             // half initialised so delete it now and leave
-            (void)e;
-            Log::warn("ServerLobby", "Race loading aborted.");
+            Log::warn("ServerLobby", "Race loading aborted: %s", e.what());
             if (World::getWorld())
                 RaceManager::get()->exitRace();
             m_state = ERROR_LEAVE;

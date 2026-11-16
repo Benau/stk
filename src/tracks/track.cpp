@@ -1990,6 +1990,24 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
     {
         reverse_track = false;
     }
+
+    // Make sure that we have a track (which is used for raycasts to
+    // place other objects). This is checked before anything is created or
+    // pushed (managers, search paths, materials): the track is not current
+    // yet if this throws, so Track::cleanup() would not undo them.
+    // Soccer field with navmesh requires it for two goal line to be drawn
+    // them in minimap
+    std::string path = m_root + m_all_modes[mode_id].m_scene;
+    XMLNode *root    = file_manager->createXMLTree(path);
+    if (!root || root->getName()!="scene")
+    {
+        delete root;
+        std::ostringstream msg;
+        msg<< "No track model defined in '"<<path
+           <<"', aborting.";
+        throw std::runtime_error(msg.str());
+    }
+
     main_loop->renderGUI(3000);
     m_check_manager = new CheckManager();
     assert(m_all_cached_meshes.size()==0);
@@ -2072,21 +2090,6 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
     main_loop->renderGUI(3300);
 
     // Start building the scene graph
-    // Soccer field with navmesh requires it
-    // for two goal line to be drawn them in minimap
-    std::string path = m_root + m_all_modes[mode_id].m_scene;
-    XMLNode *root    = file_manager->createXMLTree(path);
-
-    // Make sure that we have a track (which is used for raycasts to
-    // place other objects).
-    if (!root || root->getName()!="scene")
-    {
-        std::ostringstream msg;
-        msg<< "No track model defined in '"<<path
-           <<"', aborting.";
-        throw std::runtime_error(msg.str());
-    }
-
     m_current_track[PT_MAIN] = this;
     m_current_track[PT_CHILD] = NULL;
 

@@ -353,6 +353,7 @@ private:
     /** Total laps from every track, used in Lap Trial mode
         int                              m_gp_total_laps;*/
     void startNextRace();    // start a next race
+    void abortRaceLoading();
 
     friend bool operator< (const KartStatus& left, const KartStatus& right)
     {

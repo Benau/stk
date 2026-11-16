@@ -22,12 +22,14 @@
 #include <algorithm>
 #include <random>
 
+#include "audio/sfx_manager.hpp"
 #include "challenges/unlock_manager.hpp"
 #include "config/player_manager.hpp"
 #include "config/saved_grand_prix.hpp"
 #include "config/stk_config.hpp"
 #include "config/user_config.hpp"
 #include "graphics/irr_driver.hpp"
+#include "guiengine/engine.hpp"
 #include "guiengine/message_queue.hpp"
 #include "input/device_manager.hpp"
 #include "input/input_manager.hpp"
@@ -691,12 +693,28 @@ void RaceManager::startNextRace()
     // call functions which are overwritten (otherwise polymorphism
     // will fail and the results will be incorrect). Also in init() functions
     // can be called that use World::getWorld().
-    World::getWorld()->init();
-    main_loop->renderGUI(8000);
-    // Now initialise all values that need to be reset from race to race
-    // Calling this here reduces code duplication in init and restartRace()
-    // functions.
-    World::getWorld()->reset();
+    try
+    {
+        World::getWorld()->init();
+        main_loop->renderGUI(8000);
+        // Now initialise all values that need to be reset from race to race
+        // Calling this here reduces code duplication in init and
+        // restartRace() functions.
+        World::getWorld()->reset();
+    }
+    catch (std::exception& e)
+    {
+        Log::error("RaceManager", "Failed to load the race: %s", e.what());
+        // The network lobbies handle it themselves (they need to disconnect
+        // or shut down the server)
+        if (NetworkConfig::get()->isNetworking())
+            throw;
+        // A broken track (like a missing scene or start positions without
+        // ground) shouldn't quit the game: delete the half loaded world and
+        // go back to the main menu
+        abortRaceLoading();
+        return;
+    }
 
     if (NetworkConfig::get()->isNetworking())
     {
@@ -1098,6 +1116,23 @@ void RaceManager::rerunRace()
     }
     World::getWorld()->reset(true /* restart */);
 }   // rerunRace
+
+//---------------------------------------------------------------------------------------------
+/** Called when loading a race failed (outside of networking), deletes the
+ *  half loaded world and goes back to the main menu with an error message.
+ */
+void RaceManager::abortRaceLoading()
+{
+    if (World::getWorld())
+        exitRace();
+    // reset() may have stopped before resuming the sound effects
+    SFXManager::get()->resumeAll();
+    if (GUIEngine::isNoGraphics())
+        return;
+    StateManager::get()->resetAndGoToScreen(MainMenuScreen::getInstance());
+    MessageQueue::add(MessageQueue::MT_ERROR,
+        _("Failed to load the race, the track may be broken."));
+}   // abortRaceLoading
 
 //---------------------------------------------------------------------------------------------
 /** \brief Higher-level method to start a GP without having to care about

@@ -87,6 +87,8 @@
 #include <IrrlichtDevice.h>
 #include <ISceneManager.h>
 
+#include <stdexcept>
+
 World* World::m_world[PT_COUNT];
 
 /** The main world class is used to handle the track and the karts.
@@ -886,7 +888,10 @@ void World::resetAllKarts()
             }
             else
             {
-                exit(-1);
+                // Let RaceManager::startNextRace() abort the loading and go
+                // back to the menu, exiting here would also crash in the
+                // static destructors of the still running threads
+                throw std::runtime_error("No valid starting position");
             }
         }
     }
