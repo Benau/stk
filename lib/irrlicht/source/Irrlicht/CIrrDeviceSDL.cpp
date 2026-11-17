@@ -982,10 +982,6 @@ bool CIrrDeviceSDL::run()
 				{
 					WindowHasFocus = true;
 					reset_network_body();
-#ifdef ANDROID
-					if (VideoDriver)
-						VideoDriver->unpauseRendering();
-#endif
 				}
 				else if (SDL_event.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
 				{

@@ -35,6 +35,10 @@
 
 #ifdef _IRR_COMPILE_WITH_VULKAN_
 #include "SDL_vulkan.h"
+#ifdef ANDROID
+#include "SDL_system.h"
+#include <jni.h>
+#endif
 #include <algorithm>
 #include <atomic>
 #include <limits>
@@ -517,9 +521,6 @@ extern "C" PFN_vkVoidFunction loader(void* user_ptr, const char* name)
 
 namespace GE
 {
-std::atomic_bool g_device_created(false);
-std::atomic_bool g_schedule_pausing_rendering(false);
-std::atomic_bool g_paused_rendering(false);
 bool g_debug_print = false;
 
 GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
@@ -557,9 +558,9 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
     m_fog_enabled = false;
     m_god_rays_enabled = false;
     m_god_rays_radius = 20.0f;
-    g_schedule_pausing_rendering.store(false);
-    g_paused_rendering.store(false);
-    g_device_created.store(true);
+    m_window_ready.store(true);
+    m_rendering_paused = false;
+    m_pause_requested = false;
 
     createInstance(window);
 
@@ -720,17 +721,22 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
         throw std::runtime_error(std::string(
             "GEVulkanDriver constructor failed: ") + e.what());
     }
+    // Only now the driver can handle the window being destroyed
+    setSurfaceListener(this);
 }   // GEVulkanDriver
 
 // ----------------------------------------------------------------------------
 GEVulkanDriver::~GEVulkanDriver()
 {
-    g_device_created.store(false);
+    setSurfaceListener(NULL);
 }   // ~GEVulkanDriver
 
 // ----------------------------------------------------------------------------
 void GEVulkanDriver::destroyVulkan()
 {
+    // Before anything is destroyed, the UI thread may still be in a call of
+    // the listener, which removing it waits for
+    setSurfaceListener(NULL);
     if (m_depth_texture)
     {
         m_depth_texture->drop();
@@ -1993,7 +1999,9 @@ void GEVulkanDriver::OnResize(const core::dimension2d<u32>& size)
 {
     m_params.WindowSize = size;
     CNullDriver::OnResize(size);
-    if (g_paused_rendering.load() == false)
+    std::lock_guard<std::timed_mutex> lock(m_window_mutex);
+    // Created with the new size when rendering resumes
+    if (updateWindowState())
     {
         destroySwapChainRelated(false/*handle_surface*/);
         createSwapChainRelated(false/*handle_surface*/);
@@ -2010,13 +2018,12 @@ bool GEVulkanDriver::beginScene(bool backBuffer, bool zBuffer, SColor color,
         m_irrlicht_device->getSceneManager()->getMeshCache())
         createBillboardQuad();
 
-    if (g_schedule_pausing_rendering.load())
+    bool rendering = false;
     {
-        pauseRendering();
-        g_schedule_pausing_rendering.store(false);
+        std::lock_guard<std::timed_mutex> lock(m_window_mutex);
+        rendering = updateWindowState();
     }
-
-    if (g_paused_rendering.load() ||
+    if (!rendering ||
         !video::CNullDriver::beginScene(backBuffer, zBuffer, color, videoData,
         sourceRect))
         return false;
@@ -2052,7 +2059,9 @@ bool GEVulkanDriver::endScene()
                 ->getSceneManager())->endFrame(m_driver);
         }
     } end_frame_guard = { this };
-    if (g_paused_rendering.load())
+    // Held until the frame is presented, see m_window_mutex
+    std::lock_guard<std::timed_mutex> window_lock(m_window_mutex);
+    if (!updateWindowState())
     {
         GEVulkan2dRenderer::clear();
         return false;
@@ -2157,9 +2166,10 @@ bool GEVulkanDriver::endScene()
     vkResetCommandPool(m_vk->device, m_vk->command_pools[m_current_frame], 0);
 
     VkSemaphore semaphore = m_vk->image_available_semaphores[m_current_semaphore];
+    // Not forever, m_window_mutex is held and the UI thread of Android may be
+    // waiting for it, a timeout only skips this frame
     VkResult result = vkAcquireNextImageKHR(m_vk->device, m_vk->swap_chain,
-        std::numeric_limits<uint64_t>::max(), semaphore, VK_NULL_HANDLE,
-        &m_image_index);
+        1000000000, semaphore, VK_NULL_HANDLE, &m_image_index);
 
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
     {
@@ -2708,26 +2718,100 @@ void GEVulkanDriver::initPreRotationMatrix()
 // ----------------------------------------------------------------------------
 void GEVulkanDriver::pauseRendering()
 {
-    if (g_paused_rendering.load() != false)
-        return;
-
-    destroySwapChainRelated(true/*handle_surface*/);
-    g_paused_rendering.store(true);
+    std::lock_guard<std::timed_mutex> lock(m_window_mutex);
+    m_pause_requested = true;
+    updateWindowState();
 }   // pauseRendering
 
 // ----------------------------------------------------------------------------
 void GEVulkanDriver::unpauseRendering()
 {
-    if (g_paused_rendering.load() != true)
-        return;
-
-    createSwapChainRelated(true/*handle_surface*/);
-    g_paused_rendering.store(false);
-
-    // Remove any previous scheduled pause to fix sometimes android black
-    // screen after resuming
-    g_schedule_pausing_rendering.store(false);
+    std::lock_guard<std::timed_mutex> lock(m_window_mutex);
+    m_pause_requested = false;
+    updateWindowState();
 }   // unpauseRendering
+
+// ----------------------------------------------------------------------------
+/** Pauses or resumes the rendering (destroys or creates the swap chain and
+ *  the surface) according to the window and the pause requests, the caller
+ *  holds m_window_mutex. When the window is gone, the resuming is retried at
+ *  every frame until a new window is ready, so no focus or lifecycle event
+ *  is needed for that (some of them are not sent in every case, like the
+ *  focus when the screen is turned off and on again with a keyguard).
+ *  \return True if rendering is possible. */
+bool GEVulkanDriver::updateWindowState()
+{
+    const bool pause = m_pause_requested || !m_window_ready.load();
+    if (pause && !m_rendering_paused)
+    {
+        destroySwapChainRelated(true/*handle_surface*/);
+        m_rendering_paused = true;
+    }
+    else if (!pause && m_rendering_paused)
+    {
+        try
+        {
+            createSwapChainRelated(true/*handle_surface*/);
+            m_rendering_paused = false;
+        }
+        catch (std::exception& e)
+        {
+            // Tried again in the next frame
+            GE::logMessage(GLL_WARNING, "GEVulkanDriver: cannot resume "
+                "rendering: %s", e.what());
+            destroySwapChainRelated(true/*handle_surface*/);
+        }
+    }
+    return !m_rendering_paused;
+}   // updateWindowState
+
+// ----------------------------------------------------------------------------
+/** Called by the thread which owns the window (the UI thread of Android)
+ *  when it is created or destroyed. When destroyed it returns only when the
+ *  rendering thread no longer uses the swap chain and surface of the window,
+ *  which it destroys in its next frame (the window must stay valid until
+ *  this returns, the destruction itself may happen later). */
+void GEVulkanDriver::setWindowReady(bool ready)
+{
+    std::unique_lock<std::timed_mutex> lock(m_window_mutex,
+        std::chrono::seconds(2));
+    // A rendering thread stuck that long would make Android kill the app
+    // as not responding, mark it anyway
+    if (!lock.owns_lock())
+    {
+        GE::logMessage(GLL_WARNING, "GEVulkanDriver: window state changed "
+            "without waiting for the rendering thread");
+    }
+    m_window_ready.store(ready);
+}   // setWindowReady
+
+// ----------------------------------------------------------------------------
+/** Tells the activity which driver to notify when the surface of the window
+ *  is created or destroyed (on Android the UI thread owns the window, SDL
+ *  doesn't tell a Vulkan application in time), NULL to stop. The activity
+ *  has a static method setSurfaceListener(long) for it, other activities
+ *  without one are ignored. */
+void GEVulkanDriver::setSurfaceListener(GEVulkanDriver* listener)
+{
+#ifdef ANDROID
+    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+    jobject activity = (jobject)SDL_AndroidGetActivity();
+    if (env == NULL || activity == NULL)
+        return;
+    jclass clazz = env->GetObjectClass(activity);
+    jmethodID method = env->GetStaticMethodID(clazz, "setSurfaceListener",
+        "(J)V");
+    if (method != NULL)
+    {
+        env->CallStaticVoidMethod(clazz, method,
+            (jlong)reinterpret_cast<intptr_t>(listener));
+    }
+    if (env->ExceptionCheck())
+        env->ExceptionClear();
+    env->DeleteLocalRef(clazz);
+    env->DeleteLocalRef(activity);
+#endif
+}   // setSurfaceListener
 
 // ----------------------------------------------------------------------------
 void GEVulkanDriver::destroySwapChainRelated(bool handle_surface)
@@ -3266,7 +3350,12 @@ void GEVulkanDriver::updateDriver(bool scale_changed, bool pbr_changed,
     if (pbr_changed || ibl_changed)
         m_skybox_renderer->reset();
     if (recreate_swapchain)
-        createSwapChainRelated(false/*handle_surface*/);
+    {
+        // Created with the new settings when rendering resumes
+        std::lock_guard<std::timed_mutex> lock(m_window_mutex);
+        if (!m_rendering_paused)
+            createSwapChainRelated(false/*handle_surface*/);
+    }
     static_cast<GEVulkanSceneManager*>(
         m_irrlicht_device->getSceneManager())->resetDrawCalls();
     if (recreate_swapchain)
@@ -3291,7 +3380,11 @@ void GEVulkanDriver::reloadShaders()
         m_rt_scene = new GEVulkanRTScene(this);
     }
     if (getGEConfig()->m_deferred_split != 0)
-        createSwapChainRelated(false/*handle_surface*/);
+    {
+        std::lock_guard<std::timed_mutex> lock(m_window_mutex);
+        if (!m_rendering_paused)
+            createSwapChainRelated(false/*handle_surface*/);
+    }
     static_cast<GEVulkanSceneManager*>(
         m_irrlicht_device->getSceneManager())->resetDrawCalls();
     GEVulkan2dRenderer::destroy();
@@ -3400,22 +3493,22 @@ namespace video
 }
 
 #ifdef ANDROID
-#include <jni.h>
-extern "C" JNIEXPORT void JNICALL pauseRenderingJNI(JNIEnv* env, jclass cls)
+// The native methods of the activity which the UI thread calls when the
+// surface of the window is created or destroyed, with the listener given to
+// it in GEVulkanDriver::setSurfaceListener (the activity holds a lock around
+// these calls and setSurfaceListener, so the driver is always alive here)
+extern "C" JNIEXPORT void JNICALL surfaceCreatedJNI(JNIEnv* env, jclass cls,
+                                                    jlong listener)
 {
-    using namespace GE;
-    if (g_device_created.load() == false || g_schedule_pausing_rendering.load() == true)
-        return;
-    g_schedule_pausing_rendering.store(true);
-    if (g_paused_rendering.load() == false)
-    {
-        while (true)
-        {
-            if (g_device_created.load() == false || g_paused_rendering.load() == true)
-                break;
-        }
-    }
-}   // pauseRenderingJNI
+    reinterpret_cast<GE::GEVulkanDriver*>(listener)->setWindowReady(true);
+}   // surfaceCreatedJNI
+
+// ----------------------------------------------------------------------------
+extern "C" JNIEXPORT void JNICALL surfaceDestroyedJNI(JNIEnv* env, jclass cls,
+                                                      jlong listener)
+{
+    reinterpret_cast<GE::GEVulkanDriver*>(listener)->setWindowReady(false);
+}   // surfaceDestroyedJNI
 
 #endif
 

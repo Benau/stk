@@ -13,6 +13,7 @@
 #include "SIrrCreationParameters.h"
 #include "SColor.h"
 #include <array>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -402,11 +403,16 @@ namespace GE
                                                { return m_pre_rotation_matrix; }
         virtual void pauseRendering();
         virtual void unpauseRendering();
+        void setWindowReady(bool ready);
         void updateSwapInterval(int value)
         {
             if (m_params.SwapInterval == value)
                 return;
             m_params.SwapInterval = value;
+            std::lock_guard<std::timed_mutex> lock(m_window_mutex);
+            // Created with the new interval when rendering resumes
+            if (m_rendering_paused)
+                return;
             destroySwapChainRelated(false/*handle_surface*/);
             createSwapChainRelated(false/*handle_surface*/);
         }
@@ -606,6 +612,19 @@ namespace GE
 
         bool m_disable_wait_idle;
 
+        // The window of the surface can be destroyed by another thread (the
+        // UI thread of Android) at any time, it waits for this mutex first.
+        // The rendering thread holds it whenever it uses the swap chain or
+        // the surface, so the window can't go away in the middle.
+        std::timed_mutex m_window_mutex;
+        // False after the window is destroyed until a new one is created,
+        // the swap chain and surface must not be used (or created) then.
+        std::atomic_bool m_window_ready;
+        // The swap chain and surface are destroyed, either explicitly by
+        // pauseRendering or because the window was destroyed
+        bool m_rendering_paused;
+        bool m_pause_requested;
+
         bool m_fog_enabled;
 
         bool m_god_rays_enabled;
@@ -653,6 +672,8 @@ namespace GE
         std::string getDriverVersionString() const;
         void destroySwapChainRelated(bool handle_surface);
         void createSwapChainRelated(bool handle_surface);
+        bool updateWindowState();
+        void setSurfaceListener(GEVulkanDriver* listener);
         void buildCommandBuffers();
         void createBillboardQuad();
     };

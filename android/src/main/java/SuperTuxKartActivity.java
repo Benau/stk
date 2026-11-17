@@ -2,6 +2,7 @@ package org.supertuxkart.stk_dbg;
 
 import org.supertuxkart.stk_dbg.STKEditText;
 import org.libsdl.app.SDLActivity;
+import org.libsdl.app.SDLSurface;
 import org.libsdl.app.SDL;
 
 import android.animation.Animator;
@@ -35,6 +36,7 @@ import android.view.inputmethod.InputMethodManager;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
+import android.view.SurfaceHolder;
 import android.view.ViewGroup;
 import android.view.ViewGroup.MarginLayoutParams;
 import android.view.ViewTreeObserver.OnGlobalLayoutListener;
@@ -90,7 +92,56 @@ public class SuperTuxKartActivity extends SDLActivity
     // ------------------------------------------------------------------------
     private native static void addDNSSrvRecords(String name, int weight);
     // ------------------------------------------------------------------------
-    private native static void pauseRenderingJNI();
+    private native static void surfaceCreatedJNI(long listener);
+    // ------------------------------------------------------------------------
+    private native static void surfaceDestroyedJNI(long listener);
+    // ------------------------------------------------------------------------
+    // The Vulkan driver renders to the window of the surface on the SDL
+    // thread, and must stop using it before surfaceDestroyed() returns. SDL
+    // only tells the SDL thread later with an event, so the driver gives its
+    // native pointer here (setSurfaceListener, 0 when it is destroyed) to be
+    // told directly by the UI thread. The lock keeps the driver alive during
+    // a call.
+    private static final Object m_surface_lock = new Object();
+    private static long m_surface_listener = 0;
+    // ------------------------------------------------------------------------
+    public static void setSurfaceListener(long listener)
+    {
+        synchronized (m_surface_lock)
+        {
+            m_surface_listener = listener;
+        }
+    }
+    // ------------------------------------------------------------------------
+    @Override
+    protected SDLSurface createSDLSurface(Context context)
+    {
+        return new SDLSurface(context)
+        {
+            @Override
+            public void surfaceCreated(SurfaceHolder holder)
+            {
+                // SDL gets the new native window first
+                super.surfaceCreated(holder);
+                synchronized (m_surface_lock)
+                {
+                    if (m_surface_listener != 0)
+                        surfaceCreatedJNI(m_surface_listener);
+                }
+            }
+            @Override
+            public void surfaceDestroyed(SurfaceHolder holder)
+            {
+                // Before SDL releases the native window
+                synchronized (m_surface_lock)
+                {
+                    if (m_surface_listener != 0)
+                        surfaceDestroyedJNI(m_surface_listener);
+                }
+                super.surfaceDestroyed(holder);
+            }
+        };
+    }
     // ------------------------------------------------------------------------
     private void showExtractProgressPrivate()
     {
@@ -291,10 +342,6 @@ public class SuperTuxKartActivity extends SDLActivity
     {
         super.onPause();
         hideKeyboardNative(false/*clear_text*/);
-        // Without registered natives the rendering is not started yet, there
-        // is nothing to pause
-        if (SDLActivity.mSDLThread != null && m_natives_registered)
-            pauseRenderingJNI();
     }
     // ------------------------------------------------------------------------
     /* SDL manually dlopen main to allow unload after main thread exit. */
