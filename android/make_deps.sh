@@ -434,10 +434,16 @@ EOF
             sed -i 's/dep_libxml2 = dependency(.*/dep_libxml2 = null_dep/' src/freedreno/meson.build
             sed -i 's/#elif DETECT_OS_ANDROID && !defined(__cplusplus)/#elif 0/' src/util/perf/cpu_trace.h
             sed -i "s/cpp\.get_supported_arguments(\[/&'-Wno-everything',/" src/freedreno/vulkan/meson.build
+            # android-strict hides every extension newer than
+            # platform-sdk-version (the minimum API level of the APK), so
+            # ray query and dynamic rendering would be missing on every
+            # phone. Turnip is loaded by the app (adrenotools), not as the
+            # system driver, so the Android CTS rules don't apply here.
             meson setup build --cross-file crossfile \
                 -Dbuildtype=release \
                 -Dplatforms=android \
                 -Dplatform-sdk-version=26 \
+                -Dandroid-strict=false \
                 -Dandroid-stub=true \
                 -Dgallium-drivers= \
                 -Dvulkan-drivers=freedreno \
