@@ -68,6 +68,12 @@
 // Levels of the trace target (the mipmap writes 1 to 3)
 const int STOCHASTIC_REFLECTION_LEVELS = 4;
 
+// The height of a viewport which the sizes in texels of the filters are for,
+// they are scaled by the height of the viewport, so a filter covers the same
+// part of the screen whatever its resolution (REFERENCE_HEIGHT of
+// GEVulkanPostProcessing)
+const float STOCHASTIC_REFLECTION_REFERENCE_HEIGHT = 1080.0;
+
 // Threads which trace the rays of a texel together, the y of the indirect
 // dispatch of the trace (a group of 64 threads has 64 / 8 texels, so the 8
 // groups in y have the 64 texels of the x of the dispatch)

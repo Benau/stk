@@ -13,11 +13,14 @@
 //     It's relative to the brightness of the average (the reflection is in
 //     hdr, DNSR weights it by its variance, which there is none of here).
 // The radius of the disk grows with the roughness (the reflection of a mirror
-// is one ray, it isn't filtered), the taps are the points of a Vogel spiral
-// (spread evenly over the disk) rotated by a random angle per texel, and a tap
-// far from the texel reads a lower level of the mip chain of the trace (the
-// average of the traced texels around it, stochastic_reflection_mipmap.comp)
-// instead of a single noisy texel.
+// is one ray, it isn't filtered) and with the height of the viewport (it's the
+// same part of the screen whatever the resolution), the taps are the points of
+// a Vogel spiral (spread evenly over the disk) rotated by a random angle per
+// texel, and a tap far from the texel reads a lower level of the mip chain of
+// the trace (the average of the traced texels around it,
+// stochastic_reflection_mipmap.comp) instead of a single noisy texel. A tap
+// never reads the texels of another viewport of the splitscreen, at any
+// level.
 //
 // Both targets store the radiance premultiplied by its coverage, so the
 // weighted average here is the average of the radiance weighted by the
@@ -40,7 +43,8 @@ layout(set = 0, binding = 6, rgba16f) uniform writeonly image2D u_resolved;
 #include "../utils/decodeNormal.frag"
 #include "utils/stochastic_reflection.glsl"
 
-// Radius of the disk of the roughest surface which reflects, in texels
+// Radius of the disk of the roughest surface which reflects, in texels of a
+// viewport as high as STOCHASTIC_REFLECTION_REFERENCE_HEIGHT
 const float u_max_radius = 8.0;
 const int u_taps = 16;
 const float u_golden_angle = 2.3999632297;
@@ -79,6 +83,7 @@ void main()
         imageStore(u_resolved, texel, center);
         return;
     }
+    radius *= u_camera.m_viewport.w / STOCHASTIC_REFLECTION_REFERENCE_HEIGHT;
 
     vec3 view_position = getPosFromUVDepth(vec3(vec2(pixel) + 0.5,
         texelFetch(u_depth, pixel, 0).x), u_camera.m_viewport,
@@ -136,7 +141,15 @@ void main()
         // about that far from each other there
         float level = clamp(floor(log2(max(tap_radius, 1.0))) - 1.0, 0.0,
             max_level);
-        samples[i + 1] = textureLod(u_trace, (position + 0.5) / size, level);
+        // The bilinear sample of the level only has texels of the viewport
+        // (a texel of a level averages the ones of the viewport under it)
+        float scale = exp2(level);
+        vec2 level_position = clamp((position + 0.5) / scale,
+            vec2(first_texel >> int(level)) + 0.5,
+            min(vec2(last_texel >> int(level)),
+            vec2(textureSize(u_trace, int(level)) - 1)) + 0.5);
+        samples[i + 1] = textureLod(u_trace, level_position * scale / size,
+            level);
         weights[i + 1] = weight;
         average += samples[i + 1] * weight;
     }
