@@ -299,6 +299,13 @@ struct StochasticReflectionSum
     float m_distance;
     // The confidence of the hits on a node which can move
     float m_moving;
+#ifdef STOCHASTIC_REFLECTION_KARIS
+    // m_radiance with every ray weighted by 1 / (1 + its luminance) (the
+    // Karis average, see addStochasticReflectionRay), and the sum of the
+    // weights of all rays, hits and misses
+    vec4 m_karis;
+    float m_karis_weight;
+#endif
 };
 
 // ----------------------------------------------------------------------------
@@ -308,11 +315,17 @@ void addStochasticReflectionRay(inout StochasticReflectionSum sum,
 {
     // A float target can't store more than 65504, a hit can be brighter
     // (an emissive surface, the sun)
-    sum.m_radiance += vec4(min(radiance, vec3(1024.0)) * confidence,
-        confidence);
+    vec3 hit = min(radiance, vec3(1024.0));
+    sum.m_radiance += vec4(hit * confidence, confidence);
     sum.m_rays += 1.0;
     sum.m_distance += hit_distance * confidence;
     sum.m_moving += moving ? confidence : 0.0;
+#ifdef STOCHASTIC_REFLECTION_KARIS
+    float hit_weight = confidence / (1.0 + dot(hit,
+        vec3(0.2126, 0.7152, 0.0722)));
+    sum.m_karis += vec4(hit, 1.0) * hit_weight;
+    sum.m_karis_weight += hit_weight + (1.0 - confidence) * 1.0;
+#endif
 }   // addStochasticReflectionRay
 
 // ----------------------------------------------------------------------------
@@ -336,7 +349,14 @@ vec4 getStochasticReflectionOutput(StochasticReflectionSum sum, float gloss)
 {
     if (sum.m_rays <= 0.0)
         return vec4(0.0);
+#ifdef STOCHASTIC_REFLECTION_KARIS
+    if (sum.m_karis_weight <= 0.0)
+        return vec4(0.0);
+    return sum.m_karis * (getStochasticReflectionFade(gloss) /
+        sum.m_karis_weight);
+#else
     return sum.m_radiance * (getStochasticReflectionFade(gloss) / sum.m_rays);
+#endif
 }   // getStochasticReflectionOutput
 
 #ifdef STOCHASTIC_REFLECTION_SURFACE
@@ -415,8 +435,13 @@ void main()
     const bool valid = index < u_reflection_list.m_count;
     ivec2 texel = ivec2(0);
     StochasticReflectionSurface surface;
+#ifdef STOCHASTIC_REFLECTION_KARIS
+    StochasticReflectionSum sum = StochasticReflectionSum(vec4(0.0), 0.0,
+        0.0, 0.0, vec4(0.0), 0.0);
+#else
     StochasticReflectionSum sum = StochasticReflectionSum(vec4(0.0), 0.0,
         0.0, 0.0);
+#endif
     if (valid)
     {
         texel = unpackStochasticReflectionTexel(
@@ -456,6 +481,10 @@ void main()
             sum.m_rays += s_stochastic_sums[lane + i].m_rays;
             sum.m_distance += s_stochastic_sums[lane + i].m_distance;
             sum.m_moving += s_stochastic_sums[lane + i].m_moving;
+#ifdef STOCHASTIC_REFLECTION_KARIS
+            sum.m_karis += s_stochastic_sums[lane + i].m_karis;
+            sum.m_karis_weight += s_stochastic_sums[lane + i].m_karis_weight;
+#endif
         }
         imageStore(u_trace, texel, getStochasticReflectionOutput(sum,
             surface.m_gloss));

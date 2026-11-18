@@ -21,6 +21,8 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 #define SOLID_REFLECTION_SET 5
 #define STOCHASTIC_REFLECTION_SURFACE
 #define STOCHASTIC_REFLECTION_TRACE
+// Its hits are hdr, a hit on a small bright source would be a firefly
+#define STOCHASTIC_REFLECTION_KARIS
 
 layout(set = 2, binding = 1) uniform sampler2D u_normal;
 layout(set = 2, binding = 2) uniform sampler2D u_depth;
