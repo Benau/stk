@@ -1,0 +1,374 @@
+// The temporal filter of the stochastic reflection of
+// GEVulkanStochasticReflection with the frame cache (GEConfig::m_frame_cache,
+// see utils/stochastic_reflection.glsl), one thread per glossy texel of the
+// list, after the resolve: the resolved trace of this frame (u_current) is
+// mixed with the history of the last frames, which the lighting pass reads
+// (u_resolved) and the next frame mixes again. It's the reprojection and the
+// temporal resolve of the reflection denoiser of FidelityFX SSSR (FidelityFX
+// DNSR, FFX_DNSR_Reflections_Reproject and
+// FFX_DNSR_Reflections_ResolveTemporal):
+//
+//   reprojection : the history of a texel is where the camera of the last
+//                  frame saw the reflection (utils/prev_camera.glsl). There
+//                  are two of them: the surface itself, and the reflected
+//                  position (the hit seen through the surface, at the length
+//                  of the rays further, u_ray_length, or far away for the
+//                  rays which reflect the sky) where the line from the
+//                  camera of the last frame to it crosses the surface: a
+//                  mirror moves its reflection with the parallax of the
+//                  reflected position, not the one of its surface. The
+//                  reflected one is taken when it's on the same flat
+//                  surface, the one of the surface otherwise if it's close
+//                  to the texels around (a reflection which moved fails it).
+//                  The history is a bilinear sample of the 4 texels around,
+//                  only the ones of the same surface (distance to its plane,
+//                  normal and gloss), never the ones of something in front
+//                  of it or behind it, and never of another viewport
+//   resolve      : the history is clipped to the radiance of the texels
+//                  around (their mean and deviation, and the average of the
+//                  tile of 8x8 texels, level 3 of the trace), then mixed with
+//                  the new radiance by 1 / the frames which the history has,
+//                  which grows to a maximum which is higher for a rougher
+//                  surface (its reflection is noisier)
+//
+// There are no motion vectors, so the history only follows the camera: a node
+// which moves (a kart) doesn't find its surface in the history (it was
+// somewhere else) and gets the new radiance of the frame. Its reflection on
+// the ground is somewhere else in the history too: the ray traced trace knows
+// the rays which hit a node which can move (u_ray_length is negative), whose
+// history keeps u_moving_samples frames at most, and the clip limits it with
+// the screen space trace (or a node which moves out of a texel). A mirror
+// (getStochasticReflectionAlpha below 1e-4, a single exact ray, the same in
+// every frame) is the new radiance only.
+//
+// Both targets store the radiance premultiplied by its coverage (rgba), the
+// filter works on all of it, so the coverage is filtered the same way.
+//
+// Set 0 is the targets and the list, set 1 the camera of this frame, set 2 the
+// output of the resolve, the history (read and written) and the cameras of the
+// last frame
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 2) uniform sampler2D u_normal;
+layout(set = 0, binding = 3) uniform sampler2D u_depth;
+// The trace with its mip chain, the average radiance of a tile
+layout(set = 0, binding = 5) uniform sampler2D u_trace;
+// The output, which the lighting pass reads
+layout(set = 0, binding = 6, rgba16f) uniform writeonly image2D u_resolved;
+layout(set = 0, binding = 7, r32f) uniform readonly image2D u_ray_length;
+
+// The resolve of this frame
+layout(set = 2, binding = 0, rgba16f) uniform readonly image2D u_current;
+// The history of the last frame and the one of this frame: the radiance and
+// the surface (packHistorySurface in x, and in y the frames of the history as
+// a half float, the gloss in 8 bits and if it's the reflection of a node which
+// can move in bit 24), 0 where it can't be reused
+layout(set = 2, binding = 1, rgba16f) uniform readonly image2D u_history_in;
+layout(set = 2, binding = 2, rg32ui) uniform readonly uimage2D
+    u_history_surface_in;
+layout(set = 2, binding = 3, rgba16f) uniform writeonly image2D u_history_out;
+layout(set = 2, binding = 4, rg32ui) uniform writeonly uimage2D
+    u_history_surface_out;
+
+layout(push_constant) uniform PushConstants
+{
+    // The camera of the viewport in u_prev_cameras
+    uint m_viewport_index;
+    // The history was written by the last frame for this viewport (with
+    // the same rect), it can't be read otherwise
+    uint m_history;
+} pc;
+
+#include "utils/camera.glsl"
+#include "utils/constants_utils.glsl"
+#include "utils/unproject_position.glsl"
+#include "../utils/decodeNormal.frag"
+#include "utils/stochastic_reflection.glsl"
+#include "utils/prev_camera.glsl"
+
+// The camera of every viewport in the last frame (GEVulkanPrevCamera)
+layout(std430, set = 2, binding = 5) readonly buffer PrevCameras
+{
+    PrevCamera u_prev_cameras[];
+};
+
+// The frames which the history of a texel has at most, of the roughest
+// surface and of a mirror (FidelityFX DNSR: max(8, 32 *
+// FFX_DNSR_REFLECTIONS_SAMPLES_FOR_ROUGHNESS))
+const float u_max_samples = 32.0;
+const float u_min_samples = 8.0;
+// The history clip: the deviation of the radiance around is scaled by it (the
+// temporal stability factor of FidelityFX SSSR, 0.7, times the 1.4 of DNSR),
+// and the mean is mixed with the average of the tile by u_tile_mix
+const float u_clip_scale = 0.98;
+const float u_tile_mix = 0.2;
+// The history of the surface itself is rejected if it's farther from the mean
+// of the texels around than this times their deviation (squared)
+// (FFX_DNSR_REFLECTIONS_REPROJECT_SURFACE_DISCARD_VARIANCE_WEIGHT)
+const float u_surface_discard = 1.5;
+// The normals of the reflected history and of the surface are this close at
+// least: it's the same flat surface, the reflected position is seen the same
+// way through it (the history has the normals of the g-buffer in 8 bits)
+const float u_flat_similarity = 0.999;
+// Of a texel of the history: the distance to the plane of the surface which
+// is accepted (relative to the distance to the camera and absolute, in world
+// units), the dot of the normals and the gloss difference
+const float u_plane_rel = 0.01;
+const float u_plane_abs = 0.02;
+const float u_normal_similarity = 0.9;
+const float u_gloss_difference = 0.1;
+// The length of the rays which have no hit (the reflection of the sky)
+const float u_sky_distance = 10000.0;
+// The frames which the history of the reflection of a node which can move has
+// at most (the reflection of a kart is mostly the new one)
+const float u_moving_samples = 2.0;
+
+// ----------------------------------------------------------------------------
+// The clip of a history to a box, towards its center (the ClipAABB of
+// FidelityFX DNSR, from "Temporal Reprojection Anti-Aliasing" of Playdead)
+vec4 clipStochasticReflection(vec4 box_min, vec4 box_max, vec4 history)
+{
+    vec4 center = 0.5 * (box_max + box_min);
+    vec4 extent = 0.5 * (box_max - box_min) + 0.001;
+    vec4 offset = history - center;
+    vec4 unit = abs(offset / extent);
+    float max_unit = max(max(unit.x, unit.y), max(unit.z, unit.w));
+    return max_unit > 1.0 ? center + offset / max_unit : history;
+}   // clipStochasticReflection
+
+// ----------------------------------------------------------------------------
+// The history which the camera of the last frame saw at a position on the
+// surface of the texel (of the normal and the gloss of the texel): the
+// texels of the history around it which have the same surface, weighted
+// bilinearly. confidence is the bilinear weight of them (0 if none), samples
+// the frames which they have, similarity the dot of their normal with the
+// normal, moving is true if one of them reflected a node which can move
+bool getStochasticReflectionHistory(PrevCamera camera, vec3 position,
+                                    vec3 normal, float gloss, ivec4 rect,
+                                    out vec4 radiance, out float samples,
+                                    out float confidence,
+                                    out float similarity, out bool moving)
+{
+    moving = false;
+    radiance = vec4(0.0);
+    samples = 0.0;
+    confidence = 0.0;
+    similarity = 0.0;
+    vec2 uv;
+    if (!getPrevCameraPixel(camera, position, uv))
+        return false;
+    // The texel t is the pixel 2t, the center of the pixel is at 2t + 0.5
+    vec2 coords = (uv - 0.5) * 0.5;
+    ivec2 base = ivec2(floor(coords));
+    vec2 f = coords - vec2(base);
+    float camera_distance = distance(position, camera.m_position.xyz);
+    float tolerance = u_plane_rel * camera_distance + u_plane_abs;
+    for (int i = 0; i < 4; i++)
+    {
+        ivec2 offset = ivec2(i & 1, i >> 1);
+        ivec2 texel = base + offset;
+        ivec2 pixel = getStochasticReflectionPixel(texel);
+        // The rect is the same as the one of the last frame (the history of
+        // this viewport)
+        if (any(lessThan(pixel, rect.xy)) ||
+            any(greaterThanEqual(pixel, rect.zw)))
+            continue;
+        uvec2 surface = imageLoad(u_history_surface_in, texel).xy;
+        if (surface.x == 0u)
+            continue;
+        float dot_normal = dot(getHistorySurfaceNormal(surface.x), normal);
+        if (dot_normal < u_normal_similarity)
+            continue;
+        float history_gloss = float((surface.y >> 16u) & 255u) / 255.0;
+        if (abs(history_gloss - gloss) > u_gloss_difference)
+            continue;
+        vec3 history_position = getPrevCameraPosition(camera,
+            vec2(pixel) + 0.5, getHistorySurfaceDistance(surface.x));
+        if (abs(dot(normal, history_position - position)) > tolerance)
+            continue;
+        float weight = (offset.x == 1 ? f.x : 1.0 - f.x) *
+            (offset.y == 1 ? f.y : 1.0 - f.y);
+        radiance += imageLoad(u_history_in, texel) * weight;
+        moving = moving || (surface.y & (1u << 24u)) != 0u;
+        samples += unpackHalf2x16(surface.y & 0xFFFFu).x * weight;
+        similarity += dot_normal * weight;
+        confidence += weight;
+    }
+    if (confidence < 1e-3)
+    {
+        confidence = 0.0;
+        return false;
+    }
+    radiance /= confidence;
+    samples /= confidence;
+    similarity /= confidence;
+    return true;
+}   // getStochasticReflectionHistory
+
+// ----------------------------------------------------------------------------
+void main()
+{
+    ivec2 texel;
+    if (!getStochasticReflectionTexel(texel))
+        return;
+    ivec2 pixel = getStochasticReflectionPixel(texel);
+    vec4 normal_data = texelFetch(u_normal, pixel, 0);
+    vec3 view_position = getPosFromUVDepth(vec3(vec2(pixel) + 0.5,
+        texelFetch(u_depth, pixel, 0).x), u_camera.m_viewport,
+        u_camera.m_inverse_projection_matrix);
+    vec3 world_position = (u_camera.m_inverse_view_matrix *
+        vec4(view_position, 1.0)).xyz;
+    vec3 camera_position = u_camera.m_inverse_view_matrix[3].xyz;
+    vec3 normal = DecodeNormal(normal_data.xy);
+    float gloss = normal_data.z;
+    float perceptual_roughness = 1.0 - gloss;
+    ivec4 rect = getStochasticReflectionRect(u_camera.m_viewport);
+
+    vec4 current = imageLoad(u_current, texel);
+    vec4 result = current;
+    float samples = 1.0;
+    if (getStochasticReflectionAlpha(perceptual_roughness) >= 1e-4)
+    {
+        // The mean and the deviation of the resolved texels around (3x3,
+        // gaussian weights of the local neighborhood of DNSR) of this
+        // viewport
+        vec4 mean = vec4(0.0);
+        vec4 variance = vec4(0.0);
+        float weight_sum = 0.0;
+        for (int y = -1; y <= 1; y++)
+        {
+            for (int x = -1; x <= 1; x++)
+            {
+                ivec2 around = texel + ivec2(x, y);
+                if (x != 0 || y != 0)
+                {
+                    if (!isStochasticReflectionTexel(around, rect, u_normal,
+                        u_depth))
+                        continue;
+                }
+                vec4 value = x == 0 && y == 0 ? current :
+                    imageLoad(u_current, around);
+                // exp(-3 * i^2 / (radius + 1)^2) of DNSR for a radius of 1
+                float weight = exp(-0.75 * float(x * x)) *
+                    exp(-0.75 * float(y * y));
+                mean += value * weight;
+                variance += value * value * weight;
+                weight_sum += weight;
+            }
+        }
+        mean /= weight_sum;
+        variance = abs(variance / weight_sum - mean * mean);
+        // The average of the traced texels of the tile (the mipmap only
+        // averages the ones of this viewport)
+        int tile_level = textureQueryLevels(u_trace) - 1;
+        vec4 tile = texelFetch(u_trace, min(texel >> tile_level,
+            textureSize(u_trace, tile_level) - 1), tile_level);
+
+        vec4 history = vec4(0.0);
+        float history_samples = 0.0;
+        // The reflection of a node which can move (see
+        // getStochasticReflectionRayLength) in this frame, and in the history
+        bool moving = false;
+        bool history_moving = false;
+        if (pc.m_history != 0u)
+        {
+            PrevCamera camera = u_prev_cameras[pc.m_viewport_index];
+            vec4 surface_history;
+            float surface_samples, surface_confidence, surface_similarity;
+            bool surface_moving;
+            bool has_surface = getStochasticReflectionHistory(camera,
+                world_position, normal, gloss, rect, surface_history,
+                surface_samples, surface_confidence, surface_similarity,
+                surface_moving);
+            // The reflected position, seen through the surface by the
+            // camera of the last frame: where the line to it crosses the
+            // plane of the surface
+            vec4 reflected_history = vec4(0.0);
+            float reflected_samples = 0.0;
+            float reflected_confidence = 0.0;
+            float reflected_similarity = 0.0;
+            bool reflected_moving = false;
+            bool has_reflected = false;
+            // The rays without a hit reflect the sky, which is at infinity
+            // (far enough to have no parallax)
+            float ray_length = imageLoad(u_ray_length, texel).x;
+            moving = ray_length < 0.0;
+            ray_length = abs(ray_length);
+            if (ray_length <= 0.0)
+                ray_length = u_sky_distance;
+            vec3 reflected = world_position + normalize(world_position -
+                camera_position) * ray_length;
+            vec3 line = reflected - camera.m_position.xyz;
+            float along = dot(normal, line);
+            float t = abs(along) > 1e-6 ? dot(normal, world_position -
+                camera.m_position.xyz) / along : -1.0;
+            if (t > 0.0 && t < 1.0)
+            {
+                has_reflected = getStochasticReflectionHistory(camera,
+                    camera.m_position.xyz + line * t, normal, gloss, rect,
+                    reflected_history, reflected_samples,
+                    reflected_confidence, reflected_similarity,
+                    reflected_moving);
+            }
+            float confidence = 0.0;
+            if (has_reflected &&
+                reflected_similarity >= u_flat_similarity &&
+                (!has_surface ||
+                reflected_similarity + 1e-3 > surface_similarity))
+            {
+                history = reflected_history;
+                history_samples = reflected_samples;
+                confidence = reflected_confidence;
+                history_moving = reflected_moving;
+            }
+            else if (has_surface)
+            {
+                vec4 difference = surface_history - mean;
+                if (dot(difference, difference) <
+                    u_surface_discard * length(variance))
+                {
+                    history = surface_history;
+                    history_samples = surface_samples;
+                    confidence = surface_confidence;
+                    history_moving = surface_moving;
+                }
+            }
+            // A history whose half of the bilinear texels are of another
+            // surface is still right (they are not in it), only less
+            history_samples *= clamp(confidence * 2.0, 0.0, 1.0);
+        }
+
+        float max_samples = max(u_min_samples, u_max_samples *
+            (1.0 - exp(-perceptual_roughness * 100.0)));
+        // A node which moves leaves the texels which reflected it too (they
+        // reflect what was behind it now)
+        if (moving || history_moving)
+            max_samples = u_moving_samples;
+        samples = min(max_samples, history_samples + 1.0);
+        vec4 deviation = (sqrt(variance) + length(mean - tile)) *
+            u_clip_scale;
+        mean = mix(mean, tile, u_tile_mix);
+        vec4 clipped = clipStochasticReflection(mean - deviation,
+            mean + deviation, history);
+        // The new radiance is mixed with the average of the tile while the
+        // history has few frames, and its outliers are clipped
+        vec4 signal = mix(current, tile, 1.0 / (samples + 1.0));
+        signal = clipStochasticReflection(tile - deviation, tile + deviation,
+            signal);
+        result = mix(signal, clipped, 1.0 - 1.0 / samples);
+        result = max(result, vec4(0.0));
+        if (any(isnan(result)) || any(isinf(result)))
+        {
+            result = current;
+            samples = 1.0;
+        }
+    }
+    imageStore(u_resolved, texel, result);
+    imageStore(u_history_out, texel, result);
+    uint gloss_bits = uint(round(clamp(gloss, 0.0, 1.0) * 255.0));
+    uint moving_bit = imageLoad(u_ray_length, texel).x < 0.0 ? 1u << 24u : 0u;
+    imageStore(u_history_surface_out, texel, uvec4(packHistorySurface(
+        distance(world_position, camera_position), normal_data.xy),
+        (packHalf2x16(vec2(samples, 0.0)) & 0xFFFFu) | (gloss_bits << 16u) |
+        moving_bit, 0u, 0u));
+}   // main

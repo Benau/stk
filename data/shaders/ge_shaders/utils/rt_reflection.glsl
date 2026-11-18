@@ -256,9 +256,15 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
 
 // Traces a reflected ray, returns false if it has no hit (the caller decides
 // what a miss is, the environment or the lit color which is already there),
-// hdr is the lit color of the closest hit otherwise. direction is normalized
-bool traceReflection(vec3 origin, vec3 direction, out vec3 hdr)
+// hdr is the lit color of the closest hit otherwise, hit_distance its distance
+// from the origin (0 without a hit) and moving is true if it's a node which can
+// move (the static scene is the first instance of GEVulkanRTScene, every
+// other one is a dynamic node or the grass). direction is normalized
+bool traceReflection(vec3 origin, vec3 direction, out vec3 hdr,
+                     out float hit_distance, out bool moving)
 {
+    hit_distance = 0.0;
+    moving = false;
     rayQueryEXT ray_query;
     rayQueryInitializeEXT(ray_query, u_tlas,
         gl_RayFlagsCullBackFacingTrianglesEXT, 0xFF, origin, RT_RAY_MIN,
@@ -270,6 +276,8 @@ bool traceReflection(vec3 origin, vec3 direction, out vec3 hdr)
         hdr = vec3(0.0);
         return false;
     }
+    hit_distance = rayQueryGetIntersectionTEXT(ray_query, true);
+    moving = rayQueryGetIntersectionInstanceIdEXT(ray_query, true) != 0;
     uint geometry_index =
         uint(rayQueryGetIntersectionInstanceCustomIndexEXT(ray_query, true)) +
         uint(rayQueryGetIntersectionGeometryIndexEXT(ray_query, true));
@@ -281,4 +289,12 @@ bool traceReflection(vec3 origin, vec3 direction, out vec3 hdr)
         mat3(rayQueryGetIntersectionObjectToWorldEXT(ray_query, true)),
         origin, direction);
     return true;
+}
+
+// The same without the distance of the hit
+bool traceReflection(vec3 origin, vec3 direction, out vec3 hdr)
+{
+    float hit_distance;
+    bool moving;
+    return traceReflection(origin, direction, hdr, hit_distance, moving);
 }

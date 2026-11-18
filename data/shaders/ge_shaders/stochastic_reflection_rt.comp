@@ -54,9 +54,10 @@ const uint u_max_rays = 8u;
 
 // ----------------------------------------------------------------------------
 float traceStochasticReflectionRay(StochasticReflectionSurface surface,
-                                   ivec2 pixel, vec3 direction, out vec3 hdr)
+                                   ivec2 pixel, vec3 direction, out vec3 hdr,
+                                   out float hit_distance, out bool moving)
 {
     // A ray only misses the sky, the specular IBL is the environment
-    return traceReflection(surface.m_world_position, direction, hdr) ? 1.0 :
-        0.0;
+    return traceReflection(surface.m_world_position, direction, hdr,
+        hit_distance, moving) ? 1.0 : 0.0;
 }   // traceStochasticReflectionRay

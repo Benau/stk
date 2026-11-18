@@ -1,7 +1,10 @@
 #ifndef HEADER_GE_VULKAN_STOCHASTIC_REFLECTION_HPP
 #define HEADER_GE_VULKAN_STOCHASTIC_REFLECTION_HPP
 
+#include "ge_vulkan_prev_camera.hpp"
 #include "ge_vulkan_solid_reflection.hpp"
+
+#include <vector>
 
 namespace GE
 {
@@ -14,8 +17,14 @@ namespace GE
 //
 //   mipmap  : stochastic_reflection_mipmap.comp, the mip chain of the trace
 //             (the average of the traced texels)
-//   resolve : stochastic_reflection_resolve.comp, the spatial filter of the
-//             trace (the prefilter of FidelityFX DNSR) into the output
+//   resolve  : stochastic_reflection_resolve.comp, the spatial filter of the
+//              trace (the prefilter of FidelityFX DNSR) into the output
+//   temporal : with the frame cache (GEConfig::m_frame_cache, it can be
+//              changed at any time), stochastic_reflection_temporal.comp:
+//              the resolve writes another target, which is mixed with the
+//              history of the last frames into the output (the
+//              reprojection and the temporal resolve of FidelityFX DNSR),
+//              and the rays of a texel change with the frame
 //
 // and the output is the radiance premultiplied by its coverage (RGBA16F, half
 // size), which the lighting pass upsamples and mixes with the specular IBL.
@@ -36,7 +45,40 @@ private:
 
     unsigned m_trace_levels;
 
-    // The mipmap and the resolve
+    // The length of the rays of every texel (R32F, half size), written by the
+    // trace for the temporal filter
+    GEVulkanAttachmentTexture* m_ray_length;
+
+    // The output of the resolve with the temporal filter (RGBA16F, half size)
+    GEVulkanAttachmentTexture* m_current;
+
+    // The history of the temporal filter: the radiance (RGBA16F) and the
+    // surface of every texel (RG32UI, see stochastic_reflection_temporal.comp,
+    // 0 where it can't be reused). One is read and the other one written in
+    // a frame, they swap every frame which writes one
+    std::array<GEVulkanAttachmentTexture*, 2> m_history;
+
+    std::array<GEVulkanAttachmentTexture*, 2> m_history_surface;
+
+    // GEVulkanPrevCamera of every viewport of the frame (up to
+    // g_stochastic_max_viewports), updated before its temporal filter
+    VkBuffer m_prev_camera_buffer;
+
+    VmaAllocation m_prev_camera_memory;
+
+    // m_set with the output of the resolve in m_current (for the temporal
+    // filter)
+    VkDescriptorSet m_resolve_set;
+
+    // The set of the temporal filter, set i reads the history i and writes the
+    // other one
+    VkDescriptorSetLayout m_temporal_layout;
+
+    VkDescriptorPool m_temporal_pool;
+
+    std::array<VkDescriptorSet, 2> m_temporal_sets;
+
+    // The mipmap, the resolve and the temporal filter
     VkPipelineLayout m_mipmap_layout;
 
     VkPipeline m_mipmap_pipeline;
@@ -45,6 +87,39 @@ private:
 
     VkPipeline m_resolve_pipeline;
 
+    VkPipelineLayout m_temporal_pipeline_layout;
+
+    VkPipeline m_temporal_pipeline;
+
+    // A viewport which was filtered, the next frame reads its history if it
+    // has the same camera with the same rect
+    struct ViewportHistory
+    {
+        GEVulkanCamera* m_camera;
+        std::array<int32_t, 4> m_rect;
+        GEVulkanPrevCamera m_prev_camera;
+    };
+
+    // The viewports of the last frame which wrote the history, and the ones
+    // of this frame (empty if the frame has no temporal filter)
+    std::vector<ViewportHistory> m_prev_viewports;
+
+    std::vector<ViewportHistory> m_viewports;
+
+    // The frame of the temporal filter (m_frame of the list, never 0)
+    uint32_t m_frame;
+
+    // The history which this frame reads (the index of m_temporal_sets)
+    unsigned m_history_index;
+
+    // This frame has the temporal filter (decided by its first viewport)
+    bool m_temporal;
+
+    // The viewport of the frame which is traced (its GEVulkanPrevCamera in the
+    // buffer), and its history can be read
+    unsigned m_viewport_index;
+
+    bool m_viewport_history;
     // ------------------------------------------------------------------------
     // Destroys what isn't in GEVulkanSolidReflection
     void destroy();
@@ -58,6 +133,10 @@ private:
     // The trace target, half of the size of the FBO, with its views
     void createTraceImage(const irr::core::dimension2d<irr::u32>& size);
     // ------------------------------------------------------------------------
+    // The targets of the temporal filter, the history and m_temporal_sets
+    void createTemporalDescriptors(
+                                 const irr::core::dimension2d<irr::u32>& size);
+    // ------------------------------------------------------------------------
     void createPipelines();
     // ------------------------------------------------------------------------
     // Clears the levels of an image to 0 (it's in the general layout)
@@ -70,8 +149,10 @@ protected:
             "stochastic_reflection_ssr.comp";
     }
     // ------------------------------------------------------------------------
-    // Also clears the trace once per frame
-    virtual void resetList(VkCommandBuffer cmd, bool first);
+    // Also clears the trace (and the history which is written) once per
+    // frame, and updates the camera of the last frame of the viewport
+    virtual void resetList(VkCommandBuffer cmd, bool first,
+                           const Viewport& vp, GEVulkanCamera* cam);
     // ------------------------------------------------------------------------
     // The texels of the half size target whose pixel can be in the rect (the
     // texel t is the pixel 2t)
@@ -82,9 +163,9 @@ protected:
             groups8((rect[3] + 1) / 2 - rect[1] / 2) }};
     }
     // ------------------------------------------------------------------------
-    // The mipmap and the resolve of the viewport
-    virtual void finishTrace(VkCommandBuffer cmd, GEVulkanDrawCall* dc,
-                             const std::array<int32_t, 4>& rect);
+    // The mipmap, the resolve and the temporal filter of the viewport
+    virtual void finishTrace(VkCommandBuffer cmd, const Viewport& vp,
+                             GEVulkanCamera* cam);
 public:
     // ------------------------------------------------------------------------
     GEVulkanStochasticReflection(GEVulkanDriver* vk,
@@ -96,6 +177,11 @@ public:
     ~GEVulkanStochasticReflection();
     // ------------------------------------------------------------------------
     virtual bool isStochastic() const                          { return true; }
+    // ------------------------------------------------------------------------
+    // The screen space trace also writes the length of the rays for the
+    // temporal filter
+    virtual std::vector<std::pair<uint32_t, VkDescriptorType> >
+        getTraceOutputBindings() const;
 };   // GEVulkanStochasticReflection
 
 }

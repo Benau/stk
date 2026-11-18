@@ -8,6 +8,8 @@
 
 #include <array>
 #include <memory>
+#include <utility>
+#include <vector>
 
 namespace GE
 {
@@ -152,9 +154,11 @@ protected:
     }
     // ------------------------------------------------------------------------
     // Empties the list before the classify of a viewport (first is the first
-    // traced viewport of the frame). Every command before which read the list
-    // is before a barrier of transfer writes
-    virtual void resetList(VkCommandBuffer cmd, bool first);
+    // traced viewport of the frame), with the camera of the viewport. Every
+    // command before which read the list is before a barrier of transfer
+    // writes, and the transfers are before the compute shaders after it
+    virtual void resetList(VkCommandBuffer cmd, bool first,
+                           const Viewport& vp, GEVulkanCamera* cam);
     // ------------------------------------------------------------------------
     // The groups of the classify of the pixels of the rect of a viewport
     virtual std::array<uint32_t, 2>
@@ -163,10 +167,10 @@ protected:
         return {{ groups8(rect[2] - rect[0]), groups8(rect[3] - rect[1]) }};
     }
     // ------------------------------------------------------------------------
-    // After the trace of the viewport of the draw call (with its rect in
-    // pixels of the FBO)
-    virtual void finishTrace(VkCommandBuffer cmd, GEVulkanDrawCall* dc,
-                             const std::array<int32_t, 4>& rect)             {}
+    // After the trace of the viewport (its draw call and its rect in pixels of
+    // the FBO) of the camera
+    virtual void finishTrace(VkCommandBuffer cmd, const Viewport& vp,
+                             GEVulkanCamera* cam)                            {}
 public:
     // ------------------------------------------------------------------------
     GEVulkanSolidReflection(GEVulkanDriver* vk,
@@ -202,6 +206,18 @@ public:
     // GEVulkanStochasticReflection) and 1 the list, GEVulkanDeferredFBOSplit
     // copies them to GVDFP_HDR for the screen space trace
     const VkDescriptorSet* getTraceOutputSet() const         { return &m_set; }
+    // ------------------------------------------------------------------------
+    // The bindings of getTraceOutputSet() which the screen space trace uses,
+    // with their type, GVDFP_HDR has them in this order after its samplers
+    virtual std::vector<std::pair<uint32_t, VkDescriptorType> >
+        getTraceOutputBindings() const
+    {
+        return
+        {
+            { 0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE },
+            { 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER }
+        };
+    }
     // ------------------------------------------------------------------------
     // The output is the one of GEVulkanStochasticReflection
     virtual bool isStochastic() const                         { return false; }

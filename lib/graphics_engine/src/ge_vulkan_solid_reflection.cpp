@@ -461,7 +461,9 @@ bool GEVulkanSolidReflection::isTraced(GEVulkanDrawCall* dc) const
 }   // isTraced
 
 // ----------------------------------------------------------------------------
-void GEVulkanSolidReflection::resetList(VkCommandBuffer cmd, bool first)
+void GEVulkanSolidReflection::resetList(VkCommandBuffer cmd, bool first,
+                                        const Viewport& vp,
+                                        GEVulkanCamera* cam)
 {
     // No pixel and no group of the dispatch (x), it has y and z of 1
     vkCmdFillBuffer(cmd, m_list, 0, 2 * sizeof(uint32_t), 0);
@@ -536,7 +538,7 @@ bool GEVulkanSolidReflection::render(VkCommandBuffer cmd, bool rt, bool ssr,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, NULL, 0,
                 NULL);
         }
-        resetList(cmd, first);
+        resetList(cmd, first, vp, q.second);
         first = false;
         {
             VkMemoryBarrier barrier = {};
@@ -576,7 +578,7 @@ bool GEVulkanSolidReflection::render(VkCommandBuffer cmd, bool rt, bool ssr,
                 0, NULL);
         }
         dispatchTrace(cmd, q.first, rt);
-        finishTrace(cmd, q.first, vp.m_rect);
+        finishTrace(cmd, vp, q.second);
         m_traced.push_back(q.first);
         traced = true;
     }

@@ -181,7 +181,7 @@ void GEVulkanSurfelGI::createBuffers()
         sizeof(uint32_t) * CELL_COUNT,
         sizeof(uint32_t) * CELL_COUNT * CELL_CAPACITY,
         sizeof(uint32_t) * CELL_COUNT,
-        sizeof(PrevCamera) * MAX_CAMERAS,
+        sizeof(GEVulkanPrevCamera) * MAX_CAMERAS,
         sizeof(uint32_t) * (4 + m_size.Width * m_size.Height),
         sizeof(uint32_t) * ((m_size.Width + 7) / 8) * ((m_size.Height + 7) / 8),
         sizeof(uint32_t) * (4 * TRACE_LIST_COUNT +
@@ -573,7 +573,7 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
     {
         transferBarrier(cmd, false);
         vkCmdUpdateBuffer(cmd, m_buffers[BI_PREV_CAMERA].m_buffer, 0,
-            sizeof(PrevCamera) * viewport_count, m_prev_cameras.data());
+            sizeof(GEVulkanPrevCamera) * viewport_count, m_prev_cameras.data());
     }
 
     // The depth and the normal of the g-buffer are written, the scene is
@@ -714,21 +714,7 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
         m_history_index = (m_history_index + 1) % m_sets.size();
         m_prev_camera_count = viewport_count;
         for (unsigned i = 0; i < viewport_count; i++)
-        {
-            const GEVulkanCameraUBO* ubo = cameras[i]->getUBOData();
-            PrevCamera& prev = m_prev_cameras[i];
-            memcpy(prev.m_projection_view_matrix,
-                ubo->m_projection_view_matrix.pointer(),
-                sizeof(prev.m_projection_view_matrix));
-            prev.m_viewport[0] = ubo->m_viewport.UpperLeftCorner.X;
-            prev.m_viewport[1] = ubo->m_viewport.UpperLeftCorner.Y;
-            prev.m_viewport[2] = ubo->m_viewport.LowerRightCorner.X;
-            prev.m_viewport[3] = ubo->m_viewport.LowerRightCorner.Y;
-            prev.m_position[0] = ubo->m_inverse_view_matrix[12];
-            prev.m_position[1] = ubo->m_inverse_view_matrix[13];
-            prev.m_position[2] = ubo->m_inverse_view_matrix[14];
-            prev.m_position[3] = 1.0f;
-        }
+            m_prev_cameras[i].set(cameras[i]->getUBOData());
     }
 
     // Sampled by the lighting pass, the surfels are read by the next frame

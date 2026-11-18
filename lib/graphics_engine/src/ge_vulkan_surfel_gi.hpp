@@ -2,6 +2,7 @@
 #define HEADER_GE_VULKAN_SURFEL_GI_HPP
 
 #include "ge_vma.hpp"
+#include "ge_vulkan_prev_camera.hpp"
 #include "ge_vulkan_pipeline_constants.hpp"
 #include "ge_vulkan_post_processing.hpp"
 
@@ -89,7 +90,7 @@ private:
         uint32_t m_surfel_count;
         // CACHE_* bits, see isFrameCache()
         uint32_t m_cache;
-        // The viewport of surfel_gi_apply.comp (its PrevCamera)
+        // The viewport of surfel_gi_apply.comp (its GEVulkanPrevCamera)
         uint32_t m_viewport_index;
         // The list of the surfels which surfel_gi_trace.comp traces with the
         // frame cache (TRACE_*)
@@ -124,18 +125,6 @@ private:
         CACHE_DEFER = 4
     };
 
-    // Same as SurfelPrevCamera of utils/surfel_gi.glsl (std430), the camera of
-    // a viewport in the last frame, which the history of the pixels was
-    // rendered with
-    struct PrevCamera
-    {
-        float m_projection_view_matrix[16];
-        float m_viewport[4];
-        float m_position[4];
-    };
-    static_assert(sizeof(PrevCamera) == 96, "PrevCamera is 96 bytes in the "
-        "shaders");
-
     enum BufferIndex : unsigned
     {
         // The surfels
@@ -147,7 +136,7 @@ private:
         BI_CELL_SURFEL,
         // The number of surfels spawned in every cell in the frame
         BI_CELL_SPAWN,
-        // PrevCamera of every viewport
+        // GEVulkanPrevCamera of every viewport
         BI_PREV_CAMERA,
         // The pixels which can't be reused (the count, the indirect dispatch
         // of surfel_gi_gather.comp and the pixels), and the spawn of every
@@ -245,7 +234,7 @@ private:
     // The camera of every viewport in the last frame, and how many viewports
     // it had (0 if it can't be reused: the cache was off, or the pool was
     // cleared)
-    std::array<PrevCamera, MAX_CAMERAS> m_prev_cameras;
+    std::array<GEVulkanPrevCamera, MAX_CAMERAS> m_prev_cameras;
     unsigned m_prev_camera_count;
 
     // The history which the next frame reads (the index of m_sets)
@@ -258,7 +247,7 @@ private:
     // ------------------------------------------------------------------------
     void createPipelines();
     // ------------------------------------------------------------------------
-    // GERayTracingConfig::m_gi_frame_cache
+    // GEConfig::m_frame_cache
     static bool isFrameCache();
     // ------------------------------------------------------------------------
     void destroyPipelines();

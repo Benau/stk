@@ -143,20 +143,6 @@ layout(std430, set = SURFEL_SET, binding = 7) buffer SurfelCellSpawns
     uint u_cell_spawns[];
 };
 
-// The camera of every viewport in the last frame (same as PrevCamera of
-// GEVulkanSurfelGI), which rendered the history of surfel_gi_apply.comp
-struct SurfelPrevCamera
-{
-    mat4 m_projection_view_matrix;
-    vec4 m_viewport;
-    vec4 m_position;
-};
-
-layout(std430, set = SURFEL_SET, binding = 8) readonly buffer SurfelPrevCameras
-{
-    SurfelPrevCamera u_prev_cameras[];
-};
-
 // With the frame cache, the surfels which surfel_gi_trace.comp traces in the
 // frame, put in 2 lists by surfel_gi_update.comp: the ones which didn't
 // converge (they trace SURFEL_YOUNG_RAY_SCALE times the rays) and the

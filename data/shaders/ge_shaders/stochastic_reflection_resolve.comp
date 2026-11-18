@@ -16,11 +16,14 @@
 // is one ray, it isn't filtered) and with the height of the viewport (it's the
 // same part of the screen whatever the resolution), the taps are the points of
 // a Vogel spiral (spread evenly over the disk) rotated by a random angle per
-// texel, and a tap far from the texel reads a lower level of the mip chain of
-// the trace (the average of the traced texels around it,
-// stochastic_reflection_mipmap.comp) instead of a single noisy texel. A tap
-// never reads the texels of another viewport of the splitscreen, at any
-// level.
+// texel (another one in every frame with the temporal filter), and a tap far
+// from the texel reads a lower level of the mip chain of the trace (the
+// average of the traced texels around it, stochastic_reflection_mipmap.comp)
+// instead of a single noisy texel. A tap never reads the texels of another
+// viewport of the splitscreen, at any level.
+//
+// With the temporal filter (stochastic_reflection_temporal.comp) the output is
+// the input of it, not the target of the lighting pass.
 //
 // Both targets store the radiance premultiplied by its coverage, so the
 // weighted average here is the average of the radiance weighted by the
@@ -99,8 +102,16 @@ void main()
     ivec2 last_texel = (rect.zw + 1) / 2 - 1;
     vec2 size = vec2(textureSize(u_trace, 0));
     float max_level = float(textureQueryLevels(u_trace) - 1);
+    // Another rotation in every frame with the temporal filter, which averages
+    // them
+    uvec2 seed = uvec2(texel);
+    if (u_reflection_list.m_frame != 0u)
+    {
+        seed ^= uvec2(0x9E3779B9u, 0x7F4A7C15u) *
+            u_reflection_list.m_frame;
+    }
     float rotation = 2.0 * 3.14159265359 * (float(
-        hashStochasticReflection(uvec2(texel)).x >> 8u) / 16777216.0);
+        hashStochasticReflection(seed).x >> 8u) / 16777216.0);
 
     // The taps and their edge stopping weight (0 if it's another surface)
     vec4 samples[u_taps + 1];

@@ -9,8 +9,9 @@
 // (stochastic_reflection_ssr.comp) or the ray traced one
 // (stochastic_reflection_rt.comp).
 //
-// FidelityFX traces one ray per pixel and denoises it temporally. There is no
-// reflection history here, so the passes are:
+// FidelityFX traces one ray per pixel and denoises it temporally. Here a
+// texel traces a few rays, so the reflection is usable in a single frame, and
+// the passes are:
 //
 //   classify : stochastic_reflection_classify.comp, the glossy texels of the
 //              half size target are added to a list (one texel is the 2x2
@@ -31,6 +32,14 @@
 //              filter of the trace (the
 //              prefilter of the reflection denoiser of FidelityFX, DNSR),
 //              into the resolved target which the lighting pass reads
+//   temporal : stochastic_reflection_temporal.comp, with the frame cache
+//              (GEConfig::m_frame_cache) only, the texels of the list: the
+//              resolved trace is mixed with the history of the last frames
+//              (the reprojection and the temporal resolve of FidelityFX DNSR,
+//              see there), the resolve writes into another target then and
+//              this one writes the target of the lighting pass. The rays of
+//              a texel are other ones in every frame
+//              (getStochasticReflectionSample), which the history averages
 //
 // The trace target stores the radiance premultiplied by its coverage (rgb *
 // alpha, the alpha is the confidence of the rays over their count) so the
@@ -82,15 +91,17 @@ const uint STOCHASTIC_REFLECTION_THREADS = 8u;
 // The glossy texels (packStochasticReflectionTexel), m_trace_dispatch is the
 // indirect dispatch of the trace (x groups of 64 texels, y is
 // STOCHASTIC_REFLECTION_THREADS) and m_resolve_dispatch the one of the
-// resolve (x groups of 64 texels, one thread each). y and z are written by
-// GEVulkanSolidReflection before the classify
+// resolve and the temporal filter (x groups of 64 texels, one thread each). y
+// and z are written by GEVulkanStochasticReflection before the classify, and
+// m_frame: the frame of the temporal filter, never 0, or 0 without it (the
+// rays of a texel are the same in every frame then)
 layout(std430, set = SOLID_REFLECTION_SET,
     binding = SOLID_REFLECTION_BINDING + 1) buffer StochasticReflectionList
 {
     uint m_count;
     uint m_trace_dispatch[3];
     uint m_resolve_dispatch[3];
-    uint m_padding;
+    uint m_frame;
     uint m_texels[];
 } u_reflection_list;
 
@@ -193,13 +204,25 @@ uvec2 hashStochasticReflection(uvec2 v)
 // (the 2D golden ratio, the points of a texel are spread evenly whatever their
 // count) shifted by a random offset per texel (Cranley-Patterson rotation),
 // so neighboring texels trace different directions which the resolve
-// averages. It doesn't change with the frame: without a temporal filter a new
-// pattern every frame would flicker, this one stays still with the camera
-vec2 getStochasticReflectionSample(ivec2 texel, uint i)
+// averages. Without the temporal filter (m_frame 0) it doesn't change with the
+// frame: a new pattern every frame would flicker, this one stays still with
+// the camera. With it, the sequence of a texel goes on in the next frame (the
+// rays of the frame f are the points f * rays to f * rays + rays - 1), so the
+// history averages more and more points of the same well spread sequence. The
+// sequence is in 32 bit fixed point there (its wrap is the fract, exactly in
+// every frame)
+vec2 getStochasticReflectionSample(ivec2 texel, uint i, uint rays)
 {
-    vec2 offset = vec2(hashStochasticReflection(uvec2(texel)) >> 8u) /
-        16777216.0;
-    return fract(offset + float(i) * vec2(0.7548776662, 0.5698402910));
+    uvec2 seed = hashStochasticReflection(uvec2(texel));
+    if (u_reflection_list.m_frame == 0u)
+    {
+        vec2 offset = vec2(seed >> 8u) / 16777216.0;
+        return fract(offset + float(i) * vec2(0.7548776662, 0.5698402910));
+    }
+    // 0.7548776662 * 2^32 and 0.5698402910 * 2^32
+    const uvec2 step = uvec2(3242174889u, 2447445414u);
+    uvec2 point = seed + (u_reflection_list.m_frame * rays + i) * step;
+    return vec2(point >> 8u) / 16777216.0;
 }   // getStochasticReflectionSample
 
 // ----------------------------------------------------------------------------
@@ -271,18 +294,40 @@ struct StochasticReflectionSum
     vec4 m_radiance;
     // The rays which were traced (the ones below the surface aren't)
     float m_rays;
+    // The distance of the hits weighted by their confidence (the length of
+    // the ray of the reflection, for the temporal filter)
+    float m_distance;
+    // The confidence of the hits on a node which can move
+    float m_moving;
 };
 
 // ----------------------------------------------------------------------------
 void addStochasticReflectionRay(inout StochasticReflectionSum sum,
-                                vec3 radiance, float confidence)
+                                vec3 radiance, float confidence,
+                                float hit_distance, bool moving)
 {
     // A float target can't store more than 65504, a hit can be brighter
     // (an emissive surface, the sun)
     sum.m_radiance += vec4(min(radiance, vec3(1024.0)) * confidence,
         confidence);
     sum.m_rays += 1.0;
+    sum.m_distance += hit_distance * confidence;
+    sum.m_moving += moving ? confidence : 0.0;
 }   // addStochasticReflectionRay
+
+// ----------------------------------------------------------------------------
+// The length of the rays of a texel to their hits (their average, weighted by
+// the confidence of the hits), 0 if no ray has a hit. The temporal filter
+// reprojects the reflected position with it. It's negative if a ray hit a node
+// which can move: there are no motion vectors, the history of its reflection
+// is somewhere else, so the temporal filter keeps few frames of it
+float getStochasticReflectionRayLength(StochasticReflectionSum sum)
+{
+    if (sum.m_radiance.w <= 0.0)
+        return 0.0;
+    float ray_length = max(sum.m_distance / sum.m_radiance.w, 1e-3);
+    return sum.m_moving > 0.0 ? -ray_length : ray_length;
+}   // getStochasticReflectionRayLength
 
 // ----------------------------------------------------------------------------
 // The output of the trace of a texel: the average radiance premultiplied by
@@ -333,13 +378,26 @@ StochasticReflectionSurface getStochasticReflectionSurface(ivec2 pixel)
 #ifdef STOCHASTIC_REFLECTION_TRACE
 // The main of the trace shaders, which define the trace of a ray after they
 // include this: the confidence of the ray of the world space direction from
-// the surface (0 if it has no hit) and the radiance of its hit (hdr). They
+// the surface (0 if it has no hit), the radiance of its hit (hdr), its
+// distance from the surface (hit_distance, in world units) and if it's a node
+// which can move (moving). They
 // declare u_trace (level 0 of the trace target) and u_max_rays (the rays of
 // the roughest surface, see getStochasticReflectionRays) before, and have 64
 // threads in a group
 float traceStochasticReflectionRay(StochasticReflectionSurface surface,
                                    ivec2 pixel, vec3 direction,
-                                   out vec3 hdr);
+                                   out vec3 hdr, out float hit_distance,
+                                   out bool moving);
+
+// The length of the rays of the texels (getStochasticReflectionRayLength),
+// only written with the temporal filter. It's binding 7 of the set of the
+// reflection, the screen space trace has it in GVDFP_HDR after the list
+#ifndef STOCHASTIC_REFLECTION_RAY_LENGTH_BINDING
+#define STOCHASTIC_REFLECTION_RAY_LENGTH_BINDING 7
+#endif
+layout(set = SOLID_REFLECTION_SET,
+    binding = STOCHASTIC_REFLECTION_RAY_LENGTH_BINDING, r32f) uniform
+    writeonly image2D u_ray_length;
 
 // The sums of the rays of each thread of the group
 shared StochasticReflectionSum s_stochastic_sums[64];
@@ -357,7 +415,8 @@ void main()
     const bool valid = index < u_reflection_list.m_count;
     ivec2 texel = ivec2(0);
     StochasticReflectionSurface surface;
-    StochasticReflectionSum sum = StochasticReflectionSum(vec4(0.0), 0.0);
+    StochasticReflectionSum sum = StochasticReflectionSum(vec4(0.0), 0.0,
+        0.0, 0.0);
     if (valid)
     {
         texel = unpackStochasticReflectionTexel(
@@ -372,15 +431,18 @@ void main()
         {
             vec3 direction = sampleStochasticReflection(
                 surface.m_world_eyedir, surface.m_world_normal, alpha,
-                getStochasticReflectionSample(texel, i));
+                getStochasticReflectionSample(texel, i, rays));
             // Below the surface of the normal map, the ray would hit the
             // mesh itself
             if (dot(direction, surface.m_world_normal) <= 0.0)
                 continue;
             vec3 hdr;
+            float hit_distance;
+            bool moving;
             float confidence = traceStochasticReflectionRay(surface, pixel,
-                direction, hdr);
-            addStochasticReflectionRay(sum, hdr, confidence);
+                direction, hdr, hit_distance, moving);
+            addStochasticReflectionRay(sum, hdr, confidence, hit_distance,
+                moving);
         }
     }
     s_stochastic_sums[lane] = sum;
@@ -392,9 +454,16 @@ void main()
         {
             sum.m_radiance += s_stochastic_sums[lane + i].m_radiance;
             sum.m_rays += s_stochastic_sums[lane + i].m_rays;
+            sum.m_distance += s_stochastic_sums[lane + i].m_distance;
+            sum.m_moving += s_stochastic_sums[lane + i].m_moving;
         }
         imageStore(u_trace, texel, getStochasticReflectionOutput(sum,
             surface.m_gloss));
+        if (u_reflection_list.m_frame != 0u)
+        {
+            imageStore(u_ray_length, texel,
+                vec4(getStochasticReflectionRayLength(sum)));
+        }
     }
 }   // main
 #endif

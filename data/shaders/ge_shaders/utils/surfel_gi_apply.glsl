@@ -49,7 +49,8 @@ layout(set = 2, binding = 1) uniform sampler2D u_normal;
 layout(set = 2, binding = 2, rgba16f) uniform writeonly image2D u_out;
 // The history of the last frame and the one of this frame (the next frame
 // reads it), the irradiance (packSurfelIrradiance) and the surface
-// (packSurfelHistorySurface) of a pixel, 0 if it can't be reused
+// (packHistorySurface of utils/prev_camera.glsl) of a pixel, 0 if it can't be
+// reused
 layout(set = 2, binding = 12, rg32ui) uniform readonly uimage2D u_history_in;
 layout(set = 2, binding = 13, rg32ui) uniform writeonly uimage2D u_history_out;
 
@@ -81,6 +82,14 @@ layout(std430, set = 2, binding = 10) buffer SurfelTileSpawns
 #include "rt_utils.glsl"
 #include "rt_scene.glsl"
 #include "surfel_gi.glsl"
+#include "prev_camera.glsl"
+
+// The camera of every viewport in the last frame (GEVulkanPrevCamera), which
+// rendered the history
+layout(std430, set = SURFEL_SET, binding = 8) readonly buffer SurfelPrevCameras
+{
+    PrevCamera u_prev_cameras[];
+};
 
 // A pixel less covered than it gets a new surfel
 const float SURFEL_SPAWN_COVERAGE = 0.5;
@@ -350,47 +359,22 @@ vec3 unpackSurfelIrradiance(uint packed)
 }   // unpackSurfelIrradiance
 
 // ----------------------------------------------------------------------------
-// The distance to the camera (half float) and the normal of the g-buffer (8
-// bits for both of its components), never 0 (the camera is not on the
-// surface)
-uint packSurfelHistorySurface(float camera_distance, vec2 encoded_normal)
-{
-    uvec2 normal = uvec2(round(clamp(encoded_normal, 0.0, 1.0) * 255.0));
-    return (packHalf2x16(vec2(camera_distance, 0.0)) & 0xFFFFu) |
-        (normal.x << 16u) | (normal.y << 24u);
-}   // packSurfelHistorySurface
-
-// ----------------------------------------------------------------------------
 // The irradiance of a position in the history, if the camera of the last frame
-// saw it at a pixel which can be reused: the surface there is the same, it has
-// the same distance from that camera (it's not hidden by something closer, or
-// the pixel is the one of another surface behind it) and the same normal (the
-// pixel is not on the other side of a corner)
+// saw it at a pixel which can be reused (isHistorySurface)
 bool getSurfelHistory(SurfelPixel p, out vec3 irradiance)
 {
     irradiance = vec3(0.0);
-    SurfelPrevCamera camera = u_prev_cameras[pc.m_viewport_index];
-    vec4 clip = camera.m_projection_view_matrix * vec4(p.m_position, 1.0);
-    if (clip.w <= 0.0)
+    PrevCamera camera = u_prev_cameras[pc.m_viewport_index];
+    vec2 uv;
+    if (!getPrevCameraPixel(camera, p.m_position, uv))
         return false;
-    // The inverse of getPosFromUVDepth
-    vec2 uv = camera.m_viewport.xy + (clip.xy / clip.w * 0.5 + 0.5) *
-        camera.m_viewport.zw;
     ivec2 pixel = ivec2(floor(uv));
     if (any(lessThan(pixel, pc.m_rect.xy)) ||
         any(greaterThanEqual(pixel, pc.m_rect.zw)))
         return false;
     uvec2 history = imageLoad(u_history_in, pixel).xy;
-    if (history.y == 0u)
-        return false;
-    float history_distance = unpackHalf2x16(history.y & 0xFFFFu).x;
-    float camera_distance = distance(p.m_position, camera.m_position.xyz);
-    if (abs(history_distance - camera_distance) >
-        camera_distance * 0.01 + 0.01)
-        return false;
-    vec2 history_normal =
-        vec2(uvec2(history.y >> 16u, history.y >> 24u) & 255u) / 255.0;
-    if (dot(DecodeNormal(history_normal), p.m_normal) < 0.9)
+    if (!isHistorySurface(history.y, distance(p.m_position,
+        camera.m_position.xyz), p.m_normal))
         return false;
     irradiance = unpackSurfelIrradiance(history.x);
     return true;
@@ -416,7 +400,7 @@ void storeSurfelPixel(ivec2 pixel, SurfelPixel p, vec4 gi, bool cacheable)
     if (cacheable)
     {
         history = uvec2(packSurfelIrradiance(gi.rgb),
-            packSurfelHistorySurface(distance(p.m_position,
+            packHistorySurface(distance(p.m_position,
             u_camera.m_inverse_view_matrix[3].xyz), p.m_encoded_normal));
     }
     imageStore(u_history_out, pixel, uvec4(history, 0u, 0u));
