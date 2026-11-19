@@ -13,6 +13,7 @@ import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.content.res.Configuration;
@@ -244,9 +245,41 @@ public class SuperTuxKartActivity extends SDLActivity
         m_stk_edittext.setVisibility(View.GONE);
     }
     // ------------------------------------------------------------------------
+    private boolean isSquareScreen()
+    {
+        DisplayMetrics dm = new DisplayMetrics();
+        getWindowManager().getDefaultDisplay().getRealMetrics(dm);
+        float w = dm.widthPixels, h = dm.heightPixels;
+        return Math.abs(w - h) / Math.max(w, h) < 0.05f;
+    }
+    // ------------------------------------------------------------------------
+    private void updateOrientationLock()
+    {
+        setRequestedOrientation(isSquareScreen() ?
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED :
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+    }
+    // ------------------------------------------------------------------------
+    @Override
+    public void onConfigurationChanged(Configuration newConfig)
+    {
+        super.onConfigurationChanged(newConfig);
+        updateOrientationLock();   // re-evaluate after fold/unfold
+    }
+    // ------------------------------------------------------------------------
+    @Override
+    public void setOrientationBis(int w, int h, boolean resizable, String hint)
+    {
+        // STK decides the orientation itself; ignore SDL's hint-based logic
+        updateOrientationLock();
+    }
+    // ------------------------------------------------------------------------
     @Override
     public void onCreate(Bundle instance)
     {
+        // Replaces the manifest lock, as early as possible to avoid a portrait
+        // flash
+        updateOrientationLock();
         super.onCreate(instance);
         m_keyboard_height = new AtomicInteger();
         m_moved_height = new AtomicInteger();
