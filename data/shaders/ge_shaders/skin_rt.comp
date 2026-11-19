@@ -76,8 +76,10 @@ void main()
         weight_01.y * u_skinning_matrices.m_mat[max(joint[1] + pc.m_skinning_offset, 0)] +
         weight_23.x * u_skinning_matrices.m_mat[max(joint[2] + pc.m_skinning_offset, 0)] +
         weight_23.y * u_skinning_matrices.m_mat[max(joint[3] + pc.m_skinning_offset, 0)];
-    vec3 world_position =
-        (pc.m_world * (joint_matrix * vec4(position, 1.0))).xyz;
+    // The half weights can sum to slightly less or more than one. As in
+    // spm_skinning.vert, apply the node translation once to the skinned xyz.
+    vec3 skinned_position = (joint_matrix * vec4(position, 1.0)).xyz;
+    vec3 world_position = (pc.m_world * vec4(skinned_position, 1.0)).xyz;
     vec3 world_normal = normalize(
         mat3(pc.m_world) * (joint_matrix * vec4(normal, 0.0)).xyz);
     // A mesh without tangents has a zero one
