@@ -1,8 +1,18 @@
+#ifdef SUBGROUP_BALLOT
+#extension GL_KHR_shader_subgroup_ballot : require
+#endif
 // First pass of GEVulkanSolidReflection (see utils/solid_reflection.glsl), one
-// thread per pixel of the viewport of a camera (pc.m_rect), in 8x8 tiles: the
-// glossy pixels of a tile are added to the list together (one atomic of the
-// list for the tile).
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+// thread per pixel of the viewport of a camera (pc.m_rect), in groups of two
+// tiles of 8x8 pixels side by side: the glossy pixels of a tile are added to
+// the list together, so a group of the trace (64 threads) has the pixels of a
+// tile, the trace is slower with pixels farther apart (a row of 16x4 pixels).
+// Groups of 128 threads are for Turnip, it runs a group of 64 threads or fewer
+// in a wave of 64 (half of a wave of 128, which fragment shaders get).
+//
+// With SUBGROUP_BALLOT a subgroup adds its glossy pixels with one atomic of the
+// list (no shared memory and barriers), else the group does with a shared
+// counter
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 2) uniform sampler2D u_normal;
 layout(set = 0, binding = 3) uniform sampler2D u_depth;
@@ -16,16 +26,23 @@ layout(push_constant) uniform PushConstants
 #include "utils/constants_utils.glsl"
 #include "utils/solid_reflection.glsl"
 
+#ifndef SUBGROUP_BALLOT
 shared uint s_count;
 shared uint s_first;
+#endif
 
 void main()
 {
+#ifndef SUBGROUP_BALLOT
     if (gl_LocalInvocationIndex == 0u)
         s_count = 0u;
     barrier();
+#endif
 
-    const ivec2 pixel = pc.m_rect.xy + ivec2(gl_GlobalInvocationID.xy);
+    // The first 64 threads are the left tile, in rows of 8 pixels
+    const uint i = gl_LocalInvocationIndex;
+    const ivec2 pixel = pc.m_rect.xy + ivec2(gl_WorkGroupID.xy) * ivec2(16, 8) +
+        ivec2(i % 8u + (i / 64u) * 8u, (i / 8u) % 8u);
     const bool inside = all(lessThan(pixel, pc.m_rect.zw));
     bool glossy = false;
     // The sky (reverse z, depth 0) reflects nothing
@@ -35,6 +52,27 @@ void main()
             SOLID_REFLECTION_MIN_GLOSS &&
             texelFetch(u_depth, pixel, 0).x != 0.0;
     }
+#ifdef SUBGROUP_BALLOT
+    // The count is the same in the subgroup, the whole subgroup returns
+    const uvec4 ballot = subgroupBallot(glossy);
+    const uint count = subgroupBallotBitCount(ballot);
+    if (count == 0u)
+        return;
+    uint first = 0u;
+    if (subgroupElect())
+    {
+        first = atomicAdd(u_reflection_list.m_count, count);
+        atomicMax(u_reflection_list.m_dispatch[0],
+            (first + count + 63u) / 64u);
+    }
+    first = subgroupBroadcastFirst(first);
+    if (glossy)
+    {
+        u_reflection_list.m_pixels[first +
+            subgroupBallotExclusiveBitCount(ballot)] =
+            packSolidReflectionPixel(pixel);
+    }
+#else
     uint slot = 0u;
     if (glossy)
         slot = atomicAdd(s_count, 1u);
@@ -51,4 +89,5 @@ void main()
         u_reflection_list.m_pixels[s_first + slot] =
             packSolidReflectionPixel(pixel);
     }
+#endif
 }

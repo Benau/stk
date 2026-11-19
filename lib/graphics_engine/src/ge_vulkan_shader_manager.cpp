@@ -122,6 +122,8 @@ void updatePredefines()
 
     if (GEVulkanFeatures::isTiledGPU())
         oss << "#define TILED_GPU\n";
+    if (GEVulkanFeatures::supportsSubgroupBallot())
+        oss << "#define SUBGROUP_BALLOT\n";
     g_predefines = oss.str();
 }   // updatePredefines
 
@@ -218,6 +220,15 @@ std::vector<uint32_t> compileShader(shaderc_shader_kind kind,
     {
         shaderc_compile_options_set_target_env(res.options,
             shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
+    }
+    // Subgroup operations need SPIR-V 1.3 (Vulkan 1.1), only for the shaders
+    // using them when they are supported (else SUBGROUP_BALLOT isn't defined
+    // and they don't)
+    else if (GEVulkanFeatures::supportsSubgroupBallot() &&
+        shader_data.find("GL_KHR_shader_subgroup") != std::string::npos)
+    {
+        shaderc_compile_options_set_target_env(res.options,
+            shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_1);
     }
     struct FileIncluder
     {

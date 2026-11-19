@@ -38,6 +38,7 @@ bool g_supports_shader_storage_image_extended_format = false;
 bool g_supports_dynamic_rendering = false;
 bool g_supports_dynamic_rendering_local_read = false;
 bool g_supports_ray_query = false;
+bool g_supports_subgroup_ballot = false;
 uint32_t g_as_max_geometry_count = 0;
 uint32_t g_as_scratch_alignment = 256;
 // Textures can be an array in shader (before the overrides which make the mesh
@@ -318,6 +319,27 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
         g_slow_bind_all_textures = atoi(force_per_material) != 0;
     g_tiled_gpu = isTiledGPUDriver(g_driver_id);
 
+    // Subgroup operations are core in Vulkan 1.1 (SPIR-V 1.3), the stages
+    // and operations which have them are properties of the device
+    g_supports_subgroup_ballot = false;
+    if (vkGetPhysicalDeviceProperties2 &&
+        vk->getPhysicalDeviceProperties().apiVersion >= VK_API_VERSION_1_1)
+    {
+        VkPhysicalDeviceProperties2 properties = {};
+        properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        VkPhysicalDeviceSubgroupProperties subgroup_properties = {};
+        subgroup_properties.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+        properties.pNext = &subgroup_properties;
+        vkGetPhysicalDeviceProperties2(vk->getPhysicalDevice(), &properties);
+        const VkSubgroupFeatureFlags ballot = VK_SUBGROUP_FEATURE_BASIC_BIT |
+            VK_SUBGROUP_FEATURE_BALLOT_BIT;
+        g_supports_subgroup_ballot =
+            (subgroup_properties.supportedStages &
+            VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+            (subgroup_properties.supportedOperations & ballot) == ballot;
+    }
+
     // Ray query needs Vulkan 1.2 (buffer device address and SPIR-V 1.4 are
     // core), the mesh textures (as an array) for hit shading, and the
     // descriptor sets of the ray traced passes: the trace of the reflection
@@ -429,6 +451,9 @@ void GEVulkanFeatures::printStats()
         "Vulkan supports shader draw parameters",
         g_supports_shader_draw_parameters ? "true" : "false");
     os::Printer::log(
+        "Vulkan supports subgroup ballot in compute shaders",
+        g_supports_subgroup_ballot ? "true" : "false");
+    os::Printer::log(
         "Vulkan supports s3 texture compression (bc3, dxt5)",
         g_supports_s3tc_bc3 ? "true" : "false");
     os::Printer::log(
@@ -535,6 +560,12 @@ bool GEVulkanFeatures::supportsShaderDrawParameters()
 {
     return g_supports_shader_draw_parameters;
 }   // supportsShaderDrawParameters
+
+// ----------------------------------------------------------------------------
+bool GEVulkanFeatures::supportsSubgroupBallot()
+{
+    return g_supports_subgroup_ballot;
+}   // supportsSubgroupBallot
 
 // ----------------------------------------------------------------------------
 bool GEVulkanFeatures::supportsS3TCBC3()

@@ -48,6 +48,10 @@ bool supportsComputeInMainQueue();
  // ----------------------------------------------------------------------------
 bool supportsShaderDrawParameters();
 // ----------------------------------------------------------------------------
+// The basic and ballot subgroup operations in compute shaders (SUBGROUP_BALLOT
+// in the shaders, which are compiled for SPIR-V 1.3 if they use them)
+bool supportsSubgroupBallot();
+// ----------------------------------------------------------------------------
 bool supportsS3TCBC3();
 // ----------------------------------------------------------------------------
 bool supportsBPTCBC7();

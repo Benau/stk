@@ -164,7 +164,10 @@ protected:
     virtual std::array<uint32_t, 2>
                     getClassifyGroups(const std::array<int32_t, 4>& rect) const
     {
-        return {{ groups8(rect[2] - rect[0]), groups8(rect[3] - rect[1]) }};
+        // Groups of 128 threads, two tiles of 8x8 pixels side by side (see
+        // solid_reflection_classify.comp)
+        return {{ (groups8(rect[2] - rect[0]) + 1) / 2,
+            groups8(rect[3] - rect[1]) }};
     }
     // ------------------------------------------------------------------------
     // After the trace of the viewport (its draw call and its rect in pixels of
