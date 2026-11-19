@@ -22,6 +22,7 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.drawable.BitmapDrawable;
+import android.graphics.Paint;
 import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Build;
@@ -64,9 +65,37 @@ import org.minidns.record.TXT;
 
 public class SuperTuxKartActivity extends SDLActivity
 {
+    private static class SplashView extends View
+    {
+        private final Bitmap m_logo;
+        private final Rect m_src;
+        private final Rect m_dest = new Rect();
+        private final Paint m_paint = new Paint(Paint.FILTER_BITMAP_FLAG);
+        // --------------------------------------------------------------------
+        SplashView(Context context, Bitmap logo)
+        {
+            super(context);
+            m_logo = logo;
+            m_src = new Rect(0, 0, logo.getWidth(), logo.getHeight());
+            setBackgroundColor(Color.argb(255, 168, 168, 168));
+        }
+        // --------------------------------------------------------------------
+        @Override
+        protected void onDraw(Canvas canvas)
+        {
+            int w = getWidth();
+            int h = getHeight();
+            // STK logo is a square
+            int s = Math.min(w, h) / 2;
+            m_dest.set(w / 2 - s / 2, h / 2 - s / 2,
+                w / 2 - s / 2 + s, h / 2 - s / 2 + s);
+            canvas.drawBitmap(m_logo, m_src, m_dest, m_paint);
+        }
+    }
+
     private AlertDialog m_progress_dialog;
     private ProgressBar m_progress_bar;
-    private ImageView m_splash_screen;
+    private View m_splash_screen;
     private STKEditText m_stk_edittext;
     private int m_bottom_y;
     private int m_intial_orientation;
@@ -314,40 +343,12 @@ public class SuperTuxKartActivity extends SDLActivity
         InputStream istr = null;
         try
         {
-            LinearLayout ll = new LinearLayout(this);
             LinearLayout.LayoutParams ll_param = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT);
-            ll.setLayoutParams(ll_param);
-
-            WindowManager wm =
-                (WindowManager)getSystemService(Context.WINDOW_SERVICE);
-            DisplayMetrics display_metrics = new DisplayMetrics();
-            wm.getDefaultDisplay().getMetrics(display_metrics);
-            Bitmap.Config conf = Bitmap.Config.ARGB_8888;
-            int w = display_metrics.widthPixels;
-            int h = display_metrics.heightPixels;
-            Bitmap scaled = Bitmap.createBitmap(w, h, conf);
-
-            Canvas canvas = new Canvas(scaled);
             istr = getAssets().open("data/gui/icons/logo.png");
             Bitmap logo = BitmapFactory.decodeStream(istr);
-            Rect src = new Rect(0, 0, logo.getWidth(), logo.getHeight());
-            // STK logo is a square
-            int target_size = w;
-            if (target_size > h)
-                target_size = h;
-            target_size /= 2;
-            Rect dest = new Rect(w / 2 - target_size / 2,
-                h / 2 - target_size / 2,
-                w / 2 - target_size / 2 + target_size,
-                h / 2 - target_size / 2 + target_size);
-            canvas.drawBitmap(logo, src, dest, null);
-
-            m_splash_screen = new ImageView(this);
-            m_splash_screen.setBackgroundColor(Color.argb(255, 168, 168, 168));
-            m_splash_screen.setImageDrawable(new BitmapDrawable(getResources(),
-                scaled));
+            m_splash_screen = new SplashView(this, logo);
             addContentView(m_splash_screen, ll_param);
         }
         catch (Exception e) {}
