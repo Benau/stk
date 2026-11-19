@@ -16,6 +16,11 @@
 //  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "guiengine/engine.hpp"
+#ifdef MOBILE_STK
+#include "guiengine/scalable_font.hpp"
+#include "utils/string_utils.hpp"
+#include "utils/time.hpp"
+#endif
 #include "guiengine/modaldialog.hpp"
 #include "guiengine/screen_keyboard.hpp"
 #include "guiengine/widgets/text_box_widget.hpp"
@@ -36,12 +41,118 @@ class MyCGUIEditBox : public CGUIEditBox
 {
     PtrVector<GUIEngine::ITextBoxWidgetListener, REF> m_listeners;
 
+#ifdef MOBILE_STK
+    enum class PasteTip { Hidden, Holding, Visible, Pressed };
+    PasteTip m_paste_tip;
+    core::position2di m_press_pos;
+    uint64_t m_long_press_time;
+    core::recti m_paste_rect;
+    core::stringw m_paste_label;
+    GUIEngine::SkinWidgetContainer m_paste_skin;
+
+    void checkLongPress()
+    {
+        if (m_paste_tip != PasteTip::Holding ||
+            StkTime::getMonoTimeMs() < m_long_press_time)
+            return;
+        m_paste_label = _("Paste");
+        const auto size = GUIEngine::getSmallFont()->getDimension(
+            m_paste_label.c_str());
+        m_paste_rect = core::recti(0, 0, size.Width + size.Height,
+            std::max<s32>(size.Height, AbsoluteClippingRect.getHeight()));
+        m_paste_tip = PasteTip::Visible;
+    }
+
+    void trackLongPress(const SEvent::SMouseInput& mouse)
+    {
+        const core::position2di pos(mouse.X, mouse.Y);
+        if (mouse.Event == EMIE_LMOUSE_PRESSED_DOWN &&
+            AbsoluteClippingRect.isPointInside(pos))
+        {
+            m_press_pos = pos;
+            m_long_press_time = StkTime::getMonoTimeMs() + 500;
+            m_paste_tip = PasteTip::Holding;
+        }
+        else if (MouseMarking && (mouse.Event == EMIE_MOUSE_MOVED ||
+                 mouse.Event == EMIE_LMOUSE_LEFT_UP))
+        {
+            const s32 slop = std::max(1, AbsoluteClippingRect.getHeight() / 4);
+            if (pos.getDistanceFromSQ(m_press_pos) > slop * slop)
+                m_paste_tip = PasteTip::Hidden;
+            if (mouse.Event == EMIE_LMOUSE_LEFT_UP)
+            {
+                checkLongPress();
+                if (m_paste_tip == PasteTip::Holding)
+                    m_paste_tip = PasteTip::Hidden;
+            }
+        }
+    }
+
+public:
+    void drawPasteTip()
+    {
+        if (!isVisible() || !isEnabled())
+        {
+            m_paste_tip = PasteTip::Hidden;
+            return;
+        }
+        checkLongPress();
+        if (m_paste_tip != PasteTip::Visible && m_paste_tip != PasteTip::Pressed)
+            return;
+
+        auto* device = GUIEngine::getDevice();
+        const auto screen = Environment->getRootGUIElement()->getAbsolutePosition();
+        const s32 gap = std::max(1, m_paste_rect.getHeight() / 4);
+        const s32 moved = device->getMovedHeight();
+        const s32 keyboard = device->getOnScreenKeyboardHeight();
+        const core::recti bounds(screen.UpperLeftCorner.X + device->getLeftPadding() + gap,
+            moved + device->getTopPadding() + gap,
+            screen.LowerRightCorner.X - device->getRightPadding() - gap,
+            screen.LowerRightCorner.Y + moved - std::max(keyboard, device->getBottomPadding()) - gap);
+        const s32 caret_x = CurrentTextRect.UpperLeftCorner.X + m_cursor_distance;
+        s32 top = AbsoluteClippingRect.UpperLeftCorner.Y - gap - m_paste_rect.getHeight();
+        if (top < bounds.UpperLeftCorner.Y)
+            top = AbsoluteClippingRect.LowerRightCorner.Y + gap;
+        m_paste_rect = core::recti(core::position2di(caret_x - m_paste_rect.getWidth() / 2, top),
+                                   m_paste_rect.getSize());
+        m_paste_rect.constrainTo(bounds);
+        GUIEngine::Skin* skin = GUIEngine::getSkin();
+        skin->drawMessage(&m_paste_skin, m_paste_rect, "tooltip::neutral");
+        GUIEngine::getSmallFont()->draw(m_paste_label, m_paste_rect,
+            skin->getColor("text::neutral"), true, true, &m_paste_rect);
+    }
+
+    bool handlePasteTipMouse(const SEvent::SMouseInput& mouse)
+    {
+        if (m_paste_tip != PasteTip::Visible && m_paste_tip != PasteTip::Pressed)
+            return false;
+        const bool inside = m_paste_rect.isPointInside({mouse.X, mouse.Y});
+        if (m_paste_tip == PasteTip::Pressed)
+        {
+            if (mouse.Event == EMIE_LMOUSE_LEFT_UP)
+            {
+                m_paste_tip = PasteTip::Hidden;
+                if (inside && pasteFromClipboard())
+                    handleTextUpdated();
+            }
+            return true;
+        }
+        if (mouse.Event == EMIE_LMOUSE_PRESSED_DOWN)
+            m_paste_tip = inside ? PasteTip::Pressed : PasteTip::Hidden;
+        return inside && !MouseMarking;
+    }
+#endif
+
 public:
 
     MyCGUIEditBox(const wchar_t* text, bool border, gui::IGUIEnvironment* environment,
                  gui:: IGUIElement* parent, s32 id, const core::rect<s32>& rectangle) :
         CGUIEditBox(text, border, environment, parent, id, rectangle)
     {
+#ifdef MOBILE_STK
+        m_paste_tip = PasteTip::Hidden;
+        m_long_press_time = 0;
+#endif
     }
 
     void addListener(GUIEngine::ITextBoxWidgetListener* listener)
@@ -56,6 +167,9 @@ public:
 
     void handleTextUpdated()
     {
+#ifdef MOBILE_STK
+        m_paste_tip = PasteTip::Hidden;
+#endif
         for (unsigned n = 0; n < m_listeners.size(); n++)
             m_listeners[n].onTextUpdated();
         GUIEngine::setWithinATextBox(true);
@@ -83,6 +197,15 @@ public:
 
     virtual bool OnEvent(const SEvent& event)
     {
+#ifdef MOBILE_STK
+        if (event.EventType == EET_MOUSE_INPUT_EVENT && isEnabled() &&
+            Environment->hasFocus(this))
+            trackLongPress(event.MouseInput);
+        else if (event.EventType == EET_SDL_TEXT_EVENT ||
+            (event.EventType == EET_GUI_EVENT &&
+             event.GUIEvent.EventType == EGET_ELEMENT_FOCUS_LOST))
+            m_paste_tip = PasteTip::Hidden;
+#endif
         bool out = CGUIEditBox::OnEvent(event);
 
         if (event.EventType == EET_KEY_INPUT_EVENT &&
@@ -101,6 +224,22 @@ using namespace GUIEngine;
 using namespace irr::core;
 using namespace irr::gui;
 using namespace irr;
+
+#ifdef MOBILE_STK
+void TextBoxWidget::drawFocusedPasteTip()
+{
+    auto* box = dynamic_cast<MyCGUIEditBox*>(getGUIEnv()->getFocus());
+    if (box)
+        box->drawPasteTip();
+}
+
+bool TextBoxWidget::handleFocusedPasteTipMouse(const SEvent::SMouseInput& mouse)
+{
+    auto* env = getGUIEnv();
+    auto* box = env ? dynamic_cast<MyCGUIEditBox*>(env->getFocus()) : NULL;
+    return box && box->handlePasteTipMouse(mouse);
+}
+#endif
 
 // -----------------------------------------------------------------------------
 

@@ -32,6 +32,9 @@
 #include "guiengine/widgets/list_widget.hpp"
 #include "guiengine/widgets/ribbon_widget.hpp"
 #include "guiengine/widgets/spinner_widget.hpp"
+#ifdef MOBILE_STK
+#include "guiengine/widgets/text_box_widget.hpp"
+#endif
 #include "input/input_manager.hpp"
 #include "modes/demo_world.hpp"
 #include "modes/world.hpp"
@@ -94,6 +97,12 @@ bool EventHandler::OnEvent (const SEvent &event)
         target->OnEvent(event);
         return true;
     }
+
+#ifdef MOBILE_STK
+    if (event.EventType == EET_MOUSE_INPUT_EVENT &&
+        GUIEngine::TextBoxWidget::handleFocusedPasteTipMouse(event.MouseInput))
+        return true;
+#endif
 
     // TO DEBUG HATS (when you don't actually have a hat)
     /*

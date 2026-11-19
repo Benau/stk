@@ -64,6 +64,10 @@ namespace GUIEngine
         LEAK_CHECK()
         
         TextBoxWidget();
+#ifdef MOBILE_STK
+        static void drawFocusedPasteTip();
+        static bool handleFocusedPasteTipMouse(const irr::SEvent::SMouseInput& mouse);
+#endif
         ~TextBoxWidget()
         {
             setWithinATextBox(false);

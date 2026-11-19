@@ -687,6 +687,9 @@ namespace GUIEngine
 #include "guiengine/screen_keyboard.hpp"
 #include "guiengine/skin.hpp"
 #include "guiengine/widget.hpp"
+#ifdef MOBILE_STK
+#include "guiengine/widgets/text_box_widget.hpp"
+#endif
 #include "guiengine/dialog_queue.hpp"
 #include "modes/demo_world.hpp"
 #include "modes/cutscene_world.hpp"
@@ -1383,6 +1386,9 @@ namespace GUIEngine
         }
 
         g_skin->drawTooltips();
+#ifdef MOBILE_STK
+        TextBoxWidget::drawFocusedPasteTip();
+#endif
 
         if (gamestate != GAME && !gui_messages.empty())
         {

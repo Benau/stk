@@ -154,6 +154,9 @@ namespace GUIEngine
         void setTextMarkers(s32 begin, s32 end);
         void updateCursorDistance();
         bool processKey(const SEvent& event);
+#ifdef MOBILE_STK
+        bool pasteFromClipboard();
+#endif
         bool processMouse(const SEvent& event);
         s32 getCursorPos(s32 x, s32 y);
         void updateGlyphLayouts();

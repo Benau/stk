@@ -460,6 +460,39 @@ void CGUIEditBox::correctCursor(s32& cursor_pos, bool left)
 }
 
 
+#ifdef MOBILE_STK
+bool CGUIEditBox::pasteFromClipboard()
+{
+    if (!isEnabled() || !Operator)
+        return false;
+
+    char* text = const_cast<char*>(Operator->getTextFromClipboard());
+    if (!text)
+        return false;
+    std::u32string clipboard = StringUtils::utf8ToUtf32(text);
+    SDL_free(text);
+    clipboard.erase(std::remove_if(clipboard.begin(), clipboard.end(),
+        [](char32_t ch) { return ch < U' '; }), clipboard.end());
+
+    const s32 begin = m_mark_begin == m_mark_end ? m_cursor_pos :
+        std::min(m_mark_begin, m_mark_end);
+    const s32 count = std::abs(m_mark_end - m_mark_begin);
+    if (clipboard.empty() || (m_max_chars &&
+        m_edit_text.size() - count + clipboard.size() > m_max_chars))
+        return false;
+
+    m_edit_text.replace(begin, count, clipboard);
+    m_cursor_pos = begin + (s32)clipboard.size();
+    m_composing_start = m_composing_end = 0;
+    m_composing_text.clear();
+    updateGlyphLayouts();
+    setTextMarkers(m_cursor_pos, m_cursor_pos);
+    calculateScrollPos();
+    return true;
+}
+#endif
+
+
 bool CGUIEditBox::processKey(const SEvent& event)
 {
 #ifdef SERVER_ONLY
