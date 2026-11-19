@@ -7203,3 +7203,144 @@ msgstr "Pokud potřebujete větší stabilitu, zvažte použití stabilní verze
 #: net.supertuxkart.SuperTuxKart.metainfo.xml:49
 msgid "SuperTuxKart Team"
 msgstr "Tým SuperTuxKart"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Ray Tracing Settings"
+msgstr "Nastavení ray tracingu"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Ray tracing"
+msgstr "Ray tracing"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Realistic solid reflections"
+msgstr "Realistické odrazy na pevných površích"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Realistic water reflections"
+msgstr "Realistické odrazy vody"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Global illumination"
+msgstr "Globální osvětlení"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Karts and items"
+msgstr "Motokáry a předměty"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Plants and fences"
+msgstr "Rostliny a ploty"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Moving plants"
+msgstr "Pohybující se rostliny"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Ray tracing needs advanced pipeline and a compatible device."
+msgstr "Ray tracing vyžaduje pokročilou grafickou pipeline a kompatibilní zařízení."
+
+#. I18N: ./data/gui/screens/options/options_video.stkgui
+#. I18N: In the video settings
+msgid "Ray tracing settings..."
+msgstr "Nastavení ray tracingu..."
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Lighting"
+msgstr "Osvětlení"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Effects"
+msgstr "Efekty"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Quality"
+msgstr "Kvalita"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Point light shadows"
+msgstr "Stíny bodových světel"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Solid reflection"
+msgstr "Odrazy na pevných površích"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Water reflection"
+msgstr "Odrazy na vodě"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Soft reflections on rough surfaces"
+msgstr "Měkké odrazy na drsných površích"
+
+#: src/states_screens/dialogs/custom_video_settings.cpp:181
+msgctxt "Anti-aliasing"
+msgid "Disabled"
+msgstr "Vypnuto"
+
+#: src/states_screens/dialogs/custom_video_settings.cpp:239
+#: src/states_screens/options/options_screen_video.cpp:670
+msgctxt "Reflection"
+msgid "Disabled"
+msgstr "Vypnuto"
+
+#: src/states_screens/dialogs/custom_video_settings.cpp:240
+msgctxt "Reflection"
+msgid "Enabled"
+msgstr "Zapnuto"
+
+#: src/states_screens/dialogs/custom_video_settings.cpp:611
+#: src/states_screens/dialogs/custom_video_settings.cpp:613
+msgctxt "Reflection"
+msgid "Ray traced"
+msgstr "S využitím ray tracingu"
+
+#: src/states_screens/options/options_screen_video.cpp:409
+#, c-format
+msgid "Solid reflection: %s"
+msgstr "Odrazy na pevných površích: %s"
+
+#: src/states_screens/options/options_screen_video.cpp:412
+#, c-format
+msgid "Water reflection: %s"
+msgstr "Odrazy na vodě: %s"
+
+#: src/states_screens/options/options_screen_video.cpp:666
+msgctxt "Reflection"
+msgid "Low"
+msgstr "Nízká"
+
+#: src/states_screens/options/options_screen_video.cpp:667
+msgctxt "Reflection"
+msgid "Medium"
+msgstr "Střední"
+
+#: src/states_screens/options/options_screen_video.cpp:668
+msgctxt "Reflection"
+msgid "High"
+msgstr "Vysoká"
+
+#: src/states_screens/options/options_screen_video.cpp:669
+msgctxt "Reflection"
+msgid "Very high"
+msgstr "Velmi vysoká"
+
+#: src/guiengine/widgets/text_box_widget.cpp:52
+msgid "Paste"
+msgstr "Vložit"

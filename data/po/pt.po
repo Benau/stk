@@ -7200,3 +7200,149 @@ msgstr "Se desejas mais estabilidade, considera usar a versão estável: %s"
 #: net.supertuxkart.SuperTuxKart.metainfo.xml:49
 msgid "SuperTuxKart Team"
 msgstr "Equipa SuperTuxKart"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Ray Tracing Settings"
+msgstr "Configurações de ray tracing"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Ray tracing"
+msgstr "Ray tracing"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Realistic solid reflections"
+msgstr "Reflexos realistas em superfícies sólidas"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Realistic water reflections"
+msgstr "Reflexos realistas na água"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Global illumination"
+msgstr "Iluminação global"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Karts and items"
+msgstr "Karts e itens"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Plants and fences"
+msgstr "Plantas e cercas"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Moving plants"
+msgstr "Plantas em movimento"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Ray tracing needs advanced pipeline and a compatible device."
+msgstr "O ray tracing requer um pipeline gráfico avançado e um dispositivo compatível."
+
+#. I18N: ./data/gui/screens/options/options_video.stkgui
+#. I18N: In the video settings
+msgid "Ray tracing settings..."
+msgstr "Configurações de ray tracing..."
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Lighting"
+msgstr "Iluminação"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Effects"
+msgstr "Efeitos"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Quality"
+msgstr "Qualidade"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Point light shadows"
+msgstr "Sombras de luzes pontuais"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Solid reflection"
+msgstr "Reflexos em superfícies sólidas"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Water reflection"
+msgstr "Reflexos na água"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Soft reflections on rough surfaces"
+msgstr "Reflexos suaves em superfícies rugosas"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Speed streaks"
+msgstr "Linhas de velocidade"
+
+#: src/states_screens/dialogs/custom_video_settings.cpp:181
+msgctxt "Anti-aliasing"
+msgid "Disabled"
+msgstr "Desativado"
+
+#: src/states_screens/dialogs/custom_video_settings.cpp:239
+#: src/states_screens/options/options_screen_video.cpp:670
+msgctxt "Reflection"
+msgid "Disabled"
+msgstr "Desativados"
+
+#: src/states_screens/dialogs/custom_video_settings.cpp:240
+msgctxt "Reflection"
+msgid "Enabled"
+msgstr "Ativados"
+
+#: src/states_screens/dialogs/custom_video_settings.cpp:611
+#: src/states_screens/dialogs/custom_video_settings.cpp:613
+msgctxt "Reflection"
+msgid "Ray traced"
+msgstr "Com ray tracing"
+
+#: src/states_screens/options/options_screen_video.cpp:409
+#, c-format
+msgid "Solid reflection: %s"
+msgstr "Reflexos em superfícies sólidas: %s"
+
+#: src/states_screens/options/options_screen_video.cpp:412
+#, c-format
+msgid "Water reflection: %s"
+msgstr "Reflexos na água: %s"
+
+#: src/states_screens/options/options_screen_video.cpp:666
+msgctxt "Reflection"
+msgid "Low"
+msgstr "Baixo"
+
+#: src/states_screens/options/options_screen_video.cpp:667
+msgctxt "Reflection"
+msgid "Medium"
+msgstr "Médio"
+
+#: src/states_screens/options/options_screen_video.cpp:668
+msgctxt "Reflection"
+msgid "High"
+msgstr "Alto"
+
+#: src/states_screens/options/options_screen_video.cpp:669
+msgctxt "Reflection"
+msgid "Very high"
+msgstr "Muito alto"
+
+#: src/guiengine/widgets/text_box_widget.cpp:52
+msgid "Paste"
+msgstr "Colar"

@@ -7204,3 +7204,122 @@ msgstr "אם היציבות חשובה לך, נא לשקול להשתמש בגר
 #: net.supertuxkart.SuperTuxKart.metainfo.xml:49
 msgid "SuperTuxKart Team"
 msgstr "צוות SuperTuxKart"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Ray Tracing Settings"
+msgstr "הגדרות מעקב קרניים"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Ray tracing"
+msgstr "מעקב קרניים"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Realistic solid reflections"
+msgstr "השתקפויות מציאותיות על משטחים מוצקים"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Realistic water reflections"
+msgstr "השתקפויות מציאותיות במים"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Global illumination"
+msgstr "הארה כוללת"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Karts and items"
+msgstr "קארטים ופריטים"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Plants and fences"
+msgstr "צמחים וגדרות"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Moving plants"
+msgstr "צמחים נעים"
+
+#. I18N: ./data/gui/dialogs/ray_tracing_settings.stkgui
+#. I18N: Ray tracing settings
+msgid "Ray tracing needs advanced pipeline and a compatible device."
+msgstr "מעקב קרניים דורש צינור עיבוד גרפי מתקדם ומכשיר תואם."
+
+#. I18N: ./data/gui/screens/options/options_video.stkgui
+#. I18N: In the video settings
+msgid "Ray tracing settings..."
+msgstr "הגדרות מעקב קרניים..."
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Lighting"
+msgstr "תאורה"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Effects"
+msgstr "אפקטים"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Quality"
+msgstr "איכות"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Point light shadows"
+msgstr "צללי תאורה נקודתית"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Solid reflection"
+msgstr "השתקפויות על משטחים מוצקים"
+
+#. I18N: ./data/gui/dialogs/custom_video_settings.stkgui
+#. I18N: Video settings
+msgid "Water reflection"
+msgstr "השתקפויות במים"
+
+#: src/states_screens/dialogs/custom_video_settings.cpp:181
+msgctxt "Anti-aliasing"
+msgid "Disabled"
+msgstr "מושבתת"
+
+#: src/states_screens/options/options_screen_video.cpp:409
+#, c-format
+msgid "Solid reflection: %s"
+msgstr "השתקפויות על משטחים מוצקים: %s"
+
+#: src/states_screens/options/options_screen_video.cpp:412
+#, c-format
+msgid "Water reflection: %s"
+msgstr "השתקפויות במים: %s"
+
+#: src/states_screens/options/options_screen_video.cpp:666
+msgctxt "Reflection"
+msgid "Low"
+msgstr "נמוכה"
+
+#: src/states_screens/options/options_screen_video.cpp:667
+msgctxt "Reflection"
+msgid "Medium"
+msgstr "בינונית"
+
+#: src/states_screens/options/options_screen_video.cpp:668
+msgctxt "Reflection"
+msgid "High"
+msgstr "גבוהה"
+
+#: src/states_screens/options/options_screen_video.cpp:669
+msgctxt "Reflection"
+msgid "Very high"
+msgstr "גבוהה מאוד"
+
+#: src/guiengine/widgets/text_box_widget.cpp:52
+msgid "Paste"
+msgstr "הדבקה"
