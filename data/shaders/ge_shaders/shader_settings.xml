@@ -116,6 +116,7 @@
         <shaders>
             <vertex>spm.vert</vertex>
             <fragment>bubble.frag</fragment>
+            <skinning-vertex>spm_skinning.vert</skinning-vertex>
         </shaders>
     </setting>
 

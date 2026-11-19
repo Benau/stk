@@ -652,7 +652,18 @@ void Attachment::updateGraphics(float dt)
                 wanted_node_scale, wanted_node_scale, wanted_node_scale));
         }
         int slow_flashes = stk_config->time2Ticks(3.0f);
-        if (is_shield && m_ticks_left < slow_flashes)
+        if (is_shield && m_node->getEndFrame() > m_node->getStartFrame())
+        {
+            // The shield model has a pre-burst animation (it wobbles faster
+            // and faster and swells before it pops) which covers the last 3
+            // seconds, map the time left onto it. Before that it stays at
+            // its first frame, which is the rest pose.
+            const float progress = 1.0f - std::min(1.0f,
+                stk_config->ticks2Time(std::max<int>(m_ticks_left, 0)) / 3.0f);
+            m_node->setCurrentFrame(m_node->getStartFrame() + progress *
+                (m_node->getEndFrame() - m_node->getStartFrame()));
+        }
+        else if (is_shield && m_ticks_left < slow_flashes)
         {
             // Bubble gum flashing when close to dropping
             int ticks_per_flash = stk_config->time2Ticks(0.2f);
