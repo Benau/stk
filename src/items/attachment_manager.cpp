@@ -86,7 +86,11 @@ void AttachmentManager::loadModels()
 {
     for(int i=0; iat[i].attachment!=Attachment::ATTACH_MAX; i++)
     {
-        std::string full_path = file_manager->getAsset(FileManager::MODEL,iat[i].file);
+        FileManager::AssetType at = FileManager::MODEL;
+        if (i == Attachment::ATTACH_BUBBLEGUM_SHIELD ||
+            i == Attachment::ATTACH_NOLOK_BUBBLEGUM_SHIELD)
+            at = FileManager::SHADER;
+        std::string full_path = file_manager->getAsset(at,iat[i].file);
         scene::IAnimatedMesh* mesh = irr_driver->getAnimatedMesh(full_path);
         mesh->grab();
 #ifndef SERVER_ONLY
