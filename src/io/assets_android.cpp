@@ -25,11 +25,12 @@
 #include <fstream>
 
 #ifdef ANDROID
+#include "utils/file_utils.hpp"
 #include <SDL_system.h>
+#include <sys/stat.h>
 #include <sys/statfs.h>
 #include <jni.h>
 #endif
-
 //-----------------------------------------------------------------------------
 /** Assets Android constructor
  */
@@ -201,13 +202,22 @@ void AssetsAndroid::init()
     }
 
     // Check if assets were extracted properly
-    if (!m_file_manager->fileExists(m_stk_dir + "/.extracted") &&
-        !needs_extract_data)
+    if (!needs_extract_data)
     {
-        needs_extract_data = true;
-        Log::warn("AssetsAndroid", "Assets seem to be not extracted properly, "
-                  "because the .extracted file doesn't exist. Force "
-                  "extracting assets...");
+        struct stat extracted_stat = {};
+        if (FileUtils::statU8Path(m_stk_dir + "/.extracted", &extracted_stat) != 0)
+        {
+            needs_extract_data = true;
+            Log::warn("AssetsAndroid", "Assets seem to be not extracted properly, "
+                    "because the .extracted file doesn't exist. Force "
+                    "extracting assets...");
+        }
+        else if (extracted_stat.st_mtime < getApkStamp())
+        {
+            needs_extract_data = true;
+            Log::info("AssetsAndroid", "Same version re-installed. Force "
+                "extracting assets...");
+        }
     }
 
     if (!m_file_manager->checkAndCreateDirectoryP(m_stk_dir + "/home"))
@@ -243,6 +253,36 @@ void AssetsAndroid::init()
     }
 
 #endif
+}
+
+//-----------------------------------------------------------------------------
+long long AssetsAndroid::getApkStamp()
+{
+    long long result = 0;
+#ifdef ANDROID
+    JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+    if (env == NULL)
+        return 0;
+    jobject act = (jobject)SDL_AndroidGetActivity();
+    if (act == NULL)
+        return 0;
+    jclass cls = env->GetObjectClass(act);
+    jmethodID mid = cls ?
+        env->GetMethodID(cls, "getLastUpdateTime", "()J") : NULL;
+    if (mid)
+        result = (long long)env->CallLongMethod(act, mid);
+    if (env->ExceptionCheck())
+    {
+        env->ExceptionClear();
+        result = 0;
+    }
+    if (cls)
+        env->DeleteLocalRef(cls);
+    env->DeleteLocalRef(act);
+#endif
+    if (result < 0)
+        return 0;
+    return result / 1000;
 }
 
 //-----------------------------------------------------------------------------

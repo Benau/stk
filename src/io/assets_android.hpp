@@ -36,6 +36,7 @@ private:
     bool isWritable(std::string path);
     std::string getPreferredPath(const std::vector<std::string>& paths);
     void setProgressBar(int progress);
+    long long getApkStamp();
 public:
     AssetsAndroid(FileManager* file_manager);
     ~AssetsAndroid() {};

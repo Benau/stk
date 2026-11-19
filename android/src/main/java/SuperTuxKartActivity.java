@@ -599,5 +599,18 @@ public class SuperTuxKartActivity extends SDLActivity
         }
         return language;
     }
+    // ------------------------------------------------------------------------
+    public long getLastUpdateTime()
+    {
+        try
+        {
+            return getPackageManager().getPackageInfo(getPackageName(), 0)
+                .lastUpdateTime;
+        }
+        catch (Exception e)
+        {
+            return 0;
+        }
+    }
 
 }
