@@ -723,6 +723,9 @@ target_link_libraries(supertuxkart
     )
 
 if (USE_APPLE_NETWORK_LIBRARIES)
+    if (CCTOOLS_PREFIX)
+        set_property(TARGET supertuxkart PROPERTY LINKER_LANGUAGE CXX)
+    endif()
     target_link_libraries(supertuxkart "-framework Foundation -framework CryptoKit" cryptokit_wrapper)
 else()
     target_link_libraries(supertuxkart ${CURL_LIBRARIES})
