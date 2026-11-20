@@ -116,6 +116,8 @@ void updatePredefines()
         oss << "#define SHADER_STORAGE_IMAGE_EXTENDED_FORMATS\n";
     if (GEVulkanFeatures::supportsShaderDrawParameters())
         oss << "#define SHADER_DRAW_PARAMETERS\n";
+    if (!GEVulkanFeatures::supportsA2B10G10R10SnormVertex())
+        oss << "#define UNORM_PACKED_NORMAL\n";
     // Deferred render passes are split, no input attachments at all
     if (getGEConfig()->m_deferred_split != 0)
         oss << "#define SPLIT\n";

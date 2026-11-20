@@ -2772,7 +2772,10 @@ VertexDescription GEVulkanDrawCall::getDefaultVertexDescription() const
     attribute_descriptions[0].offset = offsetof(irr::video::S3DVertexSkinnedMesh, m_position);
     attribute_descriptions[1].binding = 0;
     attribute_descriptions[1].location = 1;
-    attribute_descriptions[1].format = VK_FORMAT_A2B10G10R10_SNORM_PACK32;
+    attribute_descriptions[1].format =
+        GEVulkanFeatures::supportsA2B10G10R10SnormVertex() ?
+        VK_FORMAT_A2B10G10R10_SNORM_PACK32 :
+        VK_FORMAT_A2B10G10R10_UNORM_PACK32;
     attribute_descriptions[1].offset = offsetof(irr::video::S3DVertexSkinnedMesh, m_normal);
     attribute_descriptions[2].binding = 0;
     attribute_descriptions[2].location = 2;
@@ -2788,7 +2791,10 @@ VertexDescription GEVulkanDrawCall::getDefaultVertexDescription() const
     attribute_descriptions[4].offset = offsetof(irr::video::S3DVertexSkinnedMesh, m_all_uvs) + (sizeof(int16_t) * 2);
     attribute_descriptions[5].binding = 0;
     attribute_descriptions[5].location = 5;
-    attribute_descriptions[5].format = VK_FORMAT_A2B10G10R10_SNORM_PACK32;
+    attribute_descriptions[5].format =
+        GEVulkanFeatures::supportsA2B10G10R10SnormVertex() ?
+        VK_FORMAT_A2B10G10R10_SNORM_PACK32 :
+        VK_FORMAT_A2B10G10R10_UNORM_PACK32;
     attribute_descriptions[5].offset = offsetof(irr::video::S3DVertexSkinnedMesh, m_tangent);
     attribute_descriptions[6].binding = 1;
     attribute_descriptions[6].location = 6;
