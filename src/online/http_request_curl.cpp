@@ -117,14 +117,14 @@ void Online::HTTPRequest::operation()
 
     curl_easy_setopt(curl_session, CURLOPT_URL, m_url.c_str());
     curl_easy_setopt(curl_session, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl_session, CURLOPT_NOPROGRESS, 0);
+    curl_easy_setopt(curl_session, CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(curl_session, PROGRESSDATA, this);
     curl_easy_setopt(curl_session, PROGRESSFUNCTION,
                                    &curlProgressDownload);
-    curl_easy_setopt(curl_session, CURLOPT_CONNECTTIMEOUT, 20);
-    curl_easy_setopt(curl_session, CURLOPT_LOW_SPEED_LIMIT, 10);
-    curl_easy_setopt(curl_session, CURLOPT_LOW_SPEED_TIME, 20);
-    curl_easy_setopt(curl_session, CURLOPT_NOSIGNAL, 1);
+    curl_easy_setopt(curl_session, CURLOPT_CONNECTTIMEOUT, 20L);
+    curl_easy_setopt(curl_session, CURLOPT_LOW_SPEED_LIMIT, 10L);
+    curl_easy_setopt(curl_session, CURLOPT_LOW_SPEED_TIME, 60L);
+    curl_easy_setopt(curl_session, CURLOPT_NOSIGNAL, 1L);
     //curl_easy_setopt(curl_session, CURLOPT_VERBOSE, 1L);
 
     // https, load certificate info
@@ -183,11 +183,15 @@ void Online::HTTPRequest::operation()
         logMessage();
     } // end log http request
 
-    if (!m_download_assets_request)
+    // A limit on the whole transfer would cut off big downloads
+    if (!isGetRequest())
     {
         curl_easy_setopt(curl_session, CURLOPT_POSTFIELDS,
             m_parameters.c_str());
+        curl_easy_setopt(curl_session, CURLOPT_TIMEOUT, 60L);
     }
+    else
+        curl_easy_setopt(curl_session, CURLOPT_HTTPGET, 1L);
     const std::string& uagent = StringUtils::getUserAgentString();
     curl_easy_setopt(curl_session, CURLOPT_USERAGENT, uagent.c_str());
 
