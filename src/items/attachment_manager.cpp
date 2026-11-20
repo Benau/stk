@@ -28,6 +28,9 @@
 
 #include <IAnimatedMesh.h>
 
+#include <stdexcept>
+#include <string>
+
 AttachmentManager *attachment_manager = 0;
 
 struct  initAttachmentType {Attachment::AttachmentType attachment;
@@ -65,11 +68,27 @@ static const initAttachmentType iat[]=
 };
 
 //-----------------------------------------------------------------------------
+/** The models are only loaded later in loadModels, so start with no meshes
+ *  and icons: if an exception is thrown before (or while) they are loaded,
+ *  STK is cleaned up with this manager and the destructor must only drop the
+ *  meshes which were loaded. */
+AttachmentManager::AttachmentManager()
+{
+    for (unsigned i = 0; i < Attachment::ATTACH_MAX; i++)
+    {
+        m_attachments[i] = NULL;
+        m_all_icons[i] = NULL;
+    }
+}   // AttachmentManager
+
+//-----------------------------------------------------------------------------
 AttachmentManager::~AttachmentManager()
 {
     for(int i=0; iat[i].attachment!=Attachment::ATTACH_MAX; i++)
     {
         scene::IMesh *mesh = m_attachments[iat[i].attachment];
+        if (!mesh)
+            continue;
         mesh->drop();
         // If the count is 1, the only reference is in the
         // irrlicht mesh cache, so the mesh can be removed
@@ -92,6 +111,14 @@ void AttachmentManager::loadModels()
             at = FileManager::SHADER;
         std::string full_path = file_manager->getAsset(at,iat[i].file);
         scene::IAnimatedMesh* mesh = irr_driver->getAnimatedMesh(full_path);
+        // A missing or broken model (e.g. outdated extracted assets on
+        // Android) would crash in grab, throw instead so the error is logged
+        // with the file name and STK is closed normally
+        if (!mesh)
+        {
+            throw std::runtime_error(std::string("Cannot load attachment "
+                "model ") + full_path);
+        }
         mesh->grab();
 #ifndef SERVER_ONLY
         SP::uploadSPM(mesh);

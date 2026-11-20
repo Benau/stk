@@ -37,7 +37,7 @@ private:
     scene::IAnimatedMesh *m_attachments[Attachment::ATTACH_MAX];
     Material             *m_all_icons [Attachment::ATTACH_MAX];
 public:
-               AttachmentManager() {};
+               AttachmentManager();
               ~AttachmentManager();
     void       loadModels       ();
     // ------------------------------------------------------------------------
