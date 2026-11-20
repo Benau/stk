@@ -41,6 +41,130 @@
 
 #include "../source/Irrlicht/os.h"
 #include "quaternion.h"
+#include <cstdarg>
+// TEMP firebase format probe (do not commit) ---------------------------------
+#include <cstdio>
+#include <string>
+#ifdef ANDROID
+#include <android/log.h>
+#include <sys/stat.h>
+#endif
+namespace
+{
+std::string g_temp_pipeline_name;
+void tempLog(const char* fmt, ...)
+{
+    char buf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+#ifdef ANDROID
+    __android_log_print(ANDROID_LOG_INFO, "TEMPFMT", "%s", buf);
+    static FILE* f = []()
+    {
+        mkdir("/sdcard/Android/media/org.supertuxkart.stk_dbg", 0777);
+        FILE* r = fopen(
+            "/sdcard/Android/media/org.supertuxkart.stk_dbg/fmt_probe.txt", "a");
+        if (!r)
+        {
+            r = fopen("/sdcard/Android/data/org.supertuxkart.stk_dbg/files/"
+                "fmt_probe.txt", "a");
+        }
+        return r;
+    }();
+#else
+    static FILE* f = fopen("/tmp/stkmiku/fbfmt/fmt_probe.txt", "a");
+#endif
+    if (f)
+    {
+        fprintf(f, "%s\n", buf);
+        fflush(f);
+    }
+}
+VkResult tempCreateGraphicsPipelines(GE::GEVulkanDriver* vk, VkDevice dev,
+    VkPipelineCache cache, uint32_t count,
+    const VkGraphicsPipelineCreateInfo* info,
+    const VkAllocationCallbacks* alloc, VkPipeline* out)
+{
+    static bool first = true;
+    static bool probed = false;
+    if (first)
+    {
+        first = false;
+        const VkPhysicalDeviceProperties& p = vk->getPhysicalDeviceProperties();
+        tempLog("=== GPU %s vendor 0x%x device 0x%x driver 0x%x api %u.%u.%u",
+            p.deviceName, p.vendorID, p.deviceID, p.driverVersion,
+            VK_API_VERSION_MAJOR(p.apiVersion),
+            VK_API_VERSION_MINOR(p.apiVersion),
+            VK_API_VERSION_PATCH(p.apiVersion));
+        const VkFormat fmts[] =
+        {
+            VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_A2B10G10R10_SNORM_PACK32,
+            VK_FORMAT_A8B8G8R8_UNORM_PACK32, VK_FORMAT_R16G16_SFLOAT,
+            VK_FORMAT_R16G16B16A16_SINT, VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK_FORMAT_R16G16B16A16_SNORM, VK_FORMAT_R8G8B8A8_SNORM
+        };
+        for (VkFormat fm : fmts)
+        {
+            VkFormatProperties fp = {};
+            vkGetPhysicalDeviceFormatProperties(vk->getPhysicalDevice(), fm,
+                &fp);
+            tempLog("format %d bufferFeatures 0x%x vertex %d", (int)fm,
+                fp.bufferFeatures,
+                (fp.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) ?
+                1 : 0);
+        }
+    }
+    const VkPipelineVertexInputStateCreateInfo* vi = info->pVertexInputState;
+    bool has_snorm = false;
+    if (vi)
+    {
+        for (unsigned i = 0; i < vi->vertexAttributeDescriptionCount; i++)
+        {
+            if (vi->pVertexAttributeDescriptions[i].format ==
+                VK_FORMAT_A2B10G10R10_SNORM_PACK32)
+                has_snorm = true;
+        }
+    }
+    if (has_snorm && !probed)
+    {
+        // Same pipeline, only the 2 packed SNORM attributes replaced by a
+        // mandatory vertex format
+        probed = true;
+        std::vector<VkVertexInputAttributeDescription> attrs(
+            vi->pVertexAttributeDescriptions,
+            vi->pVertexAttributeDescriptions +
+            vi->vertexAttributeDescriptionCount);
+        for (auto& a : attrs)
+        {
+            if (a.format == VK_FORMAT_A2B10G10R10_SNORM_PACK32)
+                a.format = VK_FORMAT_R16G16B16A16_SNORM;
+        }
+        VkPipelineVertexInputStateCreateInfo vi2 = *vi;
+        vi2.pVertexAttributeDescriptions = attrs.data();
+        VkGraphicsPipelineCreateInfo info2 = *info;
+        info2.pVertexInputState = &vi2;
+        tempLog("PROBE A (%s, R16G16B16A16_SNORM instead of A2B10G10R10_SNORM)"
+            " start", g_temp_pipeline_name.c_str());
+        VkPipeline p = VK_NULL_HANDLE;
+        VkResult r = glad_vkCreateGraphicsPipelines(dev, cache, 1, &info2,
+            alloc, &p);
+        tempLog("PROBE A result %d", (int)r);
+        if (p != VK_NULL_HANDLE)
+            vkDestroyPipeline(dev, p, NULL);
+        tempLog("PROBE B (%s, original A2B10G10R10_SNORM) start",
+            g_temp_pipeline_name.c_str());
+    }
+    tempLog("create %s snorm %d rp %p subpass %u", g_temp_pipeline_name.c_str(),
+        has_snorm ? 1 : 0, (void*)info->renderPass, info->subpass);
+    VkResult r = glad_vkCreateGraphicsPipelines(dev, cache, count, info, alloc,
+        out);
+    tempLog("  -> %d", (int)r);
+    return r;
+}
+}
+// TEMP firebase format probe end ----------------------------------------------
 #define SKINNING_PIPELINE "_skinning"
 
 namespace GE
@@ -1226,6 +1350,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
                                       const PipelineSettings& settings,
        std::unordered_map<std::string, std::shared_ptr<VkPipeline> >& dp_cache)
 {
+    g_temp_pipeline_name = settings.m_shader_name; // TEMP firebase
     VkPipelineShaderStageCreateInfo vert_shader_stage_info = {};
     vert_shader_stage_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     vert_shader_stage_info.stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -1503,7 +1628,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
 
     if (!insert_from_cache(settings, false))
     {
-        VkResult result = vkCreateGraphicsPipelines(vk->getDevice(),
+        VkResult result = tempCreateGraphicsPipelines(vk, vk->getDevice(),
             vk->getPipelineCache(), 1, &pipeline_info, NULL,
             &graphics_pipeline);
         if (result != VK_SUCCESS)
@@ -1519,7 +1644,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     {
         shader_stages[0].module = GEVulkanShaderManager::getShader(
             settings.m_material->m_skinning_vertex_shader);
-        VkResult result = vkCreateGraphicsPipelines(vk->getDevice(),
+        VkResult result = tempCreateGraphicsPipelines(vk, vk->getDevice(),
             vk->getPipelineCache(), 1, &pipeline_info, NULL,
             &graphics_pipeline);
         if (result != VK_SUCCESS)
@@ -1584,7 +1709,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
             {
                 glow_stages[0].module = GEVulkanShaderManager::getShader(vs);
                 VkPipeline glow_pipeline;
-                if (vkCreateGraphicsPipelines(vk->getDevice(),
+                if (tempCreateGraphicsPipelines(vk, vk->getDevice(),
                     vk->getPipelineCache(), 1, &glow_info, NULL,
                     &glow_pipeline) != VK_SUCCESS)
                 {
@@ -1613,7 +1738,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     shader_stages[1].module = GEVulkanShaderManager::getShader(
         settings.m_material->m_fragment_shader);
 
-    VkResult result = vkCreateGraphicsPipelines(vk->getDevice(),
+    VkResult result = tempCreateGraphicsPipelines(vk, vk->getDevice(),
         vk->getPipelineCache(), 1, &pipeline_info, NULL, &graphics_pipeline);
     if (result != VK_SUCCESS)
     {
@@ -1627,7 +1752,7 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
 
     shader_stages[0].module = GEVulkanShaderManager::getShader(
         settings.m_material->m_skinning_vertex_shader);
-    result = vkCreateGraphicsPipelines(vk->getDevice(),
+    result = tempCreateGraphicsPipelines(vk, vk->getDevice(),
         vk->getPipelineCache(), 1, &pipeline_info, NULL, &graphics_pipeline);
     if (result != VK_SUCCESS)
     {

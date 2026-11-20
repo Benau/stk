@@ -2683,7 +2683,9 @@ int main(int argc, char *argv[])
         {
             // Profiling
             // =========
-            RaceManager::get()->setMajorMode (RaceManager::MAJOR_MODE_SINGLE);
+            // TEMP debug (do not commit): keep --gp with STK_PROFILE_GP
+            if (!getenv("STK_PROFILE_GP"))
+                RaceManager::get()->setMajorMode (RaceManager::MAJOR_MODE_SINGLE);
             RaceManager::get()->setupPlayerKartInfo();
             RaceManager::get()->startNew(false);
         }

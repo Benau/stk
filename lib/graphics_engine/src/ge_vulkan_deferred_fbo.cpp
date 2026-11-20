@@ -41,7 +41,8 @@ GEVulkanDeferredFBO::GEVulkanDeferredFBO(GEVulkanDriver* vk,
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT :
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
         VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
-        VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+        (getGEConfig()->m_no_transient_color ? 0 :
+        VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT);
     for (unsigned i = GVDFT_COLOR; i <= GVDFT_NORMAL; i++)
     {
         m_attachments[i] = new GEVulkanAttachmentTexture(vk, size,
@@ -562,7 +563,8 @@ void GEVulkanDeferredFBO::createRTT()
     attachment_desc[0].format = m_attachments[GVDFT_HDR]->getInternalFormat();
     attachment_desc[0].samples = VK_SAMPLE_COUNT_1_BIT;
     attachment_desc[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachment_desc[0].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachment_desc[0].storeOp = (getGEConfig()->m_store_color ?
+        VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE);
     attachment_desc[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     attachment_desc[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     attachment_desc[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -574,7 +576,8 @@ void GEVulkanDeferredFBO::createRTT()
     if (getAttachment<GVDFT_DISPLACE_COLOR>())
         attachment_desc[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     else
-        attachment_desc[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachment_desc[1].storeOp = (getGEConfig()->m_store_depth ?
+            VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE);
     attachment_desc[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     attachment_desc[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     attachment_desc[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -586,7 +589,8 @@ void GEVulkanDeferredFBO::createRTT()
     attachment_desc[2].format = VK_FORMAT_B8G8R8A8_UNORM;
     attachment_desc[2].samples = VK_SAMPLE_COUNT_1_BIT;
     attachment_desc[2].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachment_desc[2].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachment_desc[2].storeOp = (getGEConfig()->m_store_color ?
+        VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE);
     attachment_desc[2].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     attachment_desc[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     attachment_desc[2].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -886,7 +890,8 @@ void GEVulkanDeferredFBO::createDisplacePasses(unsigned mask_pass,
         attachment_desc[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
         // The depth of field of the final chain samples the depth after this
         // pass, so it's stored and left read only
-        attachment_desc[1].storeOp = m_keep_depth ?
+        attachment_desc[1].storeOp = m_keep_depth ||
+            getGEConfig()->m_store_depth ?
             VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
         attachment_desc[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         attachment_desc[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;

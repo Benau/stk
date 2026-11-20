@@ -31,6 +31,21 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+// TEMP firebase: frame time statistics, recorded in IrrDriver::update
+#include <algorithm>
+#include <vector>
+#include "config/user_config.hpp"
+#include "config/stk_config.hpp"
+#include "ge_main.hpp"
+extern std::vector<float> g_temp_frame_ms;
+#include "io/file_manager.hpp"
+#include <fstream>
+#ifdef ANDROID
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
+extern float g_temp_orig_scale;
+extern int g_temp_orig_dyn;
 
 ProfileWorld::ProfileType ProfileWorld::m_profile_mode=PROFILE_NONE;
 int   ProfileWorld::m_num_laps    = 0;
@@ -51,6 +66,7 @@ ProfileWorld::ProfileWorld()
     setPhase(RACE_PHASE);
     m_frame_count      = 0;
     m_start_time       = irr_driver->getRealTime();
+    g_temp_frame_ms.clear(); // TEMP firebase
     m_num_triangles    = 0;
     m_num_culls        = 0;
     m_num_solid        = 0;
@@ -66,7 +82,9 @@ ProfileWorld::ProfileWorld()
  */
 ProfileWorld::~ProfileWorld()
 {
-    m_profile_mode = PROFILE_NONE;
+    // TEMP debug (do not commit): the next GP race needs profile mode too
+    if (!getenv("STK_PROFILE_GP"))
+        m_profile_mode = PROFILE_NONE;
 }
 
 //-----------------------------------------------------------------------------
@@ -155,6 +173,16 @@ bool ProfileWorld::isRaceOver()
 void ProfileWorld::update(int ticks)
 {
     StandardRace::update(ticks);
+    {
+        // TEMP firebase: screenshots at fixed race times
+        int t = getTicksSinceStart();
+        if (t == stk_config->time2Ticks(15.0f) ||
+            t == stk_config->time2Ticks(40.0f))
+        {
+            Log::info("TEMPSTAT", "screenshot at tick %d", t);
+            irr_driver->requestScreenshot();
+        }
+    }
 
     m_frame_count++;
     video::IVideoDriver *driver = irr_driver->getVideoDriver();
@@ -201,10 +229,107 @@ void ProfileWorld::enterRaceOverState()
         m_karts[i]->finishedRace(estimateFinishTimeForKart(m_karts[i].get()));
     }
 
+    // TEMP debug (do not commit): STK_PROFILE_GP keeps the grand prix going,
+    // the race result screen continues to the next race. Only the last race
+    // prints the statistics and quits.
+    if (getenv("STK_PROFILE_GP") &&
+        RaceManager::get()->getMajorMode() ==
+        RaceManager::MAJOR_MODE_GRAND_PRIX &&
+        RaceManager::get()->getTrackNumber() + 1 <
+        (int)RaceManager::get()->getNumOfTracks())
+    {
+        Log::info("TEMPGP", "profile GP: race %d over",
+            RaceManager::get()->getTrackNumber());
+        return;
+    }
+
     // Print framerate statistics
     float runtime = (irr_driver->getRealTime()-m_start_time)*0.001f;
     Log::verbose("profile", "Number of frames: %d time %f, Average FPS: %f",
                  m_frame_count, runtime, (float)m_frame_count/runtime);
+    if (!g_temp_frame_ms.empty())
+    {
+        // TEMP firebase: frame time statistics (skip the first 120 frames)
+        std::vector<float> ft(g_temp_frame_ms.begin() +
+            std::min<size_t>(g_temp_frame_ms.size() - 1, 120),
+            g_temp_frame_ms.end());
+        std::sort(ft.begin(), ft.end());
+        double sum = 0.0;
+        for (float f : ft)
+            sum += f;
+        auto pct = [&ft](float p)
+            { return ft[std::min(ft.size() - 1, (size_t)(p * ft.size()))]; };
+        // 1% low = average FPS of the slowest 1% frames
+        size_t n1 = std::max<size_t>(1, ft.size() / 100);
+        double slow = 0.0;
+        for (size_t i = ft.size() - n1; i < ft.size(); i++)
+            slow += ft[i];
+        Log::info("TEMPSTAT", "driver %s frames %d ms: avg %.2f min %.2f "
+            "p50 %.2f p95 %.2f p99 %.2f max %.2f | fps avg %.1f 1%%low %.1f",
+            UserConfigParams::m_render_driver.c_str(), (int)ft.size(),
+            sum / ft.size(), ft.front(), pct(0.5f), pct(0.95f), pct(0.99f),
+            ft.back(), 1000.0 * ft.size() / sum, 1000.0 * n1 / slow);
+        const char* m = getenv("STK_TEMP_GE_MODE");
+        Log::info("TEMPSTAT", "mode %s force_forward %d force_split %d "
+            "dn %d ds %d cn %d cs %d auto_deferred %d "
+            "deferred_split 0x%x",
+            m ? m : "-", (int)GE::getGEConfig()->m_force_forward,
+            (int)GE::getGEConfig()->m_force_deferred_split,
+            (int)GE::getGEConfig()->m_no_lazy_depth,
+            (int)GE::getGEConfig()->m_store_depth,
+            (int)GE::getGEConfig()->m_no_transient_color,
+            (int)GE::getGEConfig()->m_store_color,
+            (int)GE::getGEConfig()->m_auto_deferred_type,
+            GE::getGEConfig()->m_deferred_split);
+        Log::info("TEMPSTAT", "settings (before restore): res %dx%d scale %.2f "
+            "dyn_lights %d shadows %d ssao %d bloom %d glow %d "
+            "light_scatter %d tex_quality %d particles %d "
+            "geometry %d", (int)UserConfigParams::m_real_width,
+            (int)UserConfigParams::m_real_height,
+            (float)UserConfigParams::m_scale_rtts_factor,
+            (int)UserConfigParams::m_dynamic_lights,
+            (int)UserConfigParams::m_shadows_resolution,
+            (int)UserConfigParams::m_ssao, (int)UserConfigParams::m_bloom,
+            (int)UserConfigParams::m_glow,
+            (int)UserConfigParams::m_light_scatter,
+            (int)UserConfigParams::m_high_definition_textures,
+            (int)UserConfigParams::m_particles_effects,
+            (int)UserConfigParams::m_geometry_level);
+#ifdef ANDROID
+        // TEMP firebase: Test Lab doesn't pull hidden directories, copy the
+        // screenshots (written a few frames after the request) to a visible
+        // one
+        {
+            std::string src = file_manager->getScreenshotDir();
+            std::string dst =
+                "/sdcard/Android/data/org.supertuxkart.stk_dbg/files/shots/";
+            mkdir(dst.c_str(), 0777);
+            DIR* d = opendir(src.c_str());
+            while (d)
+            {
+                dirent* e = readdir(d);
+                if (!e)
+                    break;
+                std::string n = e->d_name;
+                if (n.size() < 4 || n.compare(n.size() - 4, 4, ".png") != 0)
+                    continue;
+                std::ifstream in(src + n, std::ios::binary);
+                std::ofstream out(dst + (m ? std::string(m) + "_" : "") + n,
+                    std::ios::binary);
+                out << in.rdbuf();
+                in.close();
+                remove((src + n).c_str());
+            }
+            if (d)
+                closedir(d);
+        }
+#endif
+        if (g_temp_orig_scale >= 0.0f)
+        {
+            UserConfigParams::m_scale_rtts_factor = g_temp_orig_scale;
+            UserConfigParams::m_dynamic_lights = g_temp_orig_dyn != 0;
+        }
+    }
 
     // Print geometry statistics if we're not in no-graphics mode
     if(!GUIEngine::isNoGraphics())

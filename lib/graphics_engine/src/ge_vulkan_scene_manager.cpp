@@ -320,6 +320,8 @@ void GEVulkanSceneManager::detectDeferred(irr::scene::ISceneNode* node)
 // ----------------------------------------------------------------------------
 GEAutoDeferredType GEVulkanSceneManager::getDetectDeferredResult() const
 {
+    if (getGEConfig()->m_force_forward)
+        return GADT_DISABLED;
     if (m_displace_count > 0)
         return GADT_DISPLACE;
     if (GEVulkanFeatures::isTiledGPU() && (m_spotlight_count > 0 ||

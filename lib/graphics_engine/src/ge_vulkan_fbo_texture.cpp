@@ -84,7 +84,8 @@ void GEVulkanFBOTexture::createRTT()
     attchment_desc[1].format = m_depth_texture->getInternalFormat();
     attchment_desc[1].samples = VK_SAMPLE_COUNT_1_BIT;
     attchment_desc[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attchment_desc[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attchment_desc[1].storeOp = (getGEConfig()->m_store_depth ?
+        VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE);
     attchment_desc[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     attchment_desc[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     attchment_desc[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;

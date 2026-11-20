@@ -122,6 +122,10 @@
 #include <openglrecorder.h>
 #endif
 
+// TEMP firebase: settings changed by STK_TEMP_GE_MODE
+float g_temp_orig_scale = -1.0f;
+int g_temp_orig_dyn = -1;
+
 /* Build-time check that the Irrlicht we're building against works for us.
  * Should help prevent distros building against an incompatible library.
  */
@@ -571,6 +575,37 @@ begin:
             }
 #endif
 #ifndef SERVER_ONLY
+#ifdef ANDROID
+            UserConfigParams::m_display_fps = true; // TEMP firebase
+#endif
+            if (const char* m = getenv("STK_TEMP_GE_MODE"))
+            {
+                std::string mode = m;
+                // The originals are restored at the end of the race (before
+                // the config is saved), see ProfileWorld
+                if (g_temp_orig_scale < 0.0f)
+                {
+                    g_temp_orig_scale = UserConfigParams::m_scale_rtts_factor;
+                    g_temp_orig_dyn = UserConfigParams::m_dynamic_lights;
+                }
+                // Options after the base mode: "+dn" depth not lazy, "+ds"
+                // store depth, "+cn" g-buffer not transient, "+cs" store color
+                auto has = [&mode](const char* o)
+                    { return mode.find(o) != std::string::npos; };
+                GE::getGEConfig()->m_no_lazy_depth = has("+dn");
+                GE::getGEConfig()->m_store_depth = has("+ds");
+                GE::getGEConfig()->m_no_transient_color = has("+cn");
+                GE::getGEConfig()->m_store_color = has("+cs");
+                if (mode.find('+') != std::string::npos)
+                    mode = mode.substr(0, mode.find('+'));
+                if (mode == "forward_scale1")
+                    UserConfigParams::m_scale_rtts_factor = 1.0f;
+                if (mode == "nopbr")
+                    UserConfigParams::m_dynamic_lights = false;
+                GE::getGEConfig()->m_force_forward =
+                    mode == "forward" || mode == "forward_scale1";
+                GE::getGEConfig()->m_force_deferred_split = mode == "split";
+            }
             GE::getGEConfig()->m_texture_compression =
                 UserConfigParams::m_texture_compression;
             GE::getGEConfig()->m_render_scale =
@@ -619,6 +654,9 @@ begin:
 #endif
         if (UserConfigParams::m_swap_interval > 1)
             UserConfigParams::m_swap_interval = 1;
+#ifdef ANDROID
+        UserConfigParams::m_swap_interval = 0; // TEMP firebase: no vsync
+#endif
 
 #ifndef SERVER_ONLY // No GUI files in server builds
         OptionsScreenVideo::setSSR();
@@ -2274,8 +2312,23 @@ void IrrDriver::updateDisplace(float dt)
  *  \param is_loading True if the rendering is called during loading of world,
  *         in which case world, physics etc must not be accessed/
  */
+// TEMP firebase: time of every rendered frame, read by ProfileWorld
+#include <chrono>
+std::vector<float> g_temp_frame_ms;
 void IrrDriver::update(float dt, bool is_loading)
 {
+    {
+        static std::chrono::steady_clock::time_point last;
+        static bool has_last = false;
+        auto now = std::chrono::steady_clock::now();
+        if (has_last && !is_loading)
+        {
+            g_temp_frame_ms.push_back(std::chrono::duration<float,
+                std::milli>(now - last).count());
+        }
+        has_last = true;
+        last = now;
+    }
     bool show_dialog_yes = m_resolution_changing == RES_CHANGE_YES;
     bool show_dialog_warn = m_resolution_changing == RES_CHANGE_YES_WARN;
     // If the resolution should be switched, do it now. This will delete the

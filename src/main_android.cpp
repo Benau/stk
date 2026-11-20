@@ -129,8 +129,84 @@ void registering_natives()
 }
 
 void override_default_params_for_mobile();
+// TEMP firebase format probe: race arguments (stk_temp_args in the media dir
+// replaces them)
+#include <cstring>
+#include <fstream>
+#include <vector>
+static std::vector<std::string> g_temp_args;
+static std::vector<char*> g_temp_argv;
+static void temp_load_args(int& argc, char**& argv)
+{
+    const std::string d = "/sdcard/Android/media/org.supertuxkart.stk_dbg/";
+    for (int i = 0; i < argc; i++)
+        g_temp_args.push_back(argv[i]);
+    if (g_temp_args.empty())
+        g_temp_args.push_back("stk");
+    std::ifstream args(d + "stk_temp_args");
+    std::string a;
+    bool from_file = false;
+    while (args >> a)
+    {
+        g_temp_args.push_back(a);
+        from_file = true;
+    }
+    if (!from_file)
+    {
+        // Game loop scenario 2 = OpenGL, anything else Vulkan
+        int scenario = 0;
+        JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+        jobject activity = (jobject)SDL_AndroidGetActivity();
+        if (env && activity)
+        {
+            jclass ac = env->GetObjectClass(activity);
+            jmethodID gi = env->GetMethodID(ac, "getIntent",
+                "()Landroid/content/Intent;");
+            jobject intent = env->CallObjectMethod(activity, gi);
+            if (intent)
+            {
+                jclass ic = env->GetObjectClass(intent);
+                jmethodID ge = env->GetMethodID(ic, "getIntExtra",
+                    "(Ljava/lang/String;I)I");
+                jstring key = env->NewStringUTF("scenario");
+                scenario = env->CallIntMethod(intent, ge, key, 0);
+                env->DeleteLocalRef(key);
+                env->DeleteLocalRef(ic);
+                env->DeleteLocalRef(intent);
+            }
+            env->DeleteLocalRef(ac);
+            env->DeleteLocalRef(activity);
+            if (env->ExceptionCheck())
+                env->ExceptionClear();
+        }
+        // 1 Vulkan auto, 2 Vulkan forward, 3 Vulkan split deferred,
+        // 4 Vulkan forward + render scale 1, 5 Vulkan without dynamic
+        // lights, 6 OpenGL
+        // Run 5 (see the table in the notes)
+        const char* modes[] = { "auto", "auto", "auto+dn", "auto+dn+ds",
+            "auto+cn", "auto+cn+cs", "auto+dn+ds+cn+cs", "forward",
+            "forward+dn", "forward+dn+ds", "nopbr+dn", "nopbr+dn+ds", "split" };
+        const char* mode = scenario >= 1 && scenario <= 12 ?
+            modes[scenario] : "auto";
+        setenv("STK_TEMP_GE_MODE", mode, 1);
+        Log::info("TEMPSTAT", "game loop scenario %d mode %s", scenario,
+            mode);
+        g_temp_args.push_back(strcmp(mode, "gl") == 0 ?
+            "--render-driver=opengl" : "--render-driver=vulkan");
+        g_temp_args.push_back("--track=cornfield_mirror");
+        g_temp_args.push_back("--profile-time=60");
+        g_temp_args.push_back("--numkarts=4");
+    }
+    for (auto& s : g_temp_args)
+        g_temp_argv.push_back((char*)s.c_str());
+    g_temp_argv.push_back(NULL);
+    argc = (int)g_temp_args.size();
+    argv = g_temp_argv.data();
+}
+
 extern "C" int SDL_main(int argc, char *argv[])
 {
+    temp_load_args(argc, argv); // TEMP firebase
     registering_natives();
     override_default_params_for_mobile();
     int ret = android_main(argc, argv);

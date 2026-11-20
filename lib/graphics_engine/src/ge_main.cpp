@@ -55,7 +55,13 @@ GEConfig g_config =
     0.0f,
     360.0f,
     0.0f,
-    3.5f
+    3.5f,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
 };
 std::string g_shader_folder = "";
 std::chrono::steady_clock::time_point g_mono_start =
@@ -288,6 +294,9 @@ void refreshDeferredSplit()
     g_config.m_deferred_split = 0;
     if (!g_config.m_pbr)
         return;
+    if (g_config.m_force_deferred_split && !g_config.m_force_forward &&
+        g_config.m_auto_deferred_type != GADT_DISABLED)
+        g_config.m_deferred_split |= 1 << 8;
     if (g_config.m_glow_outline)
         g_config.m_deferred_split |= 1;
     if (g_config.m_light_scatter)

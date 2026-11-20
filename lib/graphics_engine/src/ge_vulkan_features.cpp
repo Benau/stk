@@ -153,6 +153,20 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
     g_supports_a2b10g10r10_snorm_vertex =
         (format_properties.bufferFeatures &
         VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) != 0;
+    // TEMP firebase: force the fallback for testing
+    if (getenv("GE_FORCE_UNORM_NORMAL"))
+        g_supports_a2b10g10r10_snorm_vertex = false;
+#ifdef ANDROID
+    {
+        FILE* f = fopen("/sdcard/Android/data/org.supertuxkart.stk_dbg/files/"
+            "force_unorm_normal", "r");
+        if (f)
+        {
+            fclose(f);
+            g_supports_a2b10g10r10_snorm_vertex = false;
+        }
+    }
+#endif
     g_supports_shader_storage_image_extended_format = vk->getPhysicalDeviceFeatures().shaderStorageImageExtendedFormats;
     if (g_supports_shader_storage_image_extended_format)
     {

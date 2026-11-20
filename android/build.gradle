@@ -102,9 +102,9 @@ android
             {
                 ndkBuild
                 {
-                    arguments 'NDK_DEBUG=1'
-                    cFlags '-O0'
-                    cppFlags '-O0'
+                    // TEMP firebase arguments 'NDK_DEBUG=1'
+                    cFlags '-O3'
+                    cppFlags '-O3'
                 }
             }
             ndk

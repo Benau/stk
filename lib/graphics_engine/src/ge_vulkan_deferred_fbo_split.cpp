@@ -53,7 +53,10 @@ VkAttachmentDescription makeAttachment(VkFormat format,
     desc.format = format;
     desc.samples = VK_SAMPLE_COUNT_1_BIT;
     desc.loadOp = load_op;
-    desc.storeOp = store_op;
+    const bool depth = format == VK_FORMAT_D32_SFLOAT ||
+        format == VK_FORMAT_D24_UNORM_S8_UINT || format == VK_FORMAT_D16_UNORM;
+    desc.storeOp = (depth ? getGEConfig()->m_store_depth :
+        getGEConfig()->m_store_color) ? VK_ATTACHMENT_STORE_OP_STORE : store_op;
     desc.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     desc.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     desc.initialLayout = initial_layout;

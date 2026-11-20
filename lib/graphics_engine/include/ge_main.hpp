@@ -242,6 +242,22 @@ float m_dof_near_transition;
 // scaled with the height of the viewport, so the blur is the same part of the
 // screen at any resolution, render scale and splitscreen). Up to ~16
 float m_dof_max_radius;
+// Never use the automatic deferred rendering (see GEAutoDeferredType), the
+// displace meshes are drawn with their transparent fallback material, for
+// drivers which fail to render the deferred render pass
+bool m_force_forward;
+// Whenever deferred rendering is used, use the split deferred FBO (separate
+// render passes, no subpasses and input attachments, see
+// GEVulkanDeferredFBOSplit)
+bool m_force_deferred_split;
+// TEMP firebase: no transient (lazily allocated) depth attachment / color
+// attachments (the deferred g-buffer), and store the depth / color
+// attachments at the end of every render pass instead of
+// VK_ATTACHMENT_STORE_OP_DONT_CARE
+bool m_no_lazy_depth;
+bool m_no_transient_color;
+bool m_store_depth;
+bool m_store_color;
 };
 
 // True if GEConfig::m_anti_aliasing is not GAA_NONE and the device can run it

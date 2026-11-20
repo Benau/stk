@@ -48,7 +48,7 @@ GEVulkanAttachmentTexture* GEVulkanAttachmentTexture::createDepthTexture(
         VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
     VkImageUsageFlags iu = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
         VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
-    if (lazy_allocation)
+    if (lazy_allocation && !getGEConfig()->m_no_lazy_depth)
         iu |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
     else
         iu |= VK_IMAGE_USAGE_SAMPLED_BIT;
