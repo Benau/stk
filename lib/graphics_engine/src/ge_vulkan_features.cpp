@@ -34,6 +34,7 @@ bool g_supports_shader_draw_parameters = false;
 bool g_supports_s3tc_bc3 = false;
 bool g_supports_bptc_bc7 = false;
 bool g_supports_astc_4x4 = false;
+bool g_supports_a2b10g10r10_snorm_vertex = false;
 bool g_supports_shader_storage_image_extended_format = false;
 bool g_supports_dynamic_rendering = false;
 bool g_supports_dynamic_rendering_local_read = false;
@@ -141,6 +142,17 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
         VK_FORMAT_ASTC_4x4_UNORM_BLOCK, &format_properties);
     g_supports_astc_4x4 = format_properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
 #endif
+    // Format of the packed normal and tangent of mesh vertices, it has no
+    // mandatory vertex buffer support in Vulkan and PowerVR Rogue drivers
+    // crash in vkCreateGraphicsPipelines with it. Without support the same
+    // bits are read as VK_FORMAT_A2B10G10R10_UNORM_PACK32 (mandatory) and
+    // converted back to signed in the vertex shaders.
+    format_properties = {};
+    vkGetPhysicalDeviceFormatProperties(vk->getPhysicalDevice(),
+        VK_FORMAT_A2B10G10R10_SNORM_PACK32, &format_properties);
+    g_supports_a2b10g10r10_snorm_vertex =
+        (format_properties.bufferFeatures &
+        VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) != 0;
     g_supports_shader_storage_image_extended_format = vk->getPhysicalDeviceFeatures().shaderStorageImageExtendedFormats;
     if (g_supports_shader_storage_image_extended_format)
     {
@@ -462,6 +474,9 @@ void GEVulkanFeatures::printStats()
     os::Printer::log(
         "Vulkan supports adaptive scalable texture compression (4x4 block)",
         supportsASTC4x4() ? "true" : "false");
+    os::Printer::log(
+        "Vulkan supports A2B10G10R10 snorm vertex attributes",
+        g_supports_a2b10g10r10_snorm_vertex ? "true" : "false");
     os::Printer::log("Vulkan supports shader storage image extended formats",
         supportsShaderStorageImageExtendedFormats() ? "true" : "false");
     os::Printer::log(
@@ -584,6 +599,12 @@ bool GEVulkanFeatures::supportsASTC4x4()
 {
     return g_supports_astc_4x4;
 }   // supportsASTC4x4
+
+// ----------------------------------------------------------------------------
+bool GEVulkanFeatures::supportsA2B10G10R10SnormVertex()
+{
+    return g_supports_a2b10g10r10_snorm_vertex;
+}   // supportsA2B10G10R10SnormVertex
 
 // ----------------------------------------------------------------------------
 bool GEVulkanFeatures::supportsShaderStorageImageExtendedFormats()
