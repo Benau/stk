@@ -56,7 +56,7 @@ void Online::HTTPRequest::operation()
     }
 
     // Configure request method and body
-    if (!m_download_assets_request && m_parameters.size() > 0)
+    if (!isGetRequest())
     {
         [request setHTTPMethod:@"POST"];
         NSString *paramString = [NSString stringWithUTF8String:m_parameters.c_str()];
@@ -79,8 +79,10 @@ void Online::HTTPRequest::operation()
     }
 
     NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
-    config.timeoutIntervalForRequest = 20.0;
-    config.timeoutIntervalForResource = 60.0;
+    config.timeoutIntervalForRequest = 60.0;
+    // A limit on the whole transfer would cut off big downloads
+    if (!isGetRequest())
+        config.timeoutIntervalForResource = 60.0;
 
     NSURLSession *session = [NSURLSession sessionWithConfiguration:config];
     std::atomic_bool completed(false);

@@ -72,6 +72,8 @@ namespace Online
         std::string urlEncode(const std::string& value);
 
         void logMessage();
+        bool isGetRequest() const
+                  { return m_download_assets_request || m_parameters.empty(); }
     protected:
         /** Contains a filename if the data should be saved into a file
          *  instead of being kept in memory. Otherwise this is "". */
