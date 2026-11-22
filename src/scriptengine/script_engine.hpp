@@ -27,6 +27,7 @@
 #include <angelscript.h>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 
 class TrackObjectPresentation;
@@ -77,7 +78,14 @@ namespace Scripting
         void evalScript(std::string script_fragment);
         void cleanupCache();
 
-        bool loadScript(std::string script_path, bool clear_previous);
+        bool loadScript(std::string script_path, bool clear_previous,
+                        const std::string& library = "");
+        bool changesLibraryObjects(const std::string& library) const
+        {
+            return m_dynamic_libraries.count(library) != 0;
+        }
+        bool mentionsDynamicObject(const std::string& id) const
+                              { return m_dynamic_object_ids.count(id) != 0; }
         bool compileLoadedScripts();
 
         void addPendingTimeout(double time, const std::string& callback_name);
@@ -88,6 +96,8 @@ namespace Scripting
 
     private:
         asIScriptEngine *m_engine;
+        std::set<std::string> m_dynamic_libraries;
+        std::set<std::string> m_dynamic_object_ids;
         std::map<std::string, asIScriptFunction*> m_functions_cache;
         PtrVector<PendingTimeout> m_pending_timeouts;
 

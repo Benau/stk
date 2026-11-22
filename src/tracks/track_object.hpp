@@ -105,9 +105,8 @@ protected:
      *  known before the presentation is created (m_animator is not). */
     bool                           m_has_animation;
 
-    /** True if this is a library with a script that enables/disables objects.
-     *  Known before its children are created. */
-    bool                           m_has_enable_script;
+    /** The object's visibility or transform can change during the race. */
+    bool                           m_dynamic_presentation;
     
     std::vector<TrackObject*>      m_movable_children;
     std::vector<TrackObject*>      m_children;
@@ -245,6 +244,10 @@ public:
 
     void resetEnabled();
     // ------------------------------------------------------------------------
+    void setDynamicPresentation() { m_dynamic_presentation = true; }
+    // ------------------------------------------------------------------------
+    void makePresentationDynamic();
+    // ------------------------------------------------------------------------
     ThreeDAnimation* getAnimator() { return m_animator; }
     // ------------------------------------------------------------------------
     const ThreeDAnimation* getAnimator() const { return m_animator; }
@@ -265,7 +268,7 @@ public:
     // m_presentation, which are set after that)
     bool hasDynamicStateRecursively() const
     {
-        if (m_has_animation || m_has_enable_script)
+        if (m_has_animation || m_dynamic_presentation)
             return true;
         return m_parent_library != NULL &&
             m_parent_library->hasDynamicStateRecursively();

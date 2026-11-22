@@ -72,7 +72,7 @@ LODNode* ModelDefinitionLoader::instanciateAsLOD(const XMLNode* node, scene::ISc
     if (group.size() > 0)
     {
         scene::ISceneNode* actual_parent = (parent == NULL ? sm->getRootSceneNode() : parent);
-        LODNode* lod_node = new LODNode(groupname, actual_parent, sm);
+        LODNode* lod_node = LODNode::create(groupname, actual_parent, sm);
         lod_node->updateAbsolutePosition();
         std::shared_ptr<GE::GERenderInfo> lod_ri = ri;
         for (unsigned int m=0; m<group.size(); m++)

@@ -111,7 +111,7 @@ void PipelineSettings::loadMaterial(const GEMaterial& m)
 
 // ============================================================================
 void ObjectData::init(irr::scene::ISceneNode* node, int material_id,
-                      int skinning_offset, irr::video::SMaterial& m)
+                      int skinning_offset, const irr::video::SMaterial& m)
 {
     memcpy(&m_translation_x, &node->getAbsoluteTransformation()[12],
         sizeof(float) * 3);
@@ -624,15 +624,16 @@ start:
                 break;
             }
             irr::scene::ISceneNode* node = q.first;
+            const irr::video::SMaterial& material = q.second;
             const irr::core::matrix4& texture_matrix =
-                q.second.getTextureMatrix(0);
+                material.getTextureMatrix(0);
             if (texture_matrix[8] != 0.0f || texture_matrix[9] != 0.0f)
             {
                 skip_instance_key = true;
                 break;
             }
-            auto& ri = q.second.getRenderInfo();
-            if (q.second.isColorizable() && ri && ri->getHue() > 0.0f)
+            const auto& ri = material.getRenderInfo();
+            if (material.isColorizable() && ri && ri->getHue() > 0.0f)
             {
                 key.m_hue_change = true;
                 break;

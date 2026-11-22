@@ -1,9 +1,11 @@
 #include "ge_vulkan_scene_manager.hpp"
+#include "ge_vulkan_static_scene_manager.hpp"
 
 #include "../source/Irrlicht/os.h"
 
 #include "ge_main.hpp"
 #include "ge_material_manager.hpp"
+#include "ge_render_info.hpp"
 #include "ge_vulkan_animated_mesh_scene_node.hpp"
 #include "ge_vulkan_camera_scene_node.hpp"
 #include "ge_vulkan_command_loader.hpp"
@@ -36,6 +38,7 @@ GEVulkanSceneManager::GEVulkanSceneManager(irr::video::IVideoDriver* driver,
 {
     m_current_group = NULL;
     m_current_entry = NULL;
+    m_static_scene.reset(new GEVulkanStaticSceneManager());
     resetDetectDeferred();
     // CSceneManager grabbed it
     getMeshCache()->drop();
@@ -47,12 +50,53 @@ GEVulkanSceneManager::~GEVulkanSceneManager()
 }   // ~GEVulkanSceneManager
 
 // ----------------------------------------------------------------------------
+void GEVulkanSceneManager::splitStaticScene()
+{
+    m_static_scene->split(this);
+    getVKDriver()->clearRTScene();
+}   // splitStaticScene
+
+// ----------------------------------------------------------------------------
+void GEVulkanSceneManager::releaseStaticScene()
+{
+    m_static_scene->release();
+}   // releaseStaticScene
+
+// ----------------------------------------------------------------------------
+static void markDynamicMaterials(irr::scene::ISceneNode* node)
+{
+    for (unsigned index = 0; index < node->getMaterialCount(); index++)
+    {
+        const auto& info = node->getMaterial(index).getRenderInfo();
+        if (info && info->getRayTracingType() == GRTT_STATIC)
+            info->setRayTracingType(GRTT_DYNAMIC);
+    }
+    const auto& children = node->getChildren();
+    for (unsigned index = 0; index < children.size(); index++)
+        markDynamicMaterials(children[index]);
+}   // markDynamicMaterials
+
+// ----------------------------------------------------------------------------
+void GEVulkanSceneManager::makeNodeDynamic(irr::scene::ISceneNode* node)
+{
+    // Put all descendants back under their original parent before changing
+    // their materials. A library can have both extracted and live children.
+    const bool split = m_static_scene->isSplit();
+    if (split)
+        releaseStaticScene();
+    markDynamicMaterials(node);
+    if (split)
+        splitStaticScene();
+}   // makeNodeDynamic
+
+// ----------------------------------------------------------------------------
 void GEVulkanSceneManager::clear()
 {
     GEVulkanDriver* vk = static_cast<GEVulkanDriver*>(getVideoDriver());
     vk->waitIdle();
     vk->setDisableWaitIdle(true);
     vk->clearRTScene();
+    releaseStaticScene();
     irr::scene::CSceneManager::clear();
     resetDrawCalls();
     vk->getMeshTextureDescriptor()->clear();
@@ -231,6 +275,7 @@ void GEVulkanSceneManager::drawAll(irr::u32 flags)
         GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
         if (sfbo)
             sfbo->prepare(camera, dc->getLightHandler());
+        m_static_scene->registerNodes(this, cam->getAbsoluteTransformation());
         OnRegisterSceneNode();
         dc->generate(vk);
         if (sfbo)
@@ -339,6 +384,7 @@ void GEVulkanSceneManager::detectAutoDeferred()
         getGEConfig()->m_auto_deferred_type;
     resetDetectDeferred();
     detectDeferred(this);
+    m_static_scene->detectDeferred(this);
     getGEConfig()->m_auto_deferred_type = getDetectDeferredResult();
     if (needsDeferredRendering() != prev_deferred ||
         prev_deferred_type != getGEConfig()->m_auto_deferred_type)

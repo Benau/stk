@@ -1,4 +1,5 @@
 #include "ge_vulkan_rt_scene.hpp"
+#include "ge_vulkan_static_scene_manager.hpp"
 
 #include "ge_main.hpp"
 #include "ge_material_manager.hpp"
@@ -560,7 +561,6 @@ void GEVulkanRTScene::clear()
     for (GeometrySource& source : m_geometry_sources)
         source.m_node->drop();
     m_geometry_sources.clear();
-    m_geometry_infos.clear();
     m_blas = VK_NULL_HANDLE;
     m_blas_buffer = m_data_buffer = VK_NULL_HANDLE;
     m_blas_memory = m_data_memory = VK_NULL_HANDLE;
@@ -853,7 +853,6 @@ bool GEVulkanRTScene::buildAccelerationStructures(
 bool GEVulkanRTScene::createGeometryData(
                                         const std::vector<GERTGeometry>& infos)
 {
-    m_geometry_infos = infos;
     const size_t size = infos.size() * sizeof(GERTGeometry);
     m_geometry_data.reset(new GEVulkanDynamicBuffer(
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -1500,7 +1499,8 @@ void GEVulkanRTScene::destroySkinSet(SkinSet* set)
 
 // ----------------------------------------------------------------------------
 void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
-                         const std::vector<irr::core::vector3df>& cameras)
+                             const GEVulkanStaticSceneManager& statics,
+                             const std::vector<irr::core::vector3df>& cameras)
 {
     if (!isReady() || !m_geometry_data)
         return;
@@ -1514,7 +1514,7 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
     GERTGeometry* mapped_addr =
         (GERTGeometry*)m_geometry_data->getMappedAddr()[buffer_idx];
     VmaAllocator allocator = m_vk->getVmaAllocator();
-    const size_t static_count = m_geometry_infos.size();
+    const size_t static_count = m_geometry_count;
 
     GEVulkanMeshCache* mesh_cache = m_vk->getVulkanMeshCache();
     const uint64_t cache_version =
@@ -1547,19 +1547,24 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
         GEVulkanFeatures::supportsBaseVertexRendering() && mesh_cache &&
         mesh_cache->getBuffer() != VK_NULL_HANDLE;
 
+    for (const GeometrySource& source : m_geometry_sources)
+    {
+        if (source.m_material_index >= source.m_node->getMaterialCount())
+            continue;
+        const irr::video::SMaterial& material =
+            source.m_node->getMaterial(source.m_material_index);
+        const auto& matrix = material.getTextureMatrix(0);
+        auto& geometry = mapped_addr[source.m_geometry_index];
+        geometry.m_uv_shift[0] = matrix[8];
+        geometry.m_uv_shift[1] = matrix[9];
+    }
     if (!dynamic)
     {
         t.m_skin_active = false;
-        // Back to what the build wrote, once for each buffer index
-        if (!t.m_geometry_static)
-        {
-            memcpy(mapped_addr, m_geometry_infos.data(),
-                static_count * sizeof(GERTGeometry));
+        if (!m_geometry_sources.empty())
             vmaFlushAllocation(allocator,
                 m_geometry_data->getHostMemory()[buffer_idx], 0,
                 static_count * sizeof(GERTGeometry));
-            t.m_geometry_static = true;
-        }
         // The static BLAS only (the grass is found with the dynamic nodes)
         VkAccelerationStructureInstanceKHR* static_instances =
             (VkAccelerationStructureInstanceKHR*)t.m_instance_mapped;
@@ -1576,38 +1581,16 @@ void GEVulkanRTScene::update(irr::scene::ISceneNode* root,
         return;
     }
 
-    // The static geometries, with what can change
-    for (size_t i = 0; i < m_geometry_sources.size(); i++)
-    {
-        GERTGeometry* obj = mapped_addr + i;
-        *obj = m_geometry_infos[i];
-        const GeometrySource& source = m_geometry_sources[i];
-        if (source.m_material_index >= source.m_node->getMaterialCount())
-            continue;
-        irr::video::SMaterial& m =
-            source.m_node->getMaterial(source.m_material_index);
-        // Same as ObjectData::init (the const overload doesn't create a
-        // texture matrix)
-        const irr::video::SMaterial& cm = m;
-        const irr::core::matrix4& texture_matrix = cm.getTextureMatrix(0);
-        obj->m_uv_shift[0] = texture_matrix[8];
-        obj->m_uv_shift[1] = texture_matrix[9];
-        const std::shared_ptr<GERenderInfo>& ri = m.getRenderInfo();
-        if (!ri)
-            continue;
-        obj->m_hue = m.isColorizable() && ri->getHue() > 0.0f ?
-            ri->getHue() : 0.0f;
-        // Same as build (the ray traced pass needs PBR)
-        obj->m_vertex_color =
-            srgb255ToLinearFromSColor(ri->getVertexColor()).color;
-    }
-    t.m_geometry_static = false;
-
     // The dynamic nodes, found every frame (a node can be added, removed or
     // use another mesh)
     std::vector<DynamicSource> sources;
     std::vector<DynamicSource> grass_sources;
     std::vector<SkinSource> skins;
+    if (getGEConfig()->m_ray_tracing.m_grass)
+    {
+        for (auto* node : statics.getRTGrass())
+            collectDynamicNode(node, sources, grass_sources, skins, true);
+    }
     if (root)
     {
         collectDynamicNode(root, sources, grass_sources, skins,
@@ -2167,7 +2150,8 @@ void GEVulkanRTScene::buildTopLevel(VkCommandBuffer cmd)
 }   // buildTopLevel
 
 // ----------------------------------------------------------------------------
-bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
+bool GEVulkanRTScene::build(irr::scene::ISceneNode* root,
+                            const GEVulkanStaticSceneManager& statics)
 {
     clear();
     if (!GEVulkanFeatures::supportsRayQuery() ||
@@ -2177,7 +2161,10 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
     // The shading types the geometries are collected with
     m_built_alphatest = getGEConfig()->m_ray_tracing.m_alphatest;
     std::vector<RTSource> sources;
-    collectNode(root, sources, root->isTrulyVisible());
+    for (auto* node : statics.getRTMeshes())
+        collectNode(node, sources, true);
+    if (statics.hasLiveStatic())
+        collectNode(root, sources, root->isTrulyVisible());
     if (sources.empty())
         return false;
 
@@ -2227,8 +2214,12 @@ bool GEVulkanRTScene::build(irr::scene::ISceneNode* root)
             ri->getHue() : 0.0f;
         info.m_vertex_color =
             srgb255ToLinearFromSColor(ri->getVertexColor()).color;
-        s.m_node->grab();
-        m_geometry_sources.push_back({ s.m_node, s.m_material_index });
+        if (cm.TextureLayer[0].TextureMatrix)
+        {
+            s.m_node->grab();
+            m_geometry_sources.push_back({ s.m_node, s.m_material_index,
+                infos.size() });
+        }
 
         const irr::video::S3DVertexSkinnedMesh* src =
             static_cast<const irr::video::S3DVertexSkinnedMesh*>(
