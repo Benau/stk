@@ -107,7 +107,7 @@
 #include <ge_occlusion_culling.hpp>
 #include <ge_texture.hpp>
 #include <ge_vulkan_driver.hpp>
-#include <ge_vulkan_features.hpp>
+#include <ge_vulkan_scene_manager.hpp>
 #endif
 #include <ge_render_info.hpp>
 
@@ -335,6 +335,8 @@ void Track::cleanup()
         vk->setGodRays(false);
         // Clear the RT scene before STK does its mesh cleanup
         vk->clearRTScene();
+        static_cast<GE::GEVulkanSceneManager*>(irr_driver->getSceneManager())
+            ->releaseStaticScene();
     }
 #endif
     m_physical_object_uid = 0;
@@ -1384,13 +1386,10 @@ bool Track::loadMainTrack(const XMLNode &root)
         GE::getOcclusionCulling()->addOccluderMesh(tris);
         // The track mesh is a static part of the ray traced scene, the scene
         // is built after all nodes are loaded
-        if (GE::GEVulkanFeatures::supportsRayQuery())
-        {
-            rt_info = std::make_shared<GE::GERenderInfo>();
-            rt_info->setRayTracingType(GE::GRTT_STATIC);
-            for (unsigned i = 0; i < scene_node->getMaterialCount(); i++)
-                scene_node->getMaterial(i).setRenderInfo(rt_info);
-        }
+        rt_info = std::make_shared<GE::GERenderInfo>();
+        rt_info->setRayTracingType(GE::GRTT_STATIC);
+        for (unsigned i = 0; i < scene_node->getMaterialCount(); i++)
+            scene_node->getMaterial(i).setRenderInfo(rt_info);
     }
 #endif
     m_all_nodes.push_back(scene_node);
@@ -1596,9 +1595,9 @@ bool Track::loadMainTrack(const XMLNode &root)
                 }
 
 
-                LODNode* lod_node = new LODNode("challenge_orb",
-                                                irr_driver->getSceneManager()->getRootSceneNode(),
-                                                irr_driver->getSceneManager());
+                LODNode* lod_node = LODNode::create("challenge_orb",
+                                                    irr_driver->getSceneManager()->getRootSceneNode(),
+                                                    irr_driver->getSceneManager());
                 lod_node->setPosition(xyz);
                 lod_node->add(50, scene_node, true /* reparent */);
 
@@ -2410,6 +2409,12 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
         std::swap(m_gfx_effect_mesh, gfx_effect_mesh);
     }
     createPhysicsModel(main_track_count, false/*for_height_map*/);
+#ifndef SERVER_ONLY
+    if (!GUIEngine::isNoGraphics() &&
+        irr_driver->getVideoDriver()->getDriverType() == video::EDT_VULKAN)
+        static_cast<GE::GEVulkanSceneManager*>(irr_driver->getSceneManager())
+            ->splitStaticScene();
+#endif
 
     main_loop->renderGUI(5600);
 

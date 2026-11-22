@@ -60,11 +60,8 @@
 #include <ISceneManager.h>
 #include <IVideoDriver.h>
 
-#include <fstream>
 #include <ge_render_info.hpp>
 #include <ge_spm.hpp>
-#include <iterator>
-#include <map>
 
 // ----------------------------------------------------------------------------
 TrackObjectPresentation::TrackObjectPresentation(const XMLNode& xml_node)
@@ -181,39 +178,6 @@ TrackObjectPresentationEmpty::~TrackObjectPresentationEmpty()
 }   // ~TrackObjectPresentationEmpty
 
 // ----------------------------------------------------------------------------
-bool TrackObjectPresentationLibraryNode::libraryHasEnableScript(
-                                                       const std::string& name)
-{
-    // Same lookup order as the constructor: the library of the track first
-    std::string path;
-    Track* track = Track::getCurrentTrack();
-    if (track != NULL &&
-        file_manager->fileExists(
-        track->getTrackFile("library/" + name + "/node.xml")))
-        path = track->getTrackFile("library/" + name + "/scripting.as");
-    else
-        path = file_manager->getAsset(FileManager::LIBRARY, name) +
-            "/scripting.as";
-
-    // Libraries are instanced many times, the files are read once
-    static std::map<std::string, bool> cache;
-    auto it = cache.find(path);
-    if (it != cache.end())
-        return it->second;
-
-    bool result = false;
-    if (file_manager->fileExists(path))
-    {
-        std::ifstream file(path.c_str());
-        std::string content((std::istreambuf_iterator<char>(file)),
-            std::istreambuf_iterator<char>());
-        result = content.find("setEnabled") != std::string::npos;
-    }
-    cache[path] = result;
-    return result;
-}   // libraryHasEnableScript
-
-// ----------------------------------------------------------------------------
 TrackObjectPresentationLibraryNode::TrackObjectPresentationLibraryNode(
     TrackObject* parent,
     const XMLNode& xml_node,
@@ -256,7 +220,8 @@ TrackObjectPresentationLibraryNode::TrackObjectPresentationLibraryNode(
             libroot = file_manager->createXMLTree(local_lib_node_path);
             if (track != NULL)
             {
-                Scripting::ScriptEngine::getInstance()->loadScript(local_script_file_path, false);
+                Scripting::ScriptEngine::getInstance()->loadScript(
+                    local_script_file_path, false, name);
             }
         }
         else if (file_manager->fileExists(lib_node_path))
@@ -264,7 +229,8 @@ TrackObjectPresentationLibraryNode::TrackObjectPresentationLibraryNode(
             libroot = file_manager->createXMLTree(lib_node_path);
             if (track != NULL)
             {
-                Scripting::ScriptEngine::getInstance()->loadScript(lib_script_file_path, false);
+                Scripting::ScriptEngine::getInstance()->loadScript(
+                    lib_script_file_path, false, name);
             }
         }
         else
@@ -322,6 +288,9 @@ TrackObjectPresentationLibraryNode::TrackObjectPresentationLibraryNode(
     m_node->setNeedsUpdateAbsTrans(true);
 
     assert(libroot != NULL);
+    Scripting::ScriptEngine* scripts = Scripting::ScriptEngine::getInstance();
+    if (scripts && scripts->changesLibraryObjects(name))
+        parent->setDynamicPresentation();
     Track::getCurrentTrack()->loadObjects(libroot, lib_path, model_def_loader,
                                           create_lod_definitions, m_node,
                                           parent);

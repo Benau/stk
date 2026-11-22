@@ -27,6 +27,10 @@
 #include <ICameraSceneNode.h>
 #include <IMeshSceneNode.h>
 #include <IAnimatedMeshSceneNode.h>
+#ifndef SERVER_ONLY
+#include <IVideoDriver.h>
+#include <ge_vulkan_lod_node.hpp>
+#endif
 
 // ============================================================================
 inline float getDistanceSQ(const irr::core::matrix4& m1,
@@ -43,6 +47,54 @@ inline float getDistanceSQ(const irr::core::matrix4& m1,
 
     return dx * dx + dy * dy + dz * dz;
 }  // getDistanceSQ
+
+// ============================================================================
+#ifndef SERVER_ONLY
+class VulkanLODNode : public LODNode, public GE::GEVulkanLODNode
+{
+public:
+    using LODNode::LODNode;
+    // ------------------------------------------------------------------------
+    scene::ISceneNode* getLevelForView(const core::matrix4& camera_transform)
+    {
+        int level = selectLevel(&camera_transform);
+        return level < 0 ? NULL : getAllNodes()[level];
+    }
+    // ------------------------------------------------------------------------
+    scene::ISceneNode* getHighestLevel()             { return getFirstNode(); }
+    // ------------------------------------------------------------------------
+    bool hasOnlyLevels() const
+    {
+        return getChildren().size() == getLevelCount();
+    }
+    // ------------------------------------------------------------------------
+    void OnRegisterSceneNode()
+    {
+        if (!isVisible() || !getFirstNode())
+            return;
+        auto* camera = getSceneManager()->getActiveCamera();
+        auto* selected = camera ? getLevelForView(
+            camera->getAbsoluteTransformation()) : getAllNodes().getLast();
+        for (unsigned index = 0; index < getLevelCount(); index++)
+            getAllNodes()[index]->setVisible(getAllNodes()[index] == selected);
+        if (selected)
+            selected->OnRegisterSceneNode();
+        for (unsigned index = 0; index < getNonLODChildren().size(); index++)
+            getNonLODChildren()[index]->OnRegisterSceneNode();
+    }
+};   // VulkanLODNode
+#endif
+
+// ============================================================================
+LODNode* LODNode::create(const std::string& name, scene::ISceneNode* parent,
+                         scene::ISceneManager* manager)
+{
+#ifndef SERVER_ONLY
+    if (manager->getVideoDriver()->getDriverType() == video::EDT_VULKAN)
+        return new VulkanLODNode(name, parent, manager);
+#endif
+    return new LODNode(name, parent, manager);
+}   // create
 
 // ============================================================================
 /**
@@ -86,6 +138,20 @@ void LODNode::render()
  */
 int LODNode::getLevel()
 {
+    if (m_nodes.empty() || m_forced_lod >= 0)
+        return m_nodes.empty() ? -1 : m_forced_lod;
+    if (!m_current_level_dirty)
+        return m_current_level;
+    Camera* camera = Camera::getActiveCamera();
+    m_current_level = selectLevel(camera ?
+        &camera->getCameraSceneNode()->getAbsoluteTransformation() : NULL);
+    m_current_level_dirty = false;
+    return m_current_level;
+}   // getLevel
+
+// ----------------------------------------------------------------------------
+int LODNode::selectLevel(const core::matrix4* camera_transform)
+{
     if (m_nodes.size() == 0)
         return -1;
 
@@ -93,17 +159,11 @@ int LODNode::getLevel()
     if (m_forced_lod >- 1)
         return m_forced_lod;
     
-    if (!m_current_level_dirty)
-        return m_current_level;
-    m_current_level_dirty = false;
-
-    Camera* camera = Camera::getActiveCamera();
-    if (camera == NULL)
+    if (!camera_transform)
         return (int)m_detail.size() - 1;
 
-    const int squared_dist =
-        (int)getDistanceSQ(m_nodes[0]->getAbsoluteTransformation(),
-        camera->getCameraSceneNode()->getAbsoluteTransformation());
+    const int squared_dist = (int)getDistanceSQ(
+        m_nodes[0]->getAbsoluteTransformation(), *camera_transform);
 
     if (!m_lod_distances_updated)
     {
@@ -124,13 +184,11 @@ int LODNode::getLevel()
         if (squared_dist < m_detail[n] &&
             ((n + 1 >= m_detail.size()) || (m_min_switch_distance < m_detail[n])))
         {
-            m_current_level = n;
             return n;
         }
     }
-    m_current_level = -1;
     return -1;
-}  // getLevel
+}  // selectLevel
 
 // ---------------------------------------------------------------------------
 /** Forces the level of detail to be n. If n>number of levels, the most

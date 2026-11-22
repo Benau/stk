@@ -11,6 +11,7 @@ class GEVulkanCamera;
 class GEVulkanCameraSceneNode;
 class GEVulkanDrawCall;
 class GEVulkanDriver;
+class GEVulkanStaticSceneManager;
 enum GEAutoDeferredType : unsigned;
 
 struct GEVulkanDrawEntry;
@@ -18,6 +19,7 @@ struct GEVulkanTargetGroup;
 
 class GEVulkanSceneManager : public irr::scene::CSceneManager
 {
+    friend class GEVulkanStaticSceneManager;
 private:
     unsigned m_pointlight_count, m_spotlight_count, m_displace_count;
 
@@ -29,6 +31,7 @@ private:
     GEVulkanTargetGroup* m_current_group;
 
     GEVulkanDrawEntry* m_current_entry;
+    std::unique_ptr<GEVulkanStaticSceneManager> m_static_scene;
 
     // ------------------------------------------------------------------------
     GEVulkanDrawEntry* acquireEntry(GEVulkanDriver* vk);
@@ -49,6 +52,15 @@ public:
                          irr::gui::IGUIEnvironment* gui_environment);
     // ------------------------------------------------------------------------
     ~GEVulkanSceneManager();
+    // ------------------------------------------------------------------------
+    void splitStaticScene();
+    // ------------------------------------------------------------------------
+    void releaseStaticScene();
+    // ------------------------------------------------------------------------
+    void makeNodeDynamic(irr::scene::ISceneNode* node);
+    // ------------------------------------------------------------------------
+    GEVulkanStaticSceneManager* getStaticScene() const
+                                               { return m_static_scene.get(); }
     // ------------------------------------------------------------------------
     virtual irr::scene::ICameraSceneNode* addCameraSceneNode(
         irr::scene::ISceneNode* parent = 0,

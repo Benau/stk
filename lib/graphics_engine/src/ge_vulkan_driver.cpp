@@ -2094,15 +2094,15 @@ bool GEVulkanDriver::endScene()
             getGEConfig()->m_ray_tracing.m_alphatest)
             m_rt_scene->clear();
         if (!m_rt_scene->isReady())
-            m_rt_scene->build(sm->getRootSceneNode());
+            m_rt_scene->build(sm->getRootSceneNode(), *sm->getStaticScene());
         else
         {
             // Writes the GERTGeometry and the instances directly into the host
             // buffers of this frame, so it must be before the fence is waited
             // like GEVulkanDrawCall::generate (a build writes all buffers).
-            // It does nothing if m_dynamic_objects is false (after
-            // restoring what the build wrote)
-            m_rt_scene->update(sm->getRootSceneNode(), rt_cameras);
+            // Animated UVs also update when dynamic objects are disabled.
+            m_rt_scene->update(sm->getRootSceneNode(), *sm->getStaticScene(),
+                rt_cameras);
         }
     }
 

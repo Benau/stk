@@ -328,6 +328,7 @@ void TrackObjectManager::insertDriveableObject(TrackObject* object)
  */
 void TrackObjectManager::removeObject(TrackObject* obj)
 {
+    obj->makePresentationDynamic();
     m_all_objects.remove(obj);
     // Find the object in the dynamic list
     auto obj_it = std::find(m_dynamic_objects.begin(), m_dynamic_objects.end(), obj);

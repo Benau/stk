@@ -81,6 +81,10 @@ public:
 
     int getLevel();
 
+    int selectLevel(const core::matrix4* camera_transform);
+    static LODNode* create(const std::string& name, scene::ISceneNode* parent,
+                           scene::ISceneManager* manager);
+
     void updateVisibility();
 
     /*
@@ -117,6 +121,7 @@ public:
     }
 
     core::array<scene::ISceneNode*>& getAllNodes() { return m_nodes; }
+    unsigned getLevelCount() const { return m_nodes.size(); }
     core::array<scene::ISceneNode*>& getNonLODChildren() { return m_non_lod_children; }
 
     //! OnAnimate() is called just before rendering the whole scene.

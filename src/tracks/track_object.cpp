@@ -42,7 +42,9 @@
 #include <ISceneManager.h>
 #include <IVideoDriver.h>
 #include <ge_render_info.hpp>
-#include <ge_vulkan_features.hpp>
+#ifndef SERVER_ONLY
+#include <ge_vulkan_scene_manager.hpp>
+#endif
 
 /** A track object: any additional object on the track. This object implements
  *  a graphics-only representation, i.e. there is no physical representation.
@@ -80,7 +82,7 @@ TrackObject::TrackObject(const core::vector3df& xyz, const core::vector3df& hpr,
     m_animator        = NULL;
     m_parent_library  = NULL;
     m_has_animation   = false;
-    m_has_enable_script = false;
+    m_dynamic_presentation = is_dynamic;
     m_interaction     = interaction;
     m_presentation    = presentation;
     m_is_driveable    = false;
@@ -117,7 +119,6 @@ void TrackObject::init(const XMLNode &xml_node, scene::ISceneNode* parent,
     m_animator = NULL;
     m_parent_library = parent_library;
     m_has_animation = false;
-    m_has_enable_script = false;
 
     xml_node.get("id",      &m_id        );
     xml_node.get("model",   &m_name      );
@@ -151,6 +152,10 @@ void TrackObject::init(const XMLNode &xml_node, scene::ISceneNode* parent,
 
     m_initially_visible = true;
     xml_node.get("if", &m_visibility_condition);
+    m_dynamic_presentation = is_movable || m_soccer_ball || !m_enabled;
+    Scripting::ScriptEngine* scripts = Scripting::ScriptEngine::getInstance();
+    if (scripts && scripts->mentionsDynamicObject(m_id))
+        setDynamicPresentation();
     if (m_visibility_condition == "false")
     {
         m_initially_visible = false;
@@ -171,9 +176,6 @@ void TrackObject::init(const XMLNode &xml_node, scene::ISceneNode* parent,
     else if (xml_node.getName() == "library")
     {
         xml_node.get("name", &m_name);
-        // Before the constructor, it creates the children which ask for it
-        m_has_enable_script =
-            TrackObjectPresentationLibraryNode::libraryHasEnableScript(m_name);
         m_presentation = new TrackObjectPresentationLibraryNode(this, xml_node, model_def_loader);
         if (parent_library != NULL)
         {
@@ -269,17 +271,15 @@ void TrackObject::init(const XMLNode &xml_node, scene::ISceneNode* parent,
         }
 
         if (!GUIEngine::isNoGraphics() &&
-            irr_driver->getVideoDriver()->getDriverType() == video::EDT_VULKAN &&
-            GE::GEVulkanFeatures::supportsRayQuery())
+            irr_driver->getVideoDriver()->getDriverType() == video::EDT_VULKAN)
         {
             if (!m_render_info)
                 m_render_info = std::make_shared<GE::GERenderInfo>();
             // Static is baked into the static acceleration structure, so it
             // must never move or be enabled / disabled later, those are
             // tracked every frame (if GERayTracingConfig::m_dynamic_objects is on)
-            m_render_info->setRayTracingType(
-                (!is_movable && !hasDynamicStateRecursively()) ?
-                GE::GRTT_STATIC : GE::GRTT_DYNAMIC);
+            m_render_info->setRayTracingType(hasDynamicStateRecursively() ?
+                GE::GRTT_DYNAMIC : GE::GRTT_STATIC);
         }
 #endif
         scene::ISceneNode *glownode = NULL;
@@ -512,6 +512,8 @@ void TrackObject::reset()
  */
 void TrackObject::setEnabled(bool enabled)
 {
+    if (m_enabled != enabled)
+        makePresentationDynamic();
     m_enabled = enabled;
 
     if (m_presentation != NULL)
@@ -538,6 +540,8 @@ void TrackObject::setEnabled(bool enabled)
 
 void TrackObject::resetEnabled()
 {
+    if (m_enabled != m_initially_visible)
+        makePresentationDynamic();
     m_enabled = m_initially_visible;
 
     if (m_presentation != NULL)
@@ -749,9 +753,34 @@ void TrackObject::addChild(TrackObject* child)
 
 // ----------------------------------------------------------------------------
 
+void TrackObject::makePresentationDynamic()
+{
+#ifndef SERVER_ONLY
+    if (!m_presentation || hasDynamicStateRecursively())
+        return;
+    if (!m_render_info &&
+        !getPresentation<TrackObjectPresentationLibraryNode>())
+        return;
+    if (m_render_info && m_render_info->getRayTracingType() != GE::GRTT_STATIC)
+        return;
+    auto* presentation = getPresentation<TrackObjectPresentationSceneNode>();
+    if (!presentation || !presentation->getNode())
+        return;
+    auto* manager = dynamic_cast<GE::GEVulkanSceneManager*>(
+        presentation->getNode()->getSceneManager());
+    if (manager)
+    {
+        setDynamicPresentation();
+        manager->makeNodeDynamic(presentation->getNode());
+    }
+#endif
+}   // makePresentationDynamic
+
+// ----------------------------------------------------------------------------
 // scripting function
 void TrackObject::moveTo(const Scripting::SimpleVec3* pos, bool isAbsoluteCoord)
 {
+    makePresentationDynamic();
     move(core::vector3df(pos->getX(), pos->getY(), pos->getZ()),
         core::vector3df(0.0f, 0.0f, 0.0f), // TODO: preserve rotation
         core::vector3df(1.0f, 1.0f, 1.0f), // TODO: preserve scale

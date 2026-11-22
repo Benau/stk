@@ -519,10 +519,16 @@ namespace Scripting
 
     //-----------------------------------------------------------------------------
 
-    bool ScriptEngine::loadScript(std::string script_path, bool clear_previous)
+    bool ScriptEngine::loadScript(std::string script_path, bool clear_previous,
+                                  const std::string& library)
     {
         int r;
 
+        if (clear_previous)
+        {
+            m_dynamic_libraries.clear();
+            m_dynamic_object_ids.clear();
+        }
         std::string script = getScript(script_path);
         if (script.size() == 0)
         {
@@ -542,6 +548,33 @@ namespace Scripting
         {
             Log::error("Scripting", "AddScriptSection() failed");
             return false;
+        }
+        // A library script can toggle several pieces by a computed ID, as the
+        // breakable barrel does. Keep its whole instance live. A track script
+        // can name objects in any library. Its string literals give the loader
+        // candidates, and the TrackObject mutators handle computed IDs.
+        bool changes_objects = false;
+        std::set<std::string> ids;
+        for (size_t pos = 0; pos < script.size();)
+        {
+            asUINT length = 0;
+            asETokenClass token = m_engine->ParseToken(script.data() + pos,
+                script.size() - pos, &length);
+            if (token == asTC_IDENTIFIER &&
+                (script.compare(pos, length, "setEnabled") == 0 ||
+                 script.compare(pos, length, "moveTo") == 0))
+                changes_objects = true;
+            else if (library.empty() && token == asTC_VALUE && length > 2 &&
+                (script[pos] == '"' || script[pos] == '\''))
+                ids.insert(script.substr(pos + 1, length - 2));
+            pos += length;
+        }
+        if (changes_objects)
+        {
+            if (library.empty())
+                m_dynamic_object_ids.swap(ids);
+            else
+                m_dynamic_libraries.insert(library);
         }
     
         return true;

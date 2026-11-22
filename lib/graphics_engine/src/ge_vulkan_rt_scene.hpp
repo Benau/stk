@@ -20,6 +20,7 @@ namespace irr
 namespace GE
 {
 class GEVulkanDriver;
+class GEVulkanStaticSceneManager;
 class GEVulkanDynamicBuffer;
 class GEVulkanMeshCache;
 class GESPMBuffer;
@@ -162,19 +163,14 @@ private:
 
     VmaAllocation m_data_memory;
 
-    // Where the (mutable) GERTGeometry of a geometry comes from, the order is
-    // the one of the geometries of the BLAS
+    // Only materials with a texture matrix need updating after the build.
     struct GeometrySource
     {
         // Grabbed, so it's valid until clear()
         irr::scene::ISceneNode* m_node;
         unsigned m_material_index;
+        size_t m_geometry_index;
     };
-
-    // CPU copy of the GERTGeometry array as it was built (the baked fields
-    // are final, the others are the initial ones), update() copies it and
-    // writes the current values of the others directly into the host buffer
-    std::vector<GERTGeometry> m_geometry_infos;
 
     std::vector<GeometrySource> m_geometry_sources;
 
@@ -224,7 +220,6 @@ private:
         // The instance buffer / the geometry buffer has only what the build
         // has (the static BLAS), so the dynamic ray tracing was off
         bool m_instance_static;
-        bool m_geometry_static;
         // The TLAS has to be built again with the instance buffer
         bool m_dirty;
         // GEVulkanMeshCache::getUpdateCount of the mesh cache buffer in the
@@ -252,7 +247,6 @@ private:
             m_scratch_address = 0;
             m_instance_count = 1;
             m_instance_static = true;
-            m_geometry_static = true;
             m_dirty = false;
             m_cache_version = 0;
             m_skin_active = false;
@@ -551,7 +545,8 @@ public:
     // ------------------------------------------------------------------------
     // Collect the static nodes under root and build the scene, it waits for
     // the device so call it when loading, returns true if something was built
-    bool build(irr::scene::ISceneNode* root);
+    bool build(irr::scene::ISceneNode* root,
+               const GEVulkanStaticSceneManager& statics);
     // ------------------------------------------------------------------------
     // Wait for the device and destroy everything
     void clear();
@@ -595,6 +590,7 @@ public:
     // isReady(). root is not changed
     // cameras are the absolute positions of the cameras of the frame
     void update(irr::scene::ISceneNode* root,
+                const GEVulkanStaticSceneManager& statics,
                 const std::vector<irr::core::vector3df>& cameras);
     // ------------------------------------------------------------------------
     // Record the skinning and the update of the skinned BLAS, the builds of the

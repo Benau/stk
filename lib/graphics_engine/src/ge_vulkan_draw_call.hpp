@@ -61,7 +61,7 @@ struct ObjectData
     float m_texture_trans[2];
     // ------------------------------------------------------------------------
     void init(irr::scene::ISceneNode* node, int material_id,
-              int skinning_offset, irr::video::SMaterial& m);
+              int skinning_offset, const irr::video::SMaterial& m);
     // ------------------------------------------------------------------------
     void init(irr::scene::IBillboardSceneNode* node, int material_id,
               const btQuaternion& rotation, bool mirror);
