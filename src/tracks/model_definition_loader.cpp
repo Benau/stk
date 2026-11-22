@@ -74,6 +74,7 @@ LODNode* ModelDefinitionLoader::instanciateAsLOD(const XMLNode* node, scene::ISc
         scene::ISceneNode* actual_parent = (parent == NULL ? sm->getRootSceneNode() : parent);
         LODNode* lod_node = new LODNode(groupname, actual_parent, sm);
         lod_node->updateAbsolutePosition();
+        std::shared_ptr<GE::GERenderInfo> lod_ri = ri;
         for (unsigned int m=0; m<group.size(); m++)
         {
 #ifndef SERVER_ONLY
@@ -93,11 +94,19 @@ LODNode* ModelDefinitionLoader::instanciateAsLOD(const XMLNode* node, scene::ISc
                 //cache.push_back(a_mesh);
                 irr_driver->grabAllTextures(a_mesh);
                 m_track->addCachedMesh(a_mesh);
-                if (ri && ri->getRayTracingType() == GE::GRTT_STATIC &&
+                if (ri && lod_ri == ri &&
+                    ri->getRayTracingType() == GE::GRTT_STATIC &&
                     !static_cast<GE::GESPM*>(a_mesh)->isStatic())
-                    ri->setRayTracingType(GE::GRTT_DYNAMIC);
+                {
+                    lod_ri = std::make_shared<GE::GERenderInfo>(*ri);
+                    lod_ri->setRayTracingType(GE::GRTT_DYNAMIC);
+                    for (unsigned index = 0;
+                         index < lod_node->getAllNodes().size(); index++)
+                        lod_node->getAllNodes()[index]
+                            ->resetFirstRenderInfo(lod_ri);
+                }
                 scene::IAnimatedMeshSceneNode* scene_node = irr_driver
-                    ->addAnimatedMesh(a_mesh, group[m].m_model_file, NULL, ri);
+                    ->addAnimatedMesh(a_mesh, group[m].m_model_file, NULL, lod_ri);
 
                 std::vector<int> frames_start;
                 if (node)
@@ -140,7 +149,7 @@ LODNode* ModelDefinitionLoader::instanciateAsLOD(const XMLNode* node, scene::ISc
                 irr_driver->grabAllTextures(a_mesh);
                 m_track->addCachedMesh(a_mesh);
                 scene::ISceneNode* scene_node = irr_driver
-                    ->addMesh(a_mesh, group[m].m_model_file, NULL, ri);
+                    ->addMesh(a_mesh, group[m].m_model_file, NULL, lod_ri);
 
                 m_track->handleAnimatedTextures(scene_node, *group[m].m_xml);
 
