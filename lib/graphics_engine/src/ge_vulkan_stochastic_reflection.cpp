@@ -64,10 +64,12 @@ enum StochasticBinding : unsigned
     SB_LIST,
     SB_NORMAL,
     SB_DEPTH,
-    SB_TRACE_LEVELS,
+    SB_TRACE_LEVEL_1,
     SB_TRACE_SAMPLED,
     SB_RESOLVED,
     SB_RAY_LENGTH,
+    SB_TRACE_LEVEL_2,
+    SB_TRACE_LEVEL_3,
     SB_COUNT
 };
 
@@ -369,9 +371,8 @@ void GEVulkanStochasticReflection::createDescriptor(
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[SB_DEPTH].descriptorType =
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    bindings[SB_TRACE_LEVELS].descriptorType =
-        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    bindings[SB_TRACE_LEVELS].descriptorCount = g_stochastic_levels;
+    for (auto level : { SB_TRACE_LEVEL_1, SB_TRACE_LEVEL_2, SB_TRACE_LEVEL_3 })
+        bindings[level].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[SB_TRACE_SAMPLED].descriptorType =
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[SB_RESOLVED].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
@@ -390,7 +391,7 @@ void GEVulkanStochasticReflection::createDescriptor(
     // m_set and m_resolve_set
     std::array<VkDescriptorPoolSize, 3> pool_sizes = {};
     pool_sizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    pool_sizes[0].descriptorCount = (3 + g_stochastic_levels) * 2;
+    pool_sizes[0].descriptorCount = (2 + g_stochastic_levels) * 2;
     pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     pool_sizes[1].descriptorCount = 2;
     pool_sizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -424,9 +425,6 @@ void GEVulkanStochasticReflection::createDescriptor(
     m_set = sets[0];
     m_resolve_set = sets[1];
 
-    VkDescriptorImageInfo trace_info = {};
-    trace_info.imageView = m_trace_level_views[0];
-    trace_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     VkDescriptorBufferInfo buffer_info = {};
     buffer_info.buffer = m_list;
     buffer_info.range = VK_WHOLE_SIZE;
@@ -465,8 +463,9 @@ void GEVulkanStochasticReflection::createDescriptor(
     {
         const std::array<const VkDescriptorImageInfo*, SB_COUNT> image_infos =
         {{
-            &trace_info, NULL, &normal_info, &depth_info, level_infos.data(),
-            &sampled_info, &resolved_infos[set], &ray_length_info
+            &level_infos[0], NULL, &normal_info, &depth_info, &level_infos[1],
+            &sampled_info, &resolved_infos[set], &ray_length_info,
+            &level_infos[2], &level_infos[3]
         }};
         std::array<VkWriteDescriptorSet, SB_COUNT> writes = {};
         for (unsigned i = 0; i < writes.size(); i++)

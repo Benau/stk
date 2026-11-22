@@ -20,8 +20,11 @@ layout(set = 0, binding = 3) uniform sampler2D u_depth;
 #include "utils/constants_utils.glsl"
 #include "utils/stochastic_reflection.glsl"
 
-layout(set = 0, binding = 4, rgba16f) uniform image2D
-    u_levels[STOCHASTIC_REFLECTION_LEVELS];
+// Older Metal GPUs need a separate texture argument for each writable mip.
+layout(set = 0, binding = 0, rgba16f) uniform readonly image2D u_level0;
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D u_level1;
+layout(set = 0, binding = 8, rgba16f) uniform writeonly image2D u_level2;
+layout(set = 0, binding = 9, rgba16f) uniform writeonly image2D u_level3;
 
 layout(push_constant) uniform PushConstants
 {
@@ -39,15 +42,14 @@ shared vec4 s_sum[64];
 shared float s_count[64];
 
 // ----------------------------------------------------------------------------
-// The array of images can only be indexed by a constant
 void storeLevel(int level, ivec2 texel, vec4 value)
 {
-    if (level == 1 && all(lessThan(texel, imageSize(u_levels[1]))))
-        imageStore(u_levels[1], texel, value);
-    else if (level == 2 && all(lessThan(texel, imageSize(u_levels[2]))))
-        imageStore(u_levels[2], texel, value);
-    else if (level == 3 && all(lessThan(texel, imageSize(u_levels[3]))))
-        imageStore(u_levels[3], texel, value);
+    if (level == 1 && all(lessThan(texel, imageSize(u_level1))))
+        imageStore(u_level1, texel, value);
+    else if (level == 2 && all(lessThan(texel, imageSize(u_level2))))
+        imageStore(u_level2, texel, value);
+    else if (level == 3 && all(lessThan(texel, imageSize(u_level3))))
+        imageStore(u_level3, texel, value);
 }   // storeLevel
 
 // ----------------------------------------------------------------------------
@@ -56,9 +58,9 @@ void main()
     const ivec2 local = ivec2(gl_LocalInvocationID.xy);
     const ivec2 texel = pc.m_origin + ivec2(gl_GlobalInvocationID.xy);
     const uint index = uint(local.x + 8 * local.y);
-    bool traced = all(lessThan(texel, imageSize(u_levels[0]))) &&
+    bool traced = all(lessThan(texel, imageSize(u_level0))) &&
         isStochasticReflectionTexel(texel, pc.m_rect, u_normal, u_depth);
-    s_sum[index] = traced ? imageLoad(u_levels[0], texel) : vec4(0.0);
+    s_sum[index] = traced ? imageLoad(u_level0, texel) : vec4(0.0);
     s_count[index] = traced ? 1.0 : 0.0;
     for (int level = 1; level < STOCHASTIC_REFLECTION_LEVELS; level++)
     {
