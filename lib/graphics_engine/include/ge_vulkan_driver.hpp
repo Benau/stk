@@ -19,6 +19,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace irr;
@@ -587,6 +588,7 @@ namespace GE
         std::vector<VkQueue> m_graphics_queue;
         VkQueue m_present_queue;
         mutable std::vector<std::mutex*> m_graphics_queue_mutexes;
+        const std::thread::id m_render_thread;
 
         uint32_t m_graphics_family;
         uint32_t m_present_family;

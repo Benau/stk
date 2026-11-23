@@ -527,7 +527,8 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
                                io::IFileSystem* io, SDL_Window* window,
                                IrrlichtDevice* device)
               : CNullDriver(io, core::dimension2d<u32>(0, 0)),
-                m_params(params), m_irrlicht_device(device),
+                m_params(params), m_render_thread(std::this_thread::get_id()),
+                m_irrlicht_device(device),
                 m_depth_texture(NULL), m_skybox_renderer(NULL),
                 m_mesh_texture_descriptor(NULL), m_rt_scene(NULL), m_final_chain(NULL),
                 m_rtt_texture(NULL),
@@ -1304,7 +1305,8 @@ std::unique_lock<std::mutex> GEVulkanDriver::getGraphicsQueue(VkQueue* queue) co
 {
     if (m_graphics_queue_count == 0)
         throw std::runtime_error("No graphics queue created");
-    if (m_graphics_queue_count == 1)
+    if (m_graphics_queue_count == 1 ||
+        std::this_thread::get_id() == m_render_thread)
     {
         *queue = m_graphics_queue[0];
         return std::unique_lock<std::mutex>(*m_graphics_queue_mutexes[0]);
