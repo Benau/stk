@@ -11,6 +11,7 @@
 #include "ge_vulkan_texture_descriptor.hpp"
 
 #include <algorithm>
+#include <cstring>
 
 namespace GE
 {
@@ -41,11 +42,15 @@ GEVulkanStaticDrawBatches::GEVulkanStaticDrawBatches(
     VkDescriptorSetLayout draw_layout)
                          : m_source(source), m_buffer(VK_NULL_HANDLE),
                            m_memory(NULL), m_objects_offset(0),
-                           m_pool(VK_NULL_HANDLE)
+                           m_stats_buffer(VK_NULL_HANDLE),
+                           m_stats_memory(NULL), m_stats_mapped(NULL),
+                           m_stats_stride(0), m_group_count(0),
+                           m_poly_count(0), m_pool(VK_NULL_HANDLE)
 {
     if (!m_source->isUsable())
         return;
-    if (!createBuffer() || !createDescriptors(draw_layout))
+    if (!createBuffer() || !createStats() ||
+        !createDescriptors(draw_layout))
     {
         logMessage(GLL_WARNING,
             "Static GPU draws of a view are unavailable, using the CPU");
@@ -57,9 +62,10 @@ GEVulkanStaticDrawBatches::GEVulkanStaticDrawBatches(
 GEVulkanStaticDrawBatches::~GEVulkanStaticDrawBatches()
 {
     GEVulkanDriver* vk = getVKDriver();
-    if (m_buffer != VK_NULL_HANDLE)
+    if (m_buffer != VK_NULL_HANDLE || m_stats_buffer != VK_NULL_HANDLE)
         vk->waitIdle();
     vkDestroyDescriptorPool(vk->getDevice(), m_pool, NULL);
+    vmaDestroyBuffer(vk->getVmaAllocator(), m_stats_buffer, m_stats_memory);
     vmaDestroyBuffer(vk->getVmaAllocator(), m_buffer, m_memory);
 }   // ~GEVulkanStaticDrawBatches
 
@@ -93,16 +99,65 @@ bool GEVulkanStaticDrawBatches::createBuffer()
 }   // createBuffer
 
 // ----------------------------------------------------------------------------
+bool GEVulkanStaticDrawBatches::createStats()
+{
+    GEVulkanDriver* vk = getVKDriver();
+    const unsigned group_size = GEVulkanStaticDrawSource::getGroupSize();
+    m_group_count = (m_source->getSourceCount() + group_size - 1) / group_size;
+    const VkDeviceSize size = m_group_count * sizeof(uint32_t);
+    m_stats_stride = size + getPadding(size, vk->getPhysicalDeviceProperties()
+        .limits.minStorageBufferOffsetAlignment);
+    const VkDeviceSize total = m_stats_stride * (vk->getMaxFrameInFlight() + 1);
+
+    // Host cached memory if there is any (or the coherent one), the shader
+    // only does plain stores and the CPU reads it back with random access
+    VmaAllocationCreateInfo info = {};
+    info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+    info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+        VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    if (!vk->createBuffer(total, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, info,
+        m_stats_buffer, m_stats_memory))
+        return false;
+    VmaAllocationInfo alloc_info;
+    vmaGetAllocationInfo(vk->getVmaAllocator(), m_stats_memory, &alloc_info);
+    if (alloc_info.pMappedData == NULL)
+        return false;
+    // The first frames read the slots before the GPU writes them
+    memset(alloc_info.pMappedData, 0, total);
+    vmaFlushAllocation(vk->getVmaAllocator(), m_stats_memory, 0,
+        VK_WHOLE_SIZE);
+    m_stats_mapped = (const uint32_t*)alloc_info.pMappedData;
+    return true;
+}   // createStats
+
+// ----------------------------------------------------------------------------
+void GEVulkanStaticDrawBatches::readPolyCount(unsigned idx)
+{
+    // The GPU wrote this slot when it was last used (the frame in flight count
+    // plus one frames ago), and the fence of that frame has been waited for
+    // before the command buffers are built. The values are not cleared, they
+    // are all overwritten by the dispatch which is recorded after this
+    const VkDeviceSize offset = idx * m_stats_stride;
+    vmaInvalidateAllocation(getVKDriver()->getVmaAllocator(), m_stats_memory,
+        offset, m_stats_stride);
+    const uint32_t* groups = m_stats_mapped + offset / sizeof(uint32_t);
+    unsigned total = 0;
+    for (unsigned i = 0; i < m_group_count; i++)
+        total += groups[i];
+    m_poly_count = total;
+}   // readPolyCount
+
+// ----------------------------------------------------------------------------
 bool GEVulkanStaticDrawBatches::createDescriptors(
                                               VkDescriptorSetLayout draw_layout)
 {
     GEVulkanDriver* vk = getVKDriver();
     const unsigned count = vk->getMaxFrameInFlight() + 1;
-    // Compute sets: camera, 3 buffers. Draw sets: camera, light, 3 objects
+    // Compute sets: camera, 4 buffers. Draw sets: camera, light, 3 objects
     VkDescriptorPoolSize sizes[] =
     {
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 3 * count },
-        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 * count },
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4 * count },
         { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 3 * count }
     };
     VkDescriptorPoolCreateInfo pool_info = {};
@@ -160,6 +215,8 @@ void GEVulkanStaticDrawBatches::updateDescriptors(GEVulkanCamera* cam,
         m_source->getSourceCount() * m_source->getSourceSize());
     writeBuffer(set, 2, sbo, m_buffer, 0, commands_size);
     writeBuffer(set, 3, sbo, m_buffer, m_objects_offset, objects_size);
+    writeBuffer(set, 4, sbo, m_stats_buffer, idx * m_stats_stride,
+        m_group_count * sizeof(uint32_t));
 
     // The same bindings as GEVulkanDrawCall::updateDataDescriptorSets. The
     // draws don't use the skinning and the materials of the draw ids, but
@@ -185,6 +242,7 @@ void GEVulkanStaticDrawBatches::dispatch(VkCommandBuffer cmd,
 {
     updateDescriptors(cam, dc.m_light_handler != NULL);
     const unsigned idx = getVKDriver()->getCurrentBufferIdx();
+    readPolyCount(idx);
     const VkPipelineStageFlags readers = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
 

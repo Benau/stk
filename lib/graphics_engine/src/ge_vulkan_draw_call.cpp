@@ -875,6 +875,17 @@ bool GEVulkanDrawCall::hasStaticBatches() const
 }   // hasStaticBatches
 
 // ----------------------------------------------------------------------------
+unsigned GEVulkanDrawCall::getPolyCount() const
+{
+    unsigned result = 0;
+    for (auto& cmd : m_cmds)
+        result += (cmd.m_cmd.indexCount / 3) * cmd.m_cmd.instanceCount;
+    if (hasStaticBatches())
+        result += m_static_batches->getPolyCount();
+    return result;
+}   // getPolyCount
+
+// ----------------------------------------------------------------------------
 void GEVulkanDrawCall::dispatchStaticBatches(VkCommandBuffer cmd,
                                              GEVulkanCamera* cam)
 {

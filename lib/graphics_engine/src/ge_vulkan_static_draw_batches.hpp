@@ -36,6 +36,23 @@ private:
 
     VkDeviceSize m_objects_offset;
 
+    // The polygons of the visible objects, one value for each workgroup of the
+    // culling, in host cached memory with a slot for each buffer of the camera
+    // uniform buffer. Every value is overwritten by each dispatch and the CPU
+    // only reads it (after the fence of the frame which used the slot), so no
+    // copy, clear or barrier is needed
+    VkBuffer m_stats_buffer;
+
+    VmaAllocation m_stats_memory;
+
+    const uint32_t* m_stats_mapped;
+
+    VkDeviceSize m_stats_stride;
+
+    unsigned m_group_count;
+
+    unsigned m_poly_count;
+
     VkDescriptorPool m_pool;
 
     // For each buffer of the camera uniform buffer (see getCurrentBufferIdx)
@@ -45,6 +62,10 @@ private:
 
     // ------------------------------------------------------------------------
     bool createBuffer();
+    // ------------------------------------------------------------------------
+    bool createStats();
+    // ------------------------------------------------------------------------
+    void readPolyCount(unsigned idx);
     // ------------------------------------------------------------------------
     bool createDescriptors(VkDescriptorSetLayout draw_layout);
     // ------------------------------------------------------------------------
@@ -66,6 +87,11 @@ public:
     // ------------------------------------------------------------------------
     // Whether the entry (of the static scene) is registered to the draw call
     bool onCPU(unsigned entry) const;
+    // ------------------------------------------------------------------------
+    // The polygons of the static draws of this view, from the last frame whose
+    // slot was finished by the GPU when this frame was recorded (a few frames
+    // old)
+    unsigned getPolyCount() const                      { return m_poly_count; }
     // ------------------------------------------------------------------------
     void dispatch(VkCommandBuffer cmd, GEVulkanDrawCall& dc,
                   GEVulkanCamera* cam);
