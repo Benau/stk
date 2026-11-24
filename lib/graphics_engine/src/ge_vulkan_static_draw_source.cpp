@@ -9,6 +9,7 @@
 #include "ge_vulkan_lod_node.hpp"
 #include "ge_vulkan_mesh_cache.hpp"
 #include "ge_vulkan_shader_manager.hpp"
+#include "ge_vulkan_shadow_draw_call.hpp"
 #include "ge_vulkan_static_scene_manager.hpp"
 #include "ge_vulkan_texture_descriptor.hpp"
 
@@ -39,6 +40,10 @@ static_assert(sizeof(ObjectData) == 64 && sizeof(Source) == 112,
     "The records must match static_draws.comp");
 static_assert(sizeof(VkDrawIndexedIndirectCommand) == 20,
     "The commands must match static_draws.comp");
+
+// The bit of Source::m_command (until the command is known) which flags a node
+// that the far cascade of the shadows skips, same as SMALL_FLAG of the shader
+const unsigned SMALL_FLAG = 0x80000000u;
 
 // The shader (and the draw call, to find the group) of one command
 typedef std::tuple<std::string, int, GESPMBuffer*> BatchKey;
@@ -160,6 +165,8 @@ void GEVulkanStaticDrawSource::build(const GEVulkanStaticSceneManager& scene,
                 source.m_max_distance = level.m_max_distance_sq;
                 source.m_min_edge = bounds.MinEdge;
                 source.m_max_edge = bounds.MaxEdge;
+                if (GEVulkanShadowDrawCall::isSmallForFarShadow(node))
+                    source.m_command = SMALL_FLAG;
                 records.emplace_back(BatchKey(shader, bind_textures ? slot : -1,
                     buffer), source);
             }
@@ -198,7 +205,8 @@ void GEVulkanStaticDrawSource::build(const GEVulkanStaticSceneManager& scene,
         command.firstInstance = sources.size();
         for (Source& source : batch.second)
         {
-            source.m_command = commands.size();
+            source.m_command = commands.size() |
+                (source.m_command & SMALL_FLAG);
             sources.push_back(source);
         }
         commands.push_back(command);

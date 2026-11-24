@@ -41,6 +41,10 @@ private:
 
 public:
     // ------------------------------------------------------------------------
+    // The far cascade doesn't draw the nodes for which this is true (also the
+    // GPU draws of the static scene, see GEVulkanStaticDrawSource)
+    static bool isSmallForFarShadow(const irr::scene::ISceneNode* node);
+    // ------------------------------------------------------------------------
     GEVulkanShadowDrawCall(GEVulkanShadowFBO* sfbo,
                            GEVulkanShadowCameraCascade cc);
     // ------------------------------------------------------------------------

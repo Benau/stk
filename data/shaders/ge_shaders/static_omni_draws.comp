@@ -1,0 +1,4 @@
+// GPU culling of the static scene for the lights of an omni shadow bucket
+#include "utils/static_draws_common.glsl"
+#include "utils/static_draws_sphere.glsl"
+#include "utils/static_draws_no_stats.glsl"

@@ -4,9 +4,10 @@
 // from the template with a zero instance count just before this dispatch.
 //
 // A shader includes this file, then one file which defines isInView (the test
-// of the view, static_draws_view.glsl or static_draws_sphere.glsl), then one
-// which defines the statistics (static_draws_stats.glsl or
-// static_draws_no_stats.glsl)
+// of the view: static_draws_view.glsl for a camera, static_draws_shadow.glsl
+// for a shadow of a directional light or static_draws_sphere.glsl for the
+// lights of an omni shadow), then one which defines the statistics
+// (static_draws_stats.glsl or static_draws_no_stats.glsl)
 layout(local_size_x = 64) in;
 
 // The uniform buffer of the view that is culled (set 0, binding 0)
@@ -15,7 +16,8 @@ layout(local_size_x = 64) in;
 
 layout(push_constant) uniform LODConstants
 {
-    // The camera position used to select the level of detail (xyz)
+    // The camera position used to select the level of detail (xyz), w is not
+    // zero if the shadow view skips the small objects
     vec4 m_lod_camera;
 } u_lod;
 
@@ -29,6 +31,9 @@ struct Source
     vec3 max_edge;
     uint command;
 };
+
+// The bit of the command which flags a small object, see isSmall
+const uint SMALL_FLAG = 0x80000000u;
 
 struct Draw
 {
@@ -54,7 +59,7 @@ layout(std430, set = 0, binding = 3) writeonly buffer Objects
     uvec4 objects[];
 };
 
-// Defined by the test of the view
+// Defined by the test of the view (static_draws_view.glsl, ...)
 bool isInView(const Source source);
 
 // Defined by the statistics, all the threads of the workgroup must call them
@@ -62,6 +67,19 @@ bool isInView(const Source source);
 void statsBegin();
 void statsAddVisible(uint polygons);
 void statsEnd();
+
+// ----------------------------------------------------------------------------
+// Objects that the far cascade of the shadows doesn't draw
+bool isSmall(const Source source)
+{
+    return (source.command & SMALL_FLAG) != 0u;
+}   // isSmall
+
+// ----------------------------------------------------------------------------
+uint getCommand(const Source source)
+{
+    return source.command & ~SMALL_FLAG;
+}   // getCommand
 
 // ----------------------------------------------------------------------------
 bool isInLevelOfDetail(const Source source)
@@ -88,11 +106,12 @@ void main()
         Source source = sources[index];
         if (isInLevelOfDetail(source) && isInView(source))
         {
-            uint slot = atomicAdd(draws[source.command].instance_count, 1u);
-            uint dest = (draws[source.command].first_instance + slot) * 4u;
+            uint command = getCommand(source);
+            uint slot = atomicAdd(draws[command].instance_count, 1u);
+            uint dest = (draws[command].first_instance + slot) * 4u;
             for (uint word = 0u; word < 4u; word++)
                 objects[dest + word] = source.object_data[word];
-            statsAddVisible(draws[source.command].index_count / 3u);
+            statsAddVisible(draws[command].index_count / 3u);
         }
     }
 

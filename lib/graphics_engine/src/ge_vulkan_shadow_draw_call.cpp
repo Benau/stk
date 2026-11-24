@@ -35,10 +35,17 @@ void GEVulkanShadowDrawCall::prepareShadow(unsigned layer)
 }   // prepareShadow
 
 // ----------------------------------------------------------------------------
+bool GEVulkanShadowDrawCall::isSmallForFarShadow(
+                                           const irr::scene::ISceneNode* node)
+{
+    return node->getBoundingBox().getArea() < 20.0f;
+}   // isSmallForFarShadow
+
+// ----------------------------------------------------------------------------
 bool GEVulkanShadowDrawCall::skip(irr::scene::ISceneNode* node) const
 {
     // Skip small objects for far shadows
-    if (m_cascade == GVSCC_FAR && node->getBoundingBox().getArea() < 20.0f)
+    if (m_cascade == GVSCC_FAR && isSmallForFarShadow(node))
         return true;
     return false;
 }   // skip
