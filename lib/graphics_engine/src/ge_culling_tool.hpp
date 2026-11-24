@@ -33,7 +33,7 @@ private:
     // - the six planes (without the near one if m_skip_near_plane), then the
     //   min and max edge of m_cam_bbox (as vec4)
     // - for omni shadows (m_omni_sfbo), the position and the squared radius
-    //   of each light of the bucket, see getMaxCullingLights
+    //   of each light of the bucket, see OMNI_LIGHTS_PER_BUCKET
     float m_culling_data[8][4];
 
     const GEVulkanOmniShadowFBO* m_omni_sfbo;
@@ -68,9 +68,6 @@ public:
     // ------------------------------------------------------------------------
     static const unsigned getCullingDataSize()
                                               { return sizeof(float) * 4 * 8; }
-    // ------------------------------------------------------------------------
-    // The most lights of a bucket that the GPU culling data holds
-    static const unsigned getMaxCullingLights()                   { return 8; }
 };   // GECullingTool
 
 }

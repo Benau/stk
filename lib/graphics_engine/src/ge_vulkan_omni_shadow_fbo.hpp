@@ -14,6 +14,7 @@ struct GEOmniLight
 
 // ----------------------------------------------------------------------------
 const unsigned OMNI_FACES_PER_LIGHT = 6;
+const unsigned OMNI_LIGHTS_PER_BUCKET = 2;
 // ----------------------------------------------------------------------------
 class GEVulkanOmniShadowFBO : public GEVulkanShadowFBO
 {
@@ -31,10 +32,7 @@ private:
     // swapDrawCallData.
     virtual unsigned getSharingDrawCallCount() const
     {
-        const unsigned count = 2 * OMNI_FACES_PER_LIGHT;
-        static_assert((count % OMNI_FACES_PER_LIGHT) == 0,
-            "it should be a multiple of OMNI_FACES_PER_LIGHT");
-        return count;
+        return OMNI_LIGHTS_PER_BUCKET * OMNI_FACES_PER_LIGHT;
     }
     // ------------------------------------------------------------------------
     virtual int getLayerOwner(int pointlight_layer) const

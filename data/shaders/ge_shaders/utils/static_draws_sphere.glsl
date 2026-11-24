@@ -3,12 +3,11 @@
 // used. Same as GECullingTool::isCulled, the culling data is the position and
 // the squared radius of each light, which is negative if there is no light
 #define CULL_LIGHT(i) u_camera.m_culling[i]
-#define CULL_LIGHT_COUNT 8
 
 // ----------------------------------------------------------------------------
 bool isInView(const Source source)
 {
-    for (int i = 0; i < CULL_LIGHT_COUNT; i++)
+    for (int i = 0; i < OMNI_LIGHTS_PER_BUCKET; i++)
     {
         vec4 light = CULL_LIGHT(i);
         // The closest point of the box to the center of the light

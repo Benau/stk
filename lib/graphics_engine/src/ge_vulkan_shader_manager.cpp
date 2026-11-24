@@ -98,6 +98,7 @@ void updatePredefines()
     oss << "#define TOTAL_MESH_TEXTURE_LAYER " << g_mesh_texture_layer << "\n";
     oss << "#define MAX_RENDERING_LIGHT " << GEVulkanLightHandler::getMaxRenderingLights() << "\n";
     oss << "#define OMNI_FACES_PER_LIGHT " << OMNI_FACES_PER_LIGHT << "\n";
+    oss << "#define OMNI_LIGHTS_PER_BUCKET " << OMNI_LIGHTS_PER_BUCKET << "\n";
     if (GEVulkanFeatures::supportsBindTexturesAtOnce())
         oss << "#define BIND_TEXTURES_AT_ONCE\n";
     if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())

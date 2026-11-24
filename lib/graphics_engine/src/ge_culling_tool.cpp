@@ -62,9 +62,12 @@ void GECullingTool::updateCullingData()
         // frustum is not used. A squared radius below zero never passes (the
         // squared distance of the closest point is always zero or above)
         const auto& lights = m_omni_sfbo->getLights();
+        static_assert(OMNI_LIGHTS_PER_BUCKET <=
+            sizeof(m_culling_data) / sizeof(m_culling_data[0]),
+            "The culling data must hold all lights of a bucket");
         assert(m_bucket_light_end <=
-            m_bucket_light_start + getMaxCullingLights());
-        for (unsigned i = 0; i < getMaxCullingLights(); i++)
+            m_bucket_light_start + OMNI_LIGHTS_PER_BUCKET);
+        for (unsigned i = 0; i < OMNI_LIGHTS_PER_BUCKET; i++)
         {
             const unsigned light = m_bucket_light_start + i;
             float* data = m_culling_data[i];
