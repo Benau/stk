@@ -28,8 +28,12 @@ private:
 
     irr::core::aabbox3df m_cam_bbox;
 
-    // The six planes, then the min and max edge of m_cam_bbox (as vec4), the
-    // layout that GPU culling reads from the camera uniform buffer
+    // The data that GPU culling reads from the camera uniform buffer, it
+    // does the same tests as isCulled so what it holds depends on the view:
+    // - the six planes (without the near one if m_skip_near_plane), then the
+    //   min and max edge of m_cam_bbox (as vec4)
+    // - for omni shadows (m_omni_sfbo), the position and the squared radius
+    //   of each light of the bucket, see getMaxCullingLights
     float m_culling_data[8][4];
 
     const GEVulkanOmniShadowFBO* m_omni_sfbo;
@@ -64,6 +68,9 @@ public:
     // ------------------------------------------------------------------------
     static const unsigned getCullingDataSize()
                                               { return sizeof(float) * 4 * 8; }
+    // ------------------------------------------------------------------------
+    // The most lights of a bucket that the GPU culling data holds
+    static const unsigned getMaxCullingLights()                   { return 8; }
 };   // GECullingTool
 
 }

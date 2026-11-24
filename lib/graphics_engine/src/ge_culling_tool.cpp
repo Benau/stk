@@ -31,7 +31,6 @@ void GECullingTool::initShadow(const GEVulkanShadowFBO* sfbo, unsigned layer)
     // The camera box is not used by shadow views (m_skip_near_plane)
     m_cam_bbox = irr::core::aabbox3df(-FLT_MAX, -FLT_MAX, -FLT_MAX, FLT_MAX,
         FLT_MAX, FLT_MAX);
-    updateCullingData();
     m_omni_sfbo = dynamic_cast<const GEVulkanOmniShadowFBO*>(sfbo);
     const int pointlight_layer = (int)layer - (int)sfbo->getLayerOffset();
     if (m_omni_sfbo && pointlight_layer >= 0)
@@ -49,14 +48,54 @@ void GECullingTool::initShadow(const GEVulkanShadowFBO* sfbo, unsigned layer)
         m_bucket_light_start = 0;
         m_bucket_light_end   = 0;
     }
+    // The lights of the bucket are known now
+    updateCullingData();
 }   // initShadow
 
 // ----------------------------------------------------------------------------
 void GECullingTool::updateCullingData()
 {
+    // Same tests as isCulled, but for the GPU
+    if (m_omni_sfbo)
+    {
+        // isCulled only tests the lights of the bucket for omni shadows, the
+        // frustum is not used. A squared radius below zero never passes (the
+        // squared distance of the closest point is always zero or above)
+        const auto& lights = m_omni_sfbo->getLights();
+        assert(m_bucket_light_end <=
+            m_bucket_light_start + getMaxCullingLights());
+        for (unsigned i = 0; i < getMaxCullingLights(); i++)
+        {
+            const unsigned light = m_bucket_light_start + i;
+            float* data = m_culling_data[i];
+            if (light < m_bucket_light_end)
+            {
+                const GEOmniLight& l = lights[light];
+                data[0] = l.m_position.X;
+                data[1] = l.m_position.Y;
+                data[2] = l.m_position.Z;
+                data[3] = l.m_radius * l.m_radius;
+            }
+            else
+            {
+                data[0] = data[1] = data[2] = 0.0f;
+                data[3] = -1.0f;
+            }
+        }
+        return;
+    }
+
     memcpy(m_culling_data, &m_frustum[0].X, sizeof(float) * 4 * 6);
     memcpy(m_culling_data[6], &m_cam_bbox.MinEdge.X, sizeof(float) * 3);
     memcpy(m_culling_data[7], &m_cam_bbox.MaxEdge.X, sizeof(float) * 3);
+    if (m_skip_near_plane)
+    {
+        // The plane (0, 0, 0, 1) is never negative, so the GPU test of all
+        // the six planes passes it
+        float* near_plane = m_culling_data[0];
+        near_plane[0] = near_plane[1] = near_plane[2] = 0.0f;
+        near_plane[3] = 1.0f;
+    }
 }   // updateCullingData
 
 // ----------------------------------------------------------------------------
