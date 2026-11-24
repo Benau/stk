@@ -28,6 +28,7 @@ bool g_supports_descriptor_indexing = false;
 bool g_supports_partially_bound = false;
 uint32_t g_max_sampler_supported = 0;
 bool g_supports_multi_draw_indirect = false;
+bool g_supports_draw_indirect_first_instance = false;
 bool g_supports_base_vertex_rendering = true;
 bool g_supports_compute_in_main_queue = false;
 bool g_supports_shader_draw_parameters = false;
@@ -117,6 +118,8 @@ void GEVulkanFeatures::init(GEVulkanDriver* vk)
         g_supports_bind_textures_at_once = false;
     if (vk->getPhysicalDeviceFeatures().shaderSampledImageArrayDynamicIndexing == VK_FALSE)
         dynamic_indexing = false;
+    g_supports_draw_indirect_first_instance =
+        vk->getPhysicalDeviceFeatures().drawIndirectFirstInstance;
     g_supports_multi_draw_indirect = vk->getPhysicalDeviceFeatures().multiDrawIndirect &&
          vk->getPhysicalDeviceFeatures().drawIndirectFirstInstance;
 
@@ -454,6 +457,9 @@ void GEVulkanFeatures::printStats()
         "Vulkan supports multi-draw indirect",
         g_supports_multi_draw_indirect ? "true" : "false");
     os::Printer::log(
+        "Vulkan supports draw indirect first instance",
+        g_supports_draw_indirect_first_instance ? "true" : "false");
+    os::Printer::log(
         "Vulkan supports base vertex rendering",
         g_supports_base_vertex_rendering ? "true" : "false");
     os::Printer::log(
@@ -557,6 +563,12 @@ bool GEVulkanFeatures::supportsMultiDrawIndirect()
 {
     return g_supports_multi_draw_indirect;
 }   // supportsMultiDrawIndirect
+
+// ----------------------------------------------------------------------------
+bool GEVulkanFeatures::supportsDrawIndirectFirstInstance()
+{
+    return g_supports_draw_indirect_first_instance;
+}   // supportsDrawIndirectFirstInstance
 
 // ----------------------------------------------------------------------------
 bool GEVulkanFeatures::supportsBaseVertexRendering()

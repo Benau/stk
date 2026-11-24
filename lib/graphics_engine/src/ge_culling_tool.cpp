@@ -8,6 +8,8 @@
 #include "ISceneNode.h"
 #include <algorithm>
 #include <cassert>
+#include <cfloat>
+#include <cstring>
 
 namespace GE
 {
@@ -16,6 +18,7 @@ void GECullingTool::init(GEVulkanCamera* cam)
 {
     mathPlaneFrustumf(&m_frustum[0].X, cam->getPVM());
     m_cam_bbox = cam->getViewFrustum()->getBoundingBox();
+    updateCullingData();
 }   // init
 
 // ----------------------------------------------------------------------------
@@ -25,6 +28,10 @@ void GECullingTool::initShadow(const GEVulkanShadowFBO* sfbo, unsigned layer)
         m_skip_near_plane = true;
     mathPlaneFrustumf(&m_frustum[0].X,
         sfbo->getShadowProjectionViewMatrix(layer));
+    // The camera box is not used by shadow views (m_skip_near_plane)
+    m_cam_bbox = irr::core::aabbox3df(-FLT_MAX, -FLT_MAX, -FLT_MAX, FLT_MAX,
+        FLT_MAX, FLT_MAX);
+    updateCullingData();
     m_omni_sfbo = dynamic_cast<const GEVulkanOmniShadowFBO*>(sfbo);
     const int pointlight_layer = (int)layer - (int)sfbo->getLayerOffset();
     if (m_omni_sfbo && pointlight_layer >= 0)
@@ -43,6 +50,14 @@ void GECullingTool::initShadow(const GEVulkanShadowFBO* sfbo, unsigned layer)
         m_bucket_light_end   = 0;
     }
 }   // initShadow
+
+// ----------------------------------------------------------------------------
+void GECullingTool::updateCullingData()
+{
+    memcpy(m_culling_data, &m_frustum[0].X, sizeof(float) * 4 * 6);
+    memcpy(m_culling_data[6], &m_cam_bbox.MinEdge.X, sizeof(float) * 3);
+    memcpy(m_culling_data[7], &m_cam_bbox.MaxEdge.X, sizeof(float) * 3);
+}   // updateCullingData
 
 // ----------------------------------------------------------------------------
 bool GECullingTool::isCulled(const irr::core::vector3df& center, float radius)

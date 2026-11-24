@@ -75,6 +75,8 @@ set(GE_SOURCES
     src/ge_vulkan_post_processing.cpp
     src/ge_vulkan_scene_manager.cpp
     src/ge_vulkan_static_scene_manager.cpp
+    src/ge_vulkan_static_draw_batches.cpp
+    src/ge_vulkan_static_draw_source.cpp
     src/ge_vulkan_screenshot.cpp
     src/ge_vulkan_shader_manager.cpp
     src/ge_vulkan_shadow_draw_call.cpp

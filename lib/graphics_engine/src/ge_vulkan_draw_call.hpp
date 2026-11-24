@@ -35,6 +35,8 @@ class GECullingTool;
 struct GEVulkanBloomRects;
 class GESPMBuffer;
 class GEVulkanCamera;
+class GEVulkanStaticSceneManager;
+class GEVulkanStaticDrawBatches;
 class GEVulkanDriver;
 class GEVulkanDynamicBuffer;
 class GEVulkanLightHandler;
@@ -148,6 +150,9 @@ struct GlowOutlineDrawData
 class GEVulkanHiZDepth;
 class GEVulkanDrawCall
 {
+    friend class GEVulkanStaticDrawBatches;
+    friend class GEVulkanStaticDrawSource;
+    std::unique_ptr<GEVulkanStaticDrawBatches> m_static_batches;
 private:
     GEVulkanShadowFBO* m_shadow_fbo;
 
@@ -420,7 +425,8 @@ public:
     // sky is visible)
     bool hasDeferredOutput() const
     {
-        return !m_deferred_layouts.empty() && !m_visible_nodes.empty();
+        return !m_deferred_layouts.empty() &&
+            (!m_visible_nodes.empty() || hasStaticBatches());
     }
     // ------------------------------------------------------------------------
     void renderDisplaceColor(GEVulkanDriver* vk, VkCommandBuffer cmd,
@@ -536,6 +542,13 @@ public:
         std::swap(m_data_descriptor_sets, other->m_data_descriptor_sets);
         std::swap(m_dspm_descriptor_sets, other->m_dspm_descriptor_sets);
     }
+    // ------------------------------------------------------------------------
+    GEVulkanStaticDrawBatches* prepareStaticBatches(
+                                            GEVulkanStaticSceneManager& scene);
+    // ------------------------------------------------------------------------
+    bool hasStaticBatches() const;
+    // ------------------------------------------------------------------------
+    void dispatchStaticBatches(VkCommandBuffer cmd, GEVulkanCamera* cam);
 
 };   // GEVulkanDrawCall
 

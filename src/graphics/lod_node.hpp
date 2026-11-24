@@ -71,6 +71,10 @@ private:
 
     bool m_update_box_every_frame;
     bool m_lod_distances_updated;
+protected:
+    void updateLODDistances();
+    int getSwitchDistance(unsigned level) const;
+    int getForcedLOD() const { return m_forced_lod; }
 public:
 
     LODNode(std::string group_name, scene::ISceneNode* parent, scene::ISceneManager* mgr, s32 id=-1);

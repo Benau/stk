@@ -55,6 +55,25 @@ class VulkanLODNode : public LODNode, public GE::GEVulkanLODNode
 public:
     using LODNode::LODNode;
     // ------------------------------------------------------------------------
+    void getDrawLevels(std::vector<Level>& levels)
+    {
+        if (getForcedLOD() >= 0)
+        {
+            levels.push_back({getAllNodes()[getForcedLOD()], 0, -1});
+            return;
+        }
+        updateLODDistances();
+        int previous = 0;
+        for (unsigned index = 0; index < getLevelCount(); index++)
+        {
+            int distance = getSwitchDistance(index);
+            if (distance <= previous)
+                continue;
+            levels.push_back({getAllNodes()[index], previous, distance});
+            previous = distance;
+        }
+    }
+    // ------------------------------------------------------------------------
     scene::ISceneNode* getLevelForView(const core::matrix4& camera_transform)
     {
         int level = selectLevel(&camera_transform);
@@ -165,30 +184,33 @@ int LODNode::selectLevel(const core::matrix4* camera_transform)
     const int squared_dist = (int)getDistanceSQ(
         m_nodes[0]->getAbsoluteTransformation(), *camera_transform);
 
-    if (!m_lod_distances_updated)
+    updateLODDistances();
+    for (unsigned index = 0; index < m_detail.size(); index++)
     {
-        for (unsigned int n=0; n<m_detail.size(); n++)
-        {
-            m_detail[n] = (int)((float)m_detail[n] * irr_driver->getLODMultiplier());
-        }
-        m_lod_distances_updated = true;
-    }
-
-    // The LoD levels are ordered from highest quality to lowest
-    for (unsigned int n=0; n<m_detail.size(); n++)
-    {
-        // Display this level if close enough.
-        // If a high-level of detail would only be triggered from too close,
-        // and there are lower levels available, skip it completely.
-        // It's better to display a low level than to have the high-level pop suddenly.
-        if (squared_dist < m_detail[n] &&
-            ((n + 1 >= m_detail.size()) || (m_min_switch_distance < m_detail[n])))
-        {
-            return n;
-        }
+        if (squared_dist < getSwitchDistance(index))
+            return index;
     }
     return -1;
-}  // selectLevel
+}   // selectLevel
+
+// ----------------------------------------------------------------------------
+void LODNode::updateLODDistances()
+{
+    if (m_lod_distances_updated)
+        return;
+    for (int& distance : m_detail)
+        distance = (int)((float)distance * irr_driver->getLODMultiplier());
+    m_lod_distances_updated = true;
+}   // updateLODDistances
+
+// ----------------------------------------------------------------------------
+int LODNode::getSwitchDistance(unsigned level) const
+{
+    // Skip levels visible only very close to the camera, except the last.
+    if (level + 1 < m_detail.size() && m_detail[level] <= m_min_switch_distance)
+        return 0;
+    return m_detail[level];
+}   // getSwitchDistance
 
 // ---------------------------------------------------------------------------
 /** Forces the level of detail to be n. If n>number of levels, the most

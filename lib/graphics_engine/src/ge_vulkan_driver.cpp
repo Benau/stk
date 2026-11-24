@@ -1195,7 +1195,7 @@ void GEVulkanDriver::createDevice()
     device_features.multiDrawIndirect =
         GEVulkanFeatures::supportsMultiDrawIndirect();
     device_features.drawIndirectFirstInstance =
-        GEVulkanFeatures::supportsMultiDrawIndirect();
+        GEVulkanFeatures::supportsDrawIndirectFirstInstance();
 
     VkPhysicalDeviceDescriptorIndexingFeatures descriptor_indexing_features = {};
     descriptor_indexing_features.sType =
@@ -2957,6 +2957,10 @@ void GEVulkanDriver::buildCommandBuffers()
     {
         for (auto& p : g->m_dcs)
         {
+            // Culls the static scene of the view, outside any render pass
+            if (p.first->hasStaticBatches())
+                p.first->dispatchStaticBatches(getCurrentCommandBuffer(),
+                    p.second);
             GEVulkanShadowFBO* sfbo = p.first->getShadowFBO();
             if (sfbo)
                 sfbo->render(getCurrentCommandBuffer(), p.second);

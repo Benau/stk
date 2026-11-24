@@ -4,8 +4,12 @@
 #include "ge_material_manager.hpp"
 #include "ge_render_info.hpp"
 #include "ge_spm_buffer.hpp"
+#include "ge_vulkan_draw_call.hpp"
 #include "ge_vulkan_lod_node.hpp"
 #include "ge_vulkan_scene_manager.hpp"
+#include "ge_vulkan_shadow_fbo.hpp"
+#include "ge_vulkan_static_draw_batches.hpp"
+#include "ge_vulkan_static_draw_source.hpp"
 #include "../source/Irrlicht/CEmptySceneNode.h"
 
 #include "IMeshSceneNode.h"
@@ -198,26 +202,53 @@ void GEVulkanStaticSceneManager::cache(Node* node)
 }   // cache
 
 // ----------------------------------------------------------------------------
+std::shared_ptr<GEVulkanStaticDrawSource>
+    GEVulkanStaticSceneManager::getDrawSource(GEVulkanDrawCall& dc)
+{
+    if (!m_gpu_draws || m_entries.empty())
+        return NULL;
+    // The mesh cache is rebuilt when meshes are added, which moves the
+    // meshes in its buffer
+    if (!m_draw_source || !m_draw_source->isCurrent())
+    {
+        m_draw_source = std::make_shared<GEVulkanStaticDrawSource>();
+        m_draw_source->build(*this, dc);
+    }
+    return m_draw_source;
+}   // getDrawSource
+
+// ----------------------------------------------------------------------------
 void GEVulkanStaticSceneManager::registerNodes(GEVulkanSceneManager* manager,
     const core::matrix4& camera_transform)
 {
-    for (const Entry& entry : m_entries)
+    GEVulkanDrawCall* dc = manager->getActiveDrawCall();
+    // The entries which the GPU draws for this view are not registered
+    // (except for the shadows, which are still generated on the CPU)
+    const GEVulkanStaticDrawBatches* batches = dc->prepareStaticBatches(*this);
+    GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
+    for (unsigned i = 0; i < m_entries.size(); i++)
     {
+        const Entry& entry = m_entries[i];
         Node* node = entry.m_node;
         if (entry.m_lod)
             node = entry.m_lod->getLevelForView(camera_transform);
         if (!node)
             continue;
         node->refreshTextureDescriptorID();
-        manager->registerNodeForRendering(node, scene::ESNRP_SOLID);
+        if (!batches || batches->onCPU(i))
+            manager->registerNodeForRendering(node, scene::ESNRP_SOLID);
+        else if (sfbo)
+            sfbo->addNode(node);
     }
 }   // registerNodes
 
 // ----------------------------------------------------------------------------
-void GEVulkanStaticSceneManager::split(GEVulkanSceneManager* manager)
+void GEVulkanStaticSceneManager::split(GEVulkanSceneManager* manager,
+                                       bool gpu_draws)
 {
     release();
     splitChildren(manager);
+    m_gpu_draws = gpu_draws;
     for (StaticSceneBranch* branch : m_branches)
     {
         const auto& children = branch->getChildren();
@@ -250,6 +281,8 @@ void GEVulkanStaticSceneManager::release()
     m_entries.clear();
     m_rt_meshes.clear();
     m_rt_grass.clear();
+    m_draw_source.reset();
+    m_gpu_draws = false;
     m_live_static = true;
     m_split = false;
 }   // release
