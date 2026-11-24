@@ -477,13 +477,8 @@ public:
                                              getPipelineConstantOptions() const
                                                 { return m_constants_options; }
     // ------------------------------------------------------------------------
-    unsigned getPolyCount() const
-    {
-        unsigned result = 0;
-        for (auto& cmd : m_cmds)
-            result += (cmd.m_cmd.indexCount / 3) * cmd.m_cmd.instanceCount;
-        return result;
-    }
+    // Includes the static draws of the GPU (a few frames old)
+    unsigned getPolyCount() const;
     // ------------------------------------------------------------------------
     void reset()
     {

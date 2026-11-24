@@ -49,6 +49,15 @@ layout(std430, set = 0, binding = 3) writeonly buffer Objects
     uvec4 objects[];
 };
 
+// The polygons of the visible objects of each workgroup, always written (even
+// if zero) so it needs no clearing, the CPU sums it a few frames later
+layout(std430, set = 0, binding = 4) writeonly buffer Stats
+{
+    uint group_polys[];
+};
+
+shared uint s_polys;
+
 // ----------------------------------------------------------------------------
 bool isVisible(const Source source)
 {
@@ -81,14 +90,28 @@ bool isVisible(const Source source)
 // ----------------------------------------------------------------------------
 void main()
 {
+    // All the threads must reach the barriers, so no early return
+    if (gl_LocalInvocationIndex == 0u)
+        s_polys = 0u;
+    memoryBarrierShared();
+    barrier();
+
     uint index = gl_GlobalInvocationID.x;
-    if (index >= uint(sources.length()))
-        return;
-    Source source = sources[index];
-    if (!isVisible(source))
-        return;
-    uint slot = atomicAdd(draws[source.command].instance_count, 1u);
-    uint dest = (draws[source.command].first_instance + slot) * 4u;
-    for (uint word = 0u; word < 4u; word++)
-        objects[dest + word] = source.object_data[word];
+    if (index < uint(sources.length()))
+    {
+        Source source = sources[index];
+        if (isVisible(source))
+        {
+            uint slot = atomicAdd(draws[source.command].instance_count, 1u);
+            uint dest = (draws[source.command].first_instance + slot) * 4u;
+            for (uint word = 0u; word < 4u; word++)
+                objects[dest + word] = source.object_data[word];
+            atomicAdd(s_polys, draws[source.command].index_count / 3u);
+        }
+    }
+
+    memoryBarrierShared();
+    barrier();
+    if (gl_LocalInvocationIndex == 0u)
+        group_polys[gl_WorkGroupID.x] = s_polys;
 }   // main

@@ -281,9 +281,9 @@ bool GEVulkanStaticDrawSource::createPipeline()
 {
     VkDevice device = getVKDriver()->getDevice();
     // The camera of the view, the records, then the destination commands and
-    // objects
-    VkDescriptorSetLayoutBinding bindings[4] = {};
-    for (unsigned i = 0; i < 4; i++)
+    // objects, and the polygon counts of the workgroups
+    VkDescriptorSetLayoutBinding bindings[5] = {};
+    for (unsigned i = 0; i < 5; i++)
     {
         bindings[i].binding = i;
         bindings[i].descriptorType = i == 0 ?
@@ -294,7 +294,7 @@ bool GEVulkanStaticDrawSource::createPipeline()
     }
     VkDescriptorSetLayoutCreateInfo set_info = {};
     set_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    set_info.bindingCount = 4;
+    set_info.bindingCount = 5;
     set_info.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(device, &set_info, NULL,
         &m_compute_set_layout) != VK_SUCCESS)
