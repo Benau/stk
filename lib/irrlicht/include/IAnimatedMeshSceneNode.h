@@ -164,6 +164,9 @@ namespace scene
 		not animate. */
 		virtual void setTransitionTime(f32 Time) =0;
 
+		//! Returns whether the node is still blending from its previous pose.
+		virtual bool isTransitioning() const = 0;
+
 		//! animates the joints in the mesh based on the current frame.
 		/** Also takes in to account transitions. */
 		virtual void animateJoints(bool CalculateAbsolutePositions=true) = 0;

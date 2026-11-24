@@ -336,6 +336,10 @@ private:
      *  to AF_DEFAULT the default steering animation is shown. */
     AnimationFrameType m_current_animation;
 
+    /** Straight frame of the active steering pose, or AF_DEFAULT before the
+     *  first steering update after a special animation. */
+    AnimationFrameType m_steering_frame;
+
     /** Width of kart.  */
     float m_kart_width;
 

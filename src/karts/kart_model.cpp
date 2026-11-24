@@ -53,12 +53,15 @@
 #include "IVideoDriver.h"
 
 #include <algorithm>
+#include <cmath>
 #include <ge_animation.hpp>
 #include <ge_render_info.hpp>
 #include <ge_spm.hpp>
 #include <ge_spm_buffer.hpp>
 
 #define SKELETON_DEBUG 0
+
+static const float STEERING_TRANSITION_TIME = 0.2f;
 
 float KartModel::UNDEFINED = -99.9f;
 
@@ -155,6 +158,7 @@ KartModel::KartModel(bool is_master)
         m_animation_frame[i]=-1;
     m_animation_speed   = 25;
     m_current_animation = AF_DEFAULT;
+    m_steering_frame    = AF_DEFAULT;
     m_support_colorization = false;
     m_kart_properties = NULL;
 }   // KartModel
@@ -1040,6 +1044,7 @@ void KartModel::loadHeadlights(const XMLNode &node, const std::string& kart_dir)
  */
 void KartModel::reset()
 {
+    m_steering_frame = AF_DEFAULT;
     for (unsigned int i = 0; i < 4; i++)
     {
         if (m_wheel_node[i])
@@ -1105,7 +1110,7 @@ void KartModel::setAnimation(AnimationFrameType type, bool play_non_loop)
             virtual void OnAnimationEnd(IAnimatedMeshSceneNode* node)
             {
                 if (m_transition)
-                    m_kart_model->m_animated_node->setTransitionTime(0.2f);
+                    node->setTransitionTime(STEERING_TRANSITION_TIME);
                 m_kart_model->setAnimation(AF_DEFAULT);
             }
         };
@@ -1126,32 +1131,14 @@ void KartModel::setAnimation(AnimationFrameType type, bool play_non_loop)
     }
     else if (m_current_animation==AF_DEFAULT)
     {
+        m_steering_frame = AF_DEFAULT;
         m_animated_node->setLoopMode(false);
         // setTransitionTime before setFrameLoop so the node will save the last
         // frame
         if (transition)
-            m_animated_node->setTransitionTime(0.2f);
-        const bool support_backpedal =
-            m_animation_frame[AF_BACK_STRAIGHT] > -1 &&
-            m_animation_frame[AF_BACK_LEFT] > -1 &&
-            m_animation_frame[AF_BACK_RIGHT] > -1;
-        if (support_backpedal)
-        {
-            int start_frame = std::min(m_animation_frame[AF_LEFT],
-                m_animation_frame[AF_RIGHT]);
-            int end_frame = std::max(m_animation_frame[AF_BACK_LEFT],
-                m_animation_frame[AF_BACK_RIGHT]);
-            m_animated_node->setFrameLoop(start_frame, end_frame);
-        }
-        else
-        {
-            if(m_animation_frame[AF_LEFT] <= m_animation_frame[AF_RIGHT])
-                m_animated_node->setFrameLoop(m_animation_frame[AF_LEFT],
-                                              m_animation_frame[AF_RIGHT] );
-            else
-                m_animated_node->setFrameLoop(m_animation_frame[AF_RIGHT],
-                                              m_animation_frame[AF_LEFT] );
-        }
+            m_animated_node->setTransitionTime(STEERING_TRANSITION_TIME);
+        m_animated_node->setFrameLoop(m_animation_frame[AF_LEFT],
+                                      m_animation_frame[AF_RIGHT]);
         m_animated_node->setAnimationEndCallback(NULL);
         m_animated_node->setAnimationSpeed(0);
         m_animated_node->setCurrentFrame(m_animation_frame[AF_STRAIGHT]);
@@ -1385,26 +1372,33 @@ void KartModel::update(float dt, float distance, float steer, float speed,
 
     if(m_animation_frame[AF_LEFT]<0) return;   // no animations defined
 
-    // Update animation if necessary
-    // -----------------------------
-    const bool back = m_animation_frame[AF_BACK_STRAIGHT] > -1 && speed < 0.0f;
-    float frame;
-    if(steer>0.0f && back) frame = m_animation_frame[AF_BACK_STRAIGHT]
-                                 - ( ( m_animation_frame[AF_BACK_STRAIGHT]
-                                   -m_animation_frame[AF_BACK_RIGHT]  )*steer);
-    else if(steer<0.0f && back) frame = m_animation_frame[AF_BACK_STRAIGHT]
-                              + ( (m_animation_frame[AF_BACK_STRAIGHT]
-                                   -m_animation_frame[AF_BACK_LEFT]   )*steer);
-    else if(steer>0.0f) frame = m_animation_frame[AF_STRAIGHT]
-                              - ( ( m_animation_frame[AF_STRAIGHT]
-                                        -m_animation_frame[AF_RIGHT]  )*steer);
-    else if(steer<0.0f) frame = m_animation_frame[AF_STRAIGHT]
-                              + ( (m_animation_frame[AF_STRAIGHT]
-                                        -m_animation_frame[AF_LEFT]   )*steer);
-    else                frame = (float)(back ?
-                                m_animation_frame[AF_BACK_STRAIGHT] :
-                                m_animation_frame[AF_STRAIGHT]);
-    m_animated_node->setCurrentFrame(frame);
+    const bool reverse = speed < 0.0f &&
+        m_animation_frame[AF_BACK_LEFT] >= 0 &&
+        m_animation_frame[AF_BACK_STRAIGHT] >= 0 &&
+        m_animation_frame[AF_BACK_RIGHT] >= 0;
+    AnimationFrameType straight = reverse ? AF_BACK_STRAIGHT : AF_STRAIGHT;
+    // Restarting a blend would use its target frame as the source, even
+    // though the displayed pose is still between the two frames.
+    if (m_steering_frame != AF_DEFAULT && m_steering_frame != straight &&
+        m_animated_node->isTransitioning())
+        straight = m_steering_frame;
+
+    const bool back = straight == AF_BACK_STRAIGHT;
+    const int left = m_animation_frame[back ? AF_BACK_LEFT : AF_LEFT];
+    const int right = m_animation_frame[back ? AF_BACK_RIGHT : AF_RIGHT];
+    if (m_steering_frame != straight)
+    {
+        // Save the outgoing pose before changing the frame loop. A landing
+        // already blends from the jump pose on the first steering update.
+        if (m_steering_frame != AF_DEFAULT)
+            m_animated_node->setTransitionTime(STEERING_TRANSITION_TIME);
+        m_animated_node->setFrameLoop(left, right);
+        m_steering_frame = straight;
+    }
+
+    const int turn = steer < 0.0f ? left : right;
+    const int center = m_animation_frame[straight];
+    m_animated_node->setCurrentFrame(center + (turn - center) * std::abs(steer));
 }   // update
 
 //-----------------------------------------------------------------------------

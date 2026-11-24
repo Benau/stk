@@ -152,6 +152,7 @@ namespace scene
 		//! Sets the transition time in seconds (note: This needs to enable joints, and setJointmode maybe set to 2)
 		//! you must call animateJoints(), or the mesh will not animate
 		virtual void setTransitionTime(f32 Time);
+		virtual bool isTransitioning() const { return Transiting != 0.f; }
 
 		//! updates the joint positions of this mesh
 		virtual void animateJoints(bool CalculateAbsolutePositions=true);
