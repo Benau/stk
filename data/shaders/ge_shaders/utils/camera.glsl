@@ -11,8 +11,7 @@ layout(std140, set = CAMERA_SET, binding = 0) uniform CameraBuffer
     mat4 m_inverse_projection_view_matrix;
     vec4 m_viewport;
     vec4 m_screensize;
-    // Used by GPU culling (see GECullingTool)
-    vec4 m_frustum[6];
-    vec4 m_view_min_edge;
-    vec4 m_view_max_edge;
+    // Used by GPU culling (see GECullingTool), what the vectors are depends on
+    // the view and is named by the culling shader (see static_draws_view.glsl)
+    vec4 m_culling[8];
 } u_camera;
