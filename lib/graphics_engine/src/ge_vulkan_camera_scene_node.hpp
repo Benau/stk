@@ -1,6 +1,7 @@
 #ifndef HEADER_GE_VULKAN_CAMERA_SCENE_NODE_HPP
 #define HEADER_GE_VULKAN_CAMERA_SCENE_NODE_HPP
 
+#include "ge_culling_tool.hpp"
 #include "ge_final_pass.hpp"
 
 #include "../source/Irrlicht/CCameraSceneNode.h"
@@ -143,17 +144,12 @@ private:
 
     irr::core::matrix4 m_prev_pvm;
     // ------------------------------------------------------------------------
-    static const unsigned getFrustumSize()    { return sizeof(float) * 4 * 6; }
 public:
     // ------------------------------------------------------------------------
     static const unsigned getCameraUBOSize()
     {
-#ifdef GPU_CULLING
-        const unsigned frustum_size = getFrustumSize();
-#else
-        const unsigned frustum_size = 0;
-#endif
-        return sizeof(GEVulkanCameraUBO) + frustum_size;
+        // The culling data follows the camera data (see GECullingTool)
+        return sizeof(GEVulkanCameraUBO) + GECullingTool::getCullingDataSize();
     }
     // ------------------------------------------------------------------------
     GEVulkanCamera();

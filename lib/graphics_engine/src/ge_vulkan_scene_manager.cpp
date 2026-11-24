@@ -50,9 +50,9 @@ GEVulkanSceneManager::~GEVulkanSceneManager()
 }   // ~GEVulkanSceneManager
 
 // ----------------------------------------------------------------------------
-void GEVulkanSceneManager::splitStaticScene()
+void GEVulkanSceneManager::splitStaticScene(bool gpu_draws)
 {
-    m_static_scene->split(this);
+    m_static_scene->split(this, gpu_draws);
     getVKDriver()->clearRTScene();
 }   // splitStaticScene
 
@@ -82,11 +82,12 @@ void GEVulkanSceneManager::makeNodeDynamic(irr::scene::ISceneNode* node)
     // Put all descendants back under their original parent before changing
     // their materials. A library can have both extracted and live children.
     const bool split = m_static_scene->isSplit();
+    const bool gpu_draws = m_static_scene->useGPUDraws();
     if (split)
         releaseStaticScene();
     markDynamicMaterials(node);
     if (split)
-        splitStaticScene();
+        splitStaticScene(gpu_draws);
 }   // makeNodeDynamic
 
 // ----------------------------------------------------------------------------

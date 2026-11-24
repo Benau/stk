@@ -2413,7 +2413,8 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
     if (!GUIEngine::isNoGraphics() &&
         irr_driver->getVideoDriver()->getDriverType() == video::EDT_VULKAN)
         static_cast<GE::GEVulkanSceneManager*>(irr_driver->getSceneManager())
-            ->splitStaticScene();
+            ->splitStaticScene(irr_driver->getSceneComplexity() >
+                UserConfigParams::m_static_gpu_draw_threshold);
 #endif
 
     main_loop->renderGUI(5600);

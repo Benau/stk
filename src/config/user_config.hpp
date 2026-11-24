@@ -967,6 +967,11 @@ namespace UserConfigParams
                             "animated-characters", &m_graphics_quality,
                 "Whether to display animated characters") );
 
+    PARAM_PREFIX IntUserConfigParam        m_static_gpu_draw_threshold
+            PARAM_DEFAULT( IntUserConfigParam(2000, "static-gpu-draw-threshold",
+                &m_graphics_quality, "Generate static Vulkan draws on the GPU "
+                "above this scene complexity") );
+
     PARAM_PREFIX IntUserConfigParam        m_geometry_level
             PARAM_DEFAULT(  IntUserConfigParam(2,
                             "geometry-level", &m_graphics_quality,
