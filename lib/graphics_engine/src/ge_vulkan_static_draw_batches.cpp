@@ -40,6 +40,14 @@ void writeBuffer(VkDescriptorSet set, unsigned binding, VkDescriptorType type,
 GEVulkanStaticDrawBatches::GEVulkanStaticDrawBatches(
     const std::shared_ptr<GEVulkanStaticDrawSource>& source,
     VkDescriptorSetLayout draw_layout)
+                         : GEVulkanStaticDrawBatches(source, draw_layout, true)
+{
+}   // GEVulkanStaticDrawBatches
+
+// ----------------------------------------------------------------------------
+GEVulkanStaticDrawBatches::GEVulkanStaticDrawBatches(
+    const std::shared_ptr<GEVulkanStaticDrawSource>& source,
+    VkDescriptorSetLayout draw_layout, bool with_stats)
                          : m_source(source), m_buffer(VK_NULL_HANDLE),
                            m_memory(NULL), m_objects_offset(0),
                            m_stats_buffer(VK_NULL_HANDLE),
@@ -49,7 +57,7 @@ GEVulkanStaticDrawBatches::GEVulkanStaticDrawBatches(
 {
     if (!m_source->isUsable())
         return;
-    if (!createBuffer() || !createStats() ||
+    if (!createBuffer() || (with_stats && !createStats()) ||
         !createDescriptors(draw_layout))
     {
         logMessage(GLL_WARNING,
@@ -72,8 +80,33 @@ GEVulkanStaticDrawBatches::~GEVulkanStaticDrawBatches()
 // ----------------------------------------------------------------------------
 bool GEVulkanStaticDrawBatches::isUsable() const
 {
-    return m_source->isUsable() && !m_compute_sets.empty();
+    const Variant variant = getVariant();
+    return m_source->isUsable() && !m_compute_sets.empty() &&
+        (variant == GEVulkanStaticDrawSource::SV_VIEW ||
+        m_source->isShadowUsable(variant));
 }   // isUsable
+
+// ----------------------------------------------------------------------------
+bool GEVulkanStaticDrawBatches::findRanges(const std::string& shader,
+                                           const Range*& ranges,
+                                           unsigned& count) const
+{
+    if (getVariant() == GEVulkanStaticDrawSource::SV_VIEW)
+    {
+        auto it = m_source->getRanges().find(shader);
+        if (it == m_source->getRanges().end())
+            return false;
+        ranges = &it->second;
+        count = 1;
+        return true;
+    }
+    auto it = m_source->getShadowRanges().find(shader);
+    if (it == m_source->getShadowRanges().end())
+        return false;
+    ranges = it->second.data();
+    count = it->second.size();
+    return true;
+}   // findRanges
 
 // ----------------------------------------------------------------------------
 bool GEVulkanStaticDrawBatches::onCPU(unsigned entry) const
@@ -215,8 +248,12 @@ void GEVulkanStaticDrawBatches::updateDescriptors(GEVulkanCamera* cam,
         m_source->getSourceCount() * m_source->getSourceSize());
     writeBuffer(set, 2, sbo, m_buffer, 0, commands_size);
     writeBuffer(set, 3, sbo, m_buffer, m_objects_offset, objects_size);
-    writeBuffer(set, 4, sbo, m_stats_buffer, idx * m_stats_stride,
-        m_group_count * sizeof(uint32_t));
+    // The shadow views have no statistics, their shader doesn't use it
+    if (m_stats_buffer != VK_NULL_HANDLE)
+    {
+        writeBuffer(set, 4, sbo, m_stats_buffer, idx * m_stats_stride,
+            m_group_count * sizeof(uint32_t));
+    }
 
     // The same bindings as GEVulkanDrawCall::updateDataDescriptorSets. The
     // draws don't use the skinning and the materials of the draw ids, but
@@ -242,7 +279,8 @@ void GEVulkanStaticDrawBatches::dispatch(VkCommandBuffer cmd,
 {
     updateDescriptors(cam, dc.m_light_handler != NULL);
     const unsigned idx = getVKDriver()->getCurrentBufferIdx();
-    readPolyCount(idx);
+    if (m_stats_buffer != VK_NULL_HANDLE)
+        readPolyCount(idx);
     const VkPipelineStageFlags readers = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
 
@@ -268,11 +306,13 @@ void GEVulkanStaticDrawBatches::dispatch(VkCommandBuffer cmd,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, NULL, 0,
         NULL);
 
-    // The levels of detail use the same camera position as the CPU
+    // The levels of detail use the camera of the scene (not the one of the
+    // shadow) as the CPU does
     const irr::core::vector3df& position = cam->getAbsolutePosition();
-    const float lod_camera[4] = { position.X, position.Y, position.Z, 0.0f };
+    const float lod_camera[4] =
+        { position.X, position.Y, position.Z, getSkipSmall() };
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_source->getPipeline(GEVulkanStaticDrawSource::SV_VIEW));
+        m_source->getPipeline(getVariant()));
     vkCmdPushConstants(cmd, m_source->getPipelineLayout(),
         VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(lod_camera), lod_camera);
     const uint32_t camera_offset = dc.m_camera_ubo_offset;
@@ -298,8 +338,9 @@ void GEVulkanStaticDrawBatches::render(VkCommandBuffer cmd,
                                        VkPipelineLayout layout,
                                        std::vector<uint32_t> offsets)
 {
-    auto range = m_source->getRanges().find(shader);
-    if (range == m_source->getRanges().end())
+    const Range* ranges = NULL;
+    unsigned range_count = 0;
+    if (!findRanges(shader, ranges, range_count))
         return;
     GEVulkanDriver* vk = getVKDriver();
     // The descriptors of the skinning and the materials are not used, and
@@ -313,35 +354,38 @@ void GEVulkanStaticDrawBatches::render(VkCommandBuffer cmd,
         &m_draw_sets[vk->getCurrentBufferIdx()], offsets.size(),
         offsets.data());
 
-    const unsigned first = range->second.m_first;
-    const unsigned count = range->second.m_count;
     const bool bind_textures = !dc.m_texture_descriptor->isSingleDescriptor();
-    if (!bind_textures && GEVulkanFeatures::supportsMultiDrawIndirect())
+    for (unsigned r = 0; r < range_count; r++)
     {
-        // The count of the commands is the count of the draws (the instance
-        // count of the culled ones is 0)
-        const unsigned max_count =
-            vk->getPhysicalDeviceProperties().limits.maxDrawIndirectCount;
-        for (unsigned done = 0; done < count;)
+        const unsigned first = ranges[r].m_first;
+        const unsigned count = ranges[r].m_count;
+        if (!bind_textures && GEVulkanFeatures::supportsMultiDrawIndirect())
         {
-            const unsigned draw_count = std::min(count - done, max_count);
-            vkCmdDrawIndexedIndirect(cmd, m_buffer,
-                (first + done) * COMMAND_SIZE, draw_count, COMMAND_SIZE);
-            done += draw_count;
+            // The count of the commands is the count of the draws (the
+            // instance count of the culled ones is 0)
+            const unsigned max_count = vk->getPhysicalDeviceProperties()
+                .limits.maxDrawIndirectCount;
+            for (unsigned done = 0; done < count;)
+            {
+                const unsigned draw_count = std::min(count - done, max_count);
+                vkCmdDrawIndexedIndirect(cmd, m_buffer,
+                    (first + done) * COMMAND_SIZE, draw_count, COMMAND_SIZE);
+                done += draw_count;
+            }
+            continue;
         }
-        return;
-    }
-    // One draw for each command, the textures are bound when they change
-    int current_material = -1;
-    for (unsigned i = first; i < first + count; i++)
-    {
-        if (bind_textures && m_source->getMaterial(i) != current_material)
+        // One draw for each command, the textures are bound when they change
+        int current_material = -1;
+        for (unsigned i = first; i < first + count; i++)
         {
-            current_material = m_source->getMaterial(i);
-            dc.bindSingleMaterial(cmd, shader, current_material, pt);
+            if (bind_textures && m_source->getMaterial(i) != current_material)
+            {
+                current_material = m_source->getMaterial(i);
+                dc.bindSingleMaterial(cmd, shader, current_material, pt);
+            }
+            vkCmdDrawIndexedIndirect(cmd, m_buffer, i * COMMAND_SIZE, 1,
+                COMMAND_SIZE);
         }
-        vkCmdDrawIndexedIndirect(cmd, m_buffer, i * COMMAND_SIZE, 1,
-            COMMAND_SIZE);
     }
 }   // render
 

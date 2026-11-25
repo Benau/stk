@@ -2,6 +2,7 @@
 #define HEADER_GE_VULKAN_STATIC_DRAW_BATCHES_HPP
 
 #include "ge_vma.hpp"
+#include "ge_vulkan_static_draw_source.hpp"
 #include "vulkan_wrapper.h"
 
 #include <cstdint>
@@ -13,7 +14,6 @@ namespace GE
 {
 class GEVulkanCamera;
 class GEVulkanDrawCall;
-class GEVulkanStaticDrawSource;
 enum GEVulkanPipelineType : unsigned;
 
 // ============================================================================
@@ -24,8 +24,16 @@ enum GEVulkanPipelineType : unsigned;
 // The destination is only written by the compute pass of this view, and the
 // render thread always submits to the same queue, so the barriers of
 // dispatch cover the previous frame which may still read it.
+//
+// This is the batches of a camera, the shadow views derive from it (see
+// GEVulkanStaticShadowBatches): they use another culling shader and the shader
+// names of the shadow draw calls, and they don't count the polygons
 class GEVulkanStaticDrawBatches
 {
+public:
+    typedef GEVulkanStaticDrawSource::Range Range;
+    typedef GEVulkanStaticDrawSource::Variant Variant;
+
 private:
     std::shared_ptr<GEVulkanStaticDrawSource> m_source;
 
@@ -70,13 +78,35 @@ private:
     bool createDescriptors(VkDescriptorSetLayout draw_layout);
     // ------------------------------------------------------------------------
     void updateDescriptors(GEVulkanCamera* cam, bool lighting);
+
+protected:
+    // ------------------------------------------------------------------------
+    // The statistics (with_stats) are created here, so a derived class which
+    // doesn't need them can't have it as a virtual function
+    GEVulkanStaticDrawBatches(
+        const std::shared_ptr<GEVulkanStaticDrawSource>& source,
+        VkDescriptorSetLayout draw_layout, bool with_stats);
+    // ------------------------------------------------------------------------
+    // The kind of view, which selects the culling shader and the shader names
+    virtual Variant getVariant() const
+    {
+        return GEVulkanStaticDrawSource::SV_VIEW;
+    }
+    // ------------------------------------------------------------------------
+    // Not zero if the view skips the small objects, see isSmallForFarShadow
+    virtual float getSkipSmall() const                         { return 0.0f; }
+    // ------------------------------------------------------------------------
+    // The ranges of the commands which use the shader of the draw call
+    bool findRanges(const std::string& shader, const Range*& ranges,
+                    unsigned& count) const;
+
 public:
     // ------------------------------------------------------------------------
     GEVulkanStaticDrawBatches(
         const std::shared_ptr<GEVulkanStaticDrawSource>& source,
         VkDescriptorSetLayout draw_layout);
     // ------------------------------------------------------------------------
-    ~GEVulkanStaticDrawBatches();
+    virtual ~GEVulkanStaticDrawBatches();
     // ------------------------------------------------------------------------
     bool isUsable() const;
     // ------------------------------------------------------------------------
@@ -93,6 +123,23 @@ public:
     // old)
     unsigned getPolyCount() const                      { return m_poly_count; }
     // ------------------------------------------------------------------------
+    // Calls the function with each shader name of the draw call that has
+    // commands
+    template<typename F>
+    void forEachShader(F function) const
+    {
+        if (getVariant() == GEVulkanStaticDrawSource::SV_VIEW)
+        {
+            for (const auto& range : m_source->getRanges())
+                function(range.first);
+        }
+        else
+        {
+            for (const auto& ranges : m_source->getShadowRanges())
+                function(ranges.first);
+        }
+    }
+    // ------------------------------------------------------------------------
     void dispatch(VkCommandBuffer cmd, GEVulkanDrawCall& dc,
                   GEVulkanCamera* cam);
     // ------------------------------------------------------------------------
@@ -100,6 +147,60 @@ public:
                 const std::string& shader, GEVulkanPipelineType pt,
                 VkPipelineLayout layout, std::vector<uint32_t> offsets);
 };   // GEVulkanStaticDrawBatches
+
+// ============================================================================
+// The static draws of a shadow view of a directional light (a cascade). They
+// are culled by the frustum of the light (static_shadow_draws.comp), the far
+// cascade skips the same small objects as GEVulkanShadowDrawCall::skip
+class GEVulkanStaticShadowBatches : public GEVulkanStaticDrawBatches
+{
+private:
+    const bool m_far_cascade;
+
+protected:
+    // ------------------------------------------------------------------------
+    virtual Variant getVariant() const
+    {
+        return GEVulkanStaticDrawSource::SV_SHADOW;
+    }
+    // ------------------------------------------------------------------------
+    virtual float getSkipSmall() const
+                                        { return m_far_cascade ? 1.0f : 0.0f; }
+
+public:
+    // ------------------------------------------------------------------------
+    GEVulkanStaticShadowBatches(
+        const std::shared_ptr<GEVulkanStaticDrawSource>& source,
+        VkDescriptorSetLayout draw_layout, bool far_cascade)
+        : GEVulkanStaticDrawBatches(source, draw_layout, false),
+          m_far_cascade(far_cascade)
+    {
+    }
+};   // GEVulkanStaticShadowBatches
+
+// ============================================================================
+// The static draws of the omni shadow draw call of a bucket of lights, which
+// all the layers of the bucket share (static_omni_draws.comp)
+class GEVulkanStaticOmniShadowBatches : public GEVulkanStaticShadowBatches
+{
+protected:
+    // ------------------------------------------------------------------------
+    virtual Variant getVariant() const
+    {
+        return GEVulkanStaticDrawSource::SV_OMNI;
+    }
+    // ------------------------------------------------------------------------
+    virtual float getSkipSmall() const                         { return 0.0f; }
+
+public:
+    // ------------------------------------------------------------------------
+    GEVulkanStaticOmniShadowBatches(
+        const std::shared_ptr<GEVulkanStaticDrawSource>& source,
+        VkDescriptorSetLayout draw_layout)
+        : GEVulkanStaticShadowBatches(source, draw_layout, false)
+    {
+    }
+};   // GEVulkanStaticOmniShadowBatches
 
 }
 
