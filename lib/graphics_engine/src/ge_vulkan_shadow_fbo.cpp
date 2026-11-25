@@ -6,9 +6,12 @@
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_features.hpp"
 #include "ge_vulkan_light_handler.hpp"
+#include "ge_vulkan_scene_manager.hpp"
 #include "ge_vulkan_shadow_draw_call.hpp"
+#include "ge_vulkan_static_scene_manager.hpp"
 
 #include "ILightSceneNode.h"
+#include "IrrlichtDevice.h"
 
 #include <algorithm>
 #include <cmath>
@@ -439,16 +442,6 @@ void GEVulkanShadowFBO::prepareStaticBatches(
 }   // prepareStaticBatches
 
 // ----------------------------------------------------------------------------
-void GEVulkanShadowFBO::addStaticNode(irr::scene::ISceneNode* node)
-{
-    for (unsigned i = 0; i < GVSCC_COUNT; i++)
-    {
-        if (!m_shadow_draw_calls[i]->hasStaticBatches())
-            m_shadow_draw_calls[i]->addNode(node);
-    }
-}   // addStaticNode
-
-// ----------------------------------------------------------------------------
 void GEVulkanShadowFBO::dispatchStaticBatches(VkCommandBuffer cmd,
                                               GEVulkanCamera* cam)
 {
@@ -460,10 +453,44 @@ void GEVulkanShadowFBO::dispatchStaticBatches(VkCommandBuffer cmd,
 }   // dispatchStaticBatches
 
 // ----------------------------------------------------------------------------
+void GEVulkanShadowFBO::collectStaticNodes(
+                             std::vector<irr::scene::ISceneNode*>& nodes) const
+{
+    // If the camera's batches failed, registerNodes already sent every
+    // static node to the shadow draw calls through the regular CPU path
+    if (!m_master_dc || !m_master_dc->hasStaticBatches())
+        return;
+    GEVulkanSceneManager* sm = static_cast<GEVulkanSceneManager*>(
+        m_vk->getIrrlichtDevice()->getSceneManager());
+    // The levels of detail of the camera which registerNodes used
+    if (sm->getActiveCamera() && sm->getStaticScene())
+    {
+        sm->getStaticScene()->collectShadowNodes(
+            sm->getActiveCamera()->getAbsoluteTransformation(), nodes);
+    }
+}   // collectStaticNodes
+
+// ----------------------------------------------------------------------------
 void GEVulkanShadowFBO::generate()
 {
+    std::vector<irr::scene::ISceneNode*> static_nodes;
+    bool collected_static = false;
     for (unsigned i = 0; i < GVSCC_COUNT; i++)
+    {
+        // The static scene is not added by registerNodes for the camera when
+        // it's drawn by the GPU, a cascade which can't do that needs it
+        if (!m_shadow_draw_calls[i]->hasStaticBatches())
+        {
+            if (!collected_static)
+            {
+                collectStaticNodes(static_nodes);
+                collected_static = true;
+            }
+            for (irr::scene::ISceneNode* node : static_nodes)
+                m_shadow_draw_calls[i]->addNode(node);
+        }
         m_shadow_draw_calls[i]->generate(m_vk);
+    }
 }   // generate
 
 // ----------------------------------------------------------------------------

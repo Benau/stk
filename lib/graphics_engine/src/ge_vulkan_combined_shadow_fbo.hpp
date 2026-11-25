@@ -41,12 +41,6 @@ public:
         GEVulkanOmniShadowFBO::prepareStaticBatches(source);
     }
     // ------------------------------------------------------------------------
-    virtual void addStaticNode(irr::scene::ISceneNode* n)
-    {
-        GEVulkanShadowFBO::addStaticNode(n);
-        GEVulkanOmniShadowFBO::addStaticNode(n);
-    }
-    // ------------------------------------------------------------------------
     virtual void dispatchStaticBatches(VkCommandBuffer cmd,
                                        GEVulkanCamera* cam)
     {

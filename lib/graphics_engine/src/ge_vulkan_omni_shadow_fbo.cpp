@@ -282,6 +282,8 @@ void GEVulkanOmniShadowFBO::generate()
     // directly instead.  The two paths below never overlap, so the ordering is
     // safe.
     // -------------------------------------------------------------------------
+    std::vector<irr::scene::ISceneNode*> static_nodes;
+    bool collected_static = false;
     for (unsigned i = 0; i < shadow_limit; i++)
     {
         const bool single_face = (i < non_occluded) &&
@@ -306,13 +308,21 @@ void GEVulkanOmniShadowFBO::generate()
             // share this geometry at render time.
             if ((pointlight_layer % getSharingDrawCallCount()) == 0)
             {
-                for (irr::scene::ISceneNode* node : m_nodes)
-                    m_shadow_draw_calls[layer]->addNode(node);
                 if (!m_shadow_draw_calls[layer]->hasStaticBatches())
                 {
-                    for (irr::scene::ISceneNode* node : m_static_nodes)
+                    // Same for every owner, so the first one which needs
+                    // the nodes collects them and the others reuse the list
+                    if (!collected_static)
+                    {
+                        collectStaticNodes(static_nodes);
+                        collected_static = true;
+                    }
+                    for (irr::scene::ISceneNode* node : static_nodes)
                         m_shadow_draw_calls[layer]->addNode(node);
                 }
+
+                for (irr::scene::ISceneNode* node : m_nodes)
+                    m_shadow_draw_calls[layer]->addNode(node);
                 m_shadow_draw_calls[layer]->generate(m_vk);
             }
         }

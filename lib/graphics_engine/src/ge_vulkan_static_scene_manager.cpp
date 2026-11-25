@@ -218,6 +218,27 @@ std::shared_ptr<GEVulkanStaticDrawSource>
 }   // getDrawSource
 
 // ----------------------------------------------------------------------------
+Node* GEVulkanStaticSceneManager::Entry::getNodeForView(
+                                   const core::matrix4& camera_transform) const
+{
+    return m_lod ? m_lod->getLevelForView(camera_transform) : m_node;
+}   // getNodeForView
+
+// ----------------------------------------------------------------------------
+void GEVulkanStaticSceneManager::collectShadowNodes(
+        const core::matrix4& camera_transform, std::vector<Node*>& nodes) const
+{
+    for (unsigned index = 0; index < m_entries.size(); index++)
+    {
+        if (m_draw_source->onCPU(index))
+            continue;
+        Node* node = m_entries[index].getNodeForView(camera_transform);
+        if (node)
+            nodes.push_back(node);
+    }
+}   // collectShadowNodes
+
+// ----------------------------------------------------------------------------
 void GEVulkanStaticSceneManager::registerNodes(GEVulkanSceneManager* manager,
     const core::matrix4& camera_transform)
 {
@@ -230,17 +251,12 @@ void GEVulkanStaticSceneManager::registerNodes(GEVulkanSceneManager* manager,
         sfbo->prepareStaticBatches(batches ? batches->getSourcePtr() : NULL);
     for (unsigned i = 0; i < m_entries.size(); i++)
     {
-        const Entry& entry = m_entries[i];
-        Node* node = entry.m_node;
-        if (entry.m_lod)
-            node = entry.m_lod->getLevelForView(camera_transform);
+        Node* node = m_entries[i].getNodeForView(camera_transform);
         if (!node)
             continue;
         node->refreshTextureDescriptorID();
         if (!batches || batches->onCPU(i))
             manager->registerNodeForRendering(node, scene::ESNRP_SOLID);
-        else if (sfbo)
-            sfbo->addStaticNode(node);
     }
 }   // registerNodes
 

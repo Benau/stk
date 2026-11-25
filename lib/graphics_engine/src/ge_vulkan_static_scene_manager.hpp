@@ -24,6 +24,7 @@ public:
     {
         Node* m_node;
         GEVulkanLODNode* m_lod;
+        Node* getNodeForView(const irr::core::matrix4& camera_transform) const;
     };
 private:
     std::vector<StaticSceneBranch*> m_branches;
@@ -56,6 +57,9 @@ public:
     // ------------------------------------------------------------------------
     void registerNodes(GEVulkanSceneManager* manager,
                        const irr::core::matrix4& camera_transform);
+    // ------------------------------------------------------------------------
+    void collectShadowNodes(const irr::core::matrix4& camera_transform,
+                            std::vector<Node*>& nodes) const;
     // ------------------------------------------------------------------------
     bool isSplit() const                                    { return m_split; }
     // ------------------------------------------------------------------------
