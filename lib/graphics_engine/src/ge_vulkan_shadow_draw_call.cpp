@@ -9,6 +9,7 @@
 #include "ge_vulkan_features.hpp"
 #include "ge_vulkan_shadow_fbo.hpp"
 #include "ge_vulkan_skybox_renderer.hpp"
+#include "ge_vulkan_static_draw_batches.hpp"
 
 #include "mini_glm.hpp"
 #include "ISceneNode.h"
@@ -40,6 +41,14 @@ bool GEVulkanShadowDrawCall::isSmallForFarShadow(
 {
     return node->getBoundingBox().getArea() < 20.0f;
 }   // isSmallForFarShadow
+
+// ----------------------------------------------------------------------------
+GEVulkanStaticDrawBatches* GEVulkanShadowDrawCall::createStaticBatches(
+                    const std::shared_ptr<GEVulkanStaticDrawSource>& source)
+{
+    return new GEVulkanStaticShadowBatches(source, m_data_layout,
+        m_cascade == GVSCC_FAR);
+}   // createStaticBatches
 
 // ----------------------------------------------------------------------------
 bool GEVulkanShadowDrawCall::skip(irr::scene::ISceneNode* node) const

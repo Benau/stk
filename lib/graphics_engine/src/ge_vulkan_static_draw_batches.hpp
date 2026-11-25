@@ -115,6 +115,9 @@ public:
     // ------------------------------------------------------------------------
     const GEVulkanStaticDrawSource& getSource() const     { return *m_source; }
     // ------------------------------------------------------------------------
+    const std::shared_ptr<GEVulkanStaticDrawSource>& getSourcePtr() const
+                                                           { return m_source; }
+    // ------------------------------------------------------------------------
     // Whether the entry (of the static scene) is registered to the draw call
     bool onCPU(unsigned entry) const;
     // ------------------------------------------------------------------------

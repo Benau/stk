@@ -222,10 +222,12 @@ void GEVulkanStaticSceneManager::registerNodes(GEVulkanSceneManager* manager,
     const core::matrix4& camera_transform)
 {
     GEVulkanDrawCall* dc = manager->getActiveDrawCall();
-    // The entries which the GPU draws for this view are not registered
-    // (except for the shadows, which are still generated on the CPU)
+    // The entries which the GPU draws for this view are not registered, the
+    // shadows of the view use the same draws (see GEVulkanShadowFBO)
     const GEVulkanStaticDrawBatches* batches = dc->prepareStaticBatches(*this);
     GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
+    if (sfbo)
+        sfbo->prepareStaticBatches(batches ? batches->getSourcePtr() : NULL);
     for (unsigned i = 0; i < m_entries.size(); i++)
     {
         const Entry& entry = m_entries[i];
@@ -238,7 +240,7 @@ void GEVulkanStaticSceneManager::registerNodes(GEVulkanSceneManager* manager,
         if (!batches || batches->onCPU(i))
             manager->registerNodeForRendering(node, scene::ESNRP_SOLID);
         else if (sfbo)
-            sfbo->addNode(node);
+            sfbo->addStaticNode(node);
     }
 }   // registerNodes
 

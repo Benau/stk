@@ -68,6 +68,15 @@ public:
     // ------------------------------------------------------------------------
     virtual void addNode(irr::scene::ISceneNode* n)   { m_nodes.push_back(n); }
     // ------------------------------------------------------------------------
+    // The draw calls of the lights don't use the static draws yet
+    virtual void prepareStaticBatches(
+                  const std::shared_ptr<GEVulkanStaticDrawSource>& source)   {}
+    // ------------------------------------------------------------------------
+    virtual void addStaticNode(irr::scene::ISceneNode* n)  { addNode(n); }
+    // ------------------------------------------------------------------------
+    virtual void dispatchStaticBatches(VkCommandBuffer cmd,
+                                       GEVulkanCamera* cam)                  {}
+    // ------------------------------------------------------------------------
     virtual void generate();
     // ------------------------------------------------------------------------
     const std::vector<GEOmniLight>& getLights() const      { return m_lights; }

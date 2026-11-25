@@ -34,6 +34,26 @@ public:
         GEVulkanOmniShadowFBO::addNode(n);
     }
     // ------------------------------------------------------------------------
+    virtual void prepareStaticBatches(
+                    const std::shared_ptr<GEVulkanStaticDrawSource>& source)
+    {
+        GEVulkanShadowFBO::prepareStaticBatches(source);
+        GEVulkanOmniShadowFBO::prepareStaticBatches(source);
+    }
+    // ------------------------------------------------------------------------
+    virtual void addStaticNode(irr::scene::ISceneNode* n)
+    {
+        GEVulkanShadowFBO::addStaticNode(n);
+        GEVulkanOmniShadowFBO::addStaticNode(n);
+    }
+    // ------------------------------------------------------------------------
+    virtual void dispatchStaticBatches(VkCommandBuffer cmd,
+                                       GEVulkanCamera* cam)
+    {
+        GEVulkanShadowFBO::dispatchStaticBatches(cmd, cam);
+        GEVulkanOmniShadowFBO::dispatchStaticBatches(cmd, cam);
+    }
+    // ------------------------------------------------------------------------
     virtual void generate()
     {
         GEVulkanShadowFBO::generate();

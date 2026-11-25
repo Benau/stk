@@ -37,6 +37,7 @@ class GESPMBuffer;
 class GEVulkanCamera;
 class GEVulkanStaticSceneManager;
 class GEVulkanStaticDrawBatches;
+class GEVulkanStaticDrawSource;
 class GEVulkanDriver;
 class GEVulkanDynamicBuffer;
 class GEVulkanLightHandler;
@@ -158,6 +159,10 @@ private:
 
     // ------------------------------------------------------------------------
     virtual bool isShadow() const                             { return false; }
+    // ------------------------------------------------------------------------
+    // The static draws of this kind of draw call, see setStaticSource
+    virtual GEVulkanStaticDrawBatches* createStaticBatches(
+                  const std::shared_ptr<GEVulkanStaticDrawSource>& source);
     // ------------------------------------------------------------------------
     virtual bool skip(irr::scene::ISceneNode* node) const     { return false; }
     // ------------------------------------------------------------------------
@@ -540,6 +545,12 @@ public:
     // ------------------------------------------------------------------------
     GEVulkanStaticDrawBatches* prepareStaticBatches(
                                             GEVulkanStaticSceneManager& scene);
+    // ------------------------------------------------------------------------
+    // The static draws from the source (which a draw call of the camera got
+    // from the static scene), or none if it's null, returns them if this draw
+    // call can use them
+    GEVulkanStaticDrawBatches* setStaticSource(
+                  const std::shared_ptr<GEVulkanStaticDrawSource>& source);
     // ------------------------------------------------------------------------
     bool hasStaticBatches() const;
     // ------------------------------------------------------------------------

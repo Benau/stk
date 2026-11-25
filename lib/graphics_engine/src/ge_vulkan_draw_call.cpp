@@ -524,10 +524,7 @@ void GEVulkanDrawCall::generate(GEVulkanDriver* vk)
     for (const auto& entry : m_rendered_dspm)
         add_pipeline_if_missing(entry.first);
     if (hasStaticBatches())
-    {
-        for (const auto& range : m_static_batches->getSource().getRanges())
-            add_pipeline_if_missing(range.first);
-    }
+        m_static_batches->forEachShader(add_pipeline_if_missing);
 
     std::stable_sort(visible_nodes.begin(), visible_nodes.end(),
         [&nodes_area](const ShaderNodesMeshBufferMaterial& a,
@@ -858,15 +855,26 @@ GEVulkanStaticDrawBatches* GEVulkanDrawCall::prepareStaticBatches(
         GEVulkanFeatures::supportsBaseVertexRendering() &&
         GEVulkanFeatures::supportsDrawIndirectFirstInstance())
         source = scene.getDrawSource(*this);
-    if (!source)
+    return setStaticSource(source);
+}   // prepareStaticBatches
+
+// ----------------------------------------------------------------------------
+GEVulkanStaticDrawBatches* GEVulkanDrawCall::setStaticSource(
+                    const std::shared_ptr<GEVulkanStaticDrawSource>& source)
+{
+    if (!source || m_data_layout == VK_NULL_HANDLE)
         m_static_batches.reset();
     else if (!m_static_batches || !m_static_batches->matches(source))
-    {
-        m_static_batches.reset(
-            new GEVulkanStaticDrawBatches(source, m_data_layout));
-    }
+        m_static_batches.reset(createStaticBatches(source));
     return hasStaticBatches() ? m_static_batches.get() : NULL;
-}   // prepareStaticBatches
+}   // setStaticSource
+
+// ----------------------------------------------------------------------------
+GEVulkanStaticDrawBatches* GEVulkanDrawCall::createStaticBatches(
+                    const std::shared_ptr<GEVulkanStaticDrawSource>& source)
+{
+    return new GEVulkanStaticDrawBatches(source, m_data_layout);
+}   // createStaticBatches
 
 // ----------------------------------------------------------------------------
 bool GEVulkanDrawCall::hasStaticBatches() const

@@ -431,6 +431,35 @@ void GEVulkanShadowFBO::addNode(irr::scene::ISceneNode* node)
 }   // addNode
 
 // ----------------------------------------------------------------------------
+void GEVulkanShadowFBO::prepareStaticBatches(
+                    const std::shared_ptr<GEVulkanStaticDrawSource>& source)
+{
+    for (unsigned i = 0; i < GVSCC_COUNT; i++)
+        m_shadow_draw_calls[i]->setStaticSource(source);
+}   // prepareStaticBatches
+
+// ----------------------------------------------------------------------------
+void GEVulkanShadowFBO::addStaticNode(irr::scene::ISceneNode* node)
+{
+    for (unsigned i = 0; i < GVSCC_COUNT; i++)
+    {
+        if (!m_shadow_draw_calls[i]->hasStaticBatches())
+            m_shadow_draw_calls[i]->addNode(node);
+    }
+}   // addStaticNode
+
+// ----------------------------------------------------------------------------
+void GEVulkanShadowFBO::dispatchStaticBatches(VkCommandBuffer cmd,
+                                              GEVulkanCamera* cam)
+{
+    for (unsigned i = 0; i < GVSCC_COUNT; i++)
+    {
+        if (m_shadow_draw_calls[i]->hasStaticBatches())
+            m_shadow_draw_calls[i]->dispatchStaticBatches(cmd, cam);
+    }
+}   // dispatchStaticBatches
+
+// ----------------------------------------------------------------------------
 void GEVulkanShadowFBO::generate()
 {
     for (unsigned i = 0; i < GVSCC_COUNT; i++)

@@ -25,6 +25,9 @@ private:
     // ------------------------------------------------------------------------
     virtual bool useDepthClamp() const                         { return true; }
     // ------------------------------------------------------------------------
+    virtual GEVulkanStaticDrawBatches* createStaticBatches(
+                  const std::shared_ptr<GEVulkanStaticDrawSource>& source);
+    // ------------------------------------------------------------------------
     virtual VkRenderPass getRenderPassForPipelineCreation(GEVulkanDriver* vk,
                                                     GEVulkanPipelineType type);
     // ------------------------------------------------------------------------

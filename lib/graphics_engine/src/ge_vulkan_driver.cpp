@@ -2963,7 +2963,11 @@ void GEVulkanDriver::buildCommandBuffers()
                     p.second);
             GEVulkanShadowFBO* sfbo = p.first->getShadowFBO();
             if (sfbo)
+            {
+                sfbo->dispatchStaticBatches(getCurrentCommandBuffer(),
+                    p.second);
                 sfbo->render(getCurrentCommandBuffer(), p.second);
+            }
         }
     }
     // The TLAS of the ray traced reflection (the new BLAS and the dynamic
