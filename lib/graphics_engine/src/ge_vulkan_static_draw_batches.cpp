@@ -272,7 +272,7 @@ void GEVulkanStaticDrawBatches::dispatch(VkCommandBuffer cmd,
     const irr::core::vector3df& position = cam->getAbsolutePosition();
     const float lod_camera[4] = { position.X, position.Y, position.Z, 0.0f };
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_source->getPipeline());
+        m_source->getPipeline(GEVulkanStaticDrawSource::SV_VIEW));
     vkCmdPushConstants(cmd, m_source->getPipelineLayout(),
         VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(lod_camera), lod_camera);
     const uint32_t camera_offset = dc.m_camera_ubo_offset;

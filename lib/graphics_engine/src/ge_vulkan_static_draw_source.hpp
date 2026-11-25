@@ -34,6 +34,16 @@ public:
         unsigned m_count;
     };
 
+    // The culling shader of each kind of view, they only differ in the test
+    // of the view and the statistics (see static_draws_common.glsl)
+    enum Variant : unsigned
+    {
+        SV_VIEW,   // A camera: frustum, with the polygon statistics
+        SV_SHADOW, // A directional light: frustum without near plane
+        SV_OMNI,   // A bucket of omni lights: spheres of the lights
+        SV_COUNT
+    };
+
 private:
     uint64_t m_mesh_generation;
 
@@ -44,6 +54,13 @@ private:
 
     // The commands of each shader are contiguous
     std::map<std::string, Range> m_ranges;
+
+    // The shadow draw calls use the non PBR fallback of the shaders, so a
+    // shader of them can have commands which are not next to each other
+    std::map<std::string, std::vector<Range> > m_shadow_ranges;
+
+    // Whether the shadow draw calls have a pipeline for all the commands
+    bool m_shadow_usable;
 
     // The texture descriptor slot of each command if the textures are bound
     // for each draw, otherwise empty
@@ -62,12 +79,15 @@ private:
 
     VkPipelineLayout m_pipeline_layout;
 
-    VkPipeline m_pipeline;
+    // The pipeline of the shadow views are optional (null if it fails)
+    VkPipeline m_pipelines[SV_COUNT];
 
     // ------------------------------------------------------------------------
     bool createBuffer(const void* sources, const void* commands);
     // ------------------------------------------------------------------------
-    bool createPipeline();
+    bool createPipelines();
+    // ------------------------------------------------------------------------
+    VkPipeline createPipeline(Variant variant);
     // ------------------------------------------------------------------------
     void useCPUOnly(size_t entry_count);
 public:
@@ -90,6 +110,17 @@ public:
     // ------------------------------------------------------------------------
     const std::map<std::string, Range>& getRanges() const  { return m_ranges; }
     // ------------------------------------------------------------------------
+    // Like getRanges, but with the shaders of the shadow draw calls
+    const std::map<std::string, std::vector<Range> >& getShadowRanges() const
+                                                    { return m_shadow_ranges; }
+    // ------------------------------------------------------------------------
+    // Whether the shadow views can use the draws of the variant, otherwise
+    // the nodes have to be added to them on the CPU
+    bool isShadowUsable(Variant variant) const
+    {
+        return m_shadow_usable && m_pipelines[variant] != VK_NULL_HANDLE;
+    }
+    // ------------------------------------------------------------------------
     int getMaterial(unsigned command) const
     {
         return m_materials.empty() ? -1 : m_materials[command];
@@ -110,7 +141,8 @@ public:
     // ------------------------------------------------------------------------
     VkPipelineLayout getPipelineLayout() const    { return m_pipeline_layout; }
     // ------------------------------------------------------------------------
-    VkPipeline getPipeline() const                       { return m_pipeline; }
+    VkPipeline getPipeline(Variant variant) const
+                                               { return m_pipelines[variant]; }
     // ------------------------------------------------------------------------
     static unsigned getGroupSize()                               { return 64; }
 };   // GEVulkanStaticDrawSource

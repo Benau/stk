@@ -45,8 +45,33 @@ static_assert(sizeof(VkDrawIndexedIndirectCommand) == 20,
 // that the far cascade of the shadows skips, same as SMALL_FLAG of the shader
 const unsigned SMALL_FLAG = 0x80000000u;
 
-// The shader (and the draw call, to find the group) of one command
-typedef std::tuple<std::string, int, GESPMBuffer*> BatchKey;
+// The shader of the camera, the shader of the shadows, the texture slot if
+// the textures are bound for each draw, and the mesh buffer of one command
+typedef std::tuple<std::string, std::string, int, GESPMBuffer*> BatchKey;
+
+// ----------------------------------------------------------------------------
+// The shader which the shadow draw calls use for a material, they always use
+// the non PBR fallback (see GEVulkanDrawCall::initNonPBRFallbackMaterials),
+// the result is empty if they have no pipeline for it (see createAllPipelines)
+std::string getShadowShader(irr::video::E_MATERIAL_TYPE type)
+{
+    const GEMaterial* material = GEMaterialManager::getMaterial(type);
+    if (material == NULL)
+        return "";
+    std::string shader = material->m_nonpbr_fallback.empty() ?
+        GEMaterialManager::getShader(type) : material->m_nonpbr_fallback;
+    material = GEMaterialManager::getMaterial(shader);
+    if (material == NULL || material->isTransparent() ||
+        !material->m_nonpbr_fallback.empty())
+        return "";
+    return shader;
+}   // getShadowShader
+
+// The shader file of each variant
+const char* g_variant_shaders[GEVulkanStaticDrawSource::SV_COUNT] =
+{
+    "static_draws.comp", "static_shadow_draws.comp", "static_omni_draws.comp"
+};
 
 }   // anonymous namespace
 
@@ -57,8 +82,10 @@ GEVulkanStaticDrawSource::GEVulkanStaticDrawSource()
                           m_memory(NULL), m_commands_offset(0),
                           m_compute_set_layout(VK_NULL_HANDLE),
                           m_pipeline_layout(VK_NULL_HANDLE),
-                          m_pipeline(VK_NULL_HANDLE)
+                          m_shadow_usable(false)
 {
+    for (VkPipeline& pipeline : m_pipelines)
+        pipeline = VK_NULL_HANDLE;
 }   // GEVulkanStaticDrawSource
 
 // ----------------------------------------------------------------------------
@@ -68,7 +95,8 @@ GEVulkanStaticDrawSource::~GEVulkanStaticDrawSource()
     if (m_buffer != VK_NULL_HANDLE)
         vk->waitIdle();
     VkDevice device = vk->getDevice();
-    vkDestroyPipeline(device, m_pipeline, NULL);
+    for (VkPipeline pipeline : m_pipelines)
+        vkDestroyPipeline(device, pipeline, NULL);
     vkDestroyPipelineLayout(device, m_pipeline_layout, NULL);
     vkDestroyDescriptorSetLayout(device, m_compute_set_layout, NULL);
     vmaDestroyBuffer(vk->getVmaAllocator(), m_buffer, m_memory);
@@ -91,6 +119,8 @@ bool GEVulkanStaticDrawSource::isCurrent() const
 void GEVulkanStaticDrawSource::useCPUOnly(size_t entry_count)
 {
     m_ranges.clear();
+    m_shadow_ranges.clear();
+    m_shadow_usable = false;
     m_materials.clear();
     m_command_count = m_source_count = 0;
     m_on_cpu.assign(entry_count, true);
@@ -108,6 +138,8 @@ void GEVulkanStaticDrawSource::build(const GEVulkanStaticSceneManager& scene,
     // texture can be put in a command
     const bool bind_textures = !dc.m_texture_descriptor->isSingleDescriptor();
     std::map<BatchKey, std::vector<Source> > batches;
+    // False if a node of the GPU has no pipeline in the shadow draw calls
+    m_shadow_usable = true;
     for (const auto& entry : scene.getEntries())
     {
         std::vector<GEVulkanLODNode::Level> levels;
@@ -125,6 +157,7 @@ void GEVulkanStaticDrawSource::build(const GEVulkanStaticSceneManager& scene,
         // on the CPU would be drawn together with the ones of the GPU
         std::vector<std::pair<BatchKey, Source> > records;
         bool on_gpu = true;
+        bool shadow_ok = true;
         for (const auto& level : levels)
         {
             auto* node = static_cast<irr::scene::IMeshSceneNode*>(
@@ -167,14 +200,19 @@ void GEVulkanStaticDrawSource::build(const GEVulkanStaticSceneManager& scene,
                 source.m_max_edge = bounds.MaxEdge;
                 if (GEVulkanShadowDrawCall::isSmallForFarShadow(node))
                     source.m_command = SMALL_FLAG;
-                records.emplace_back(BatchKey(shader, bind_textures ? slot : -1,
-                    buffer), source);
+                const std::string shadow_shader =
+                    getShadowShader(node->getMaterialType(i));
+                if (shadow_shader.empty())
+                    shadow_ok = false;
+                records.emplace_back(BatchKey(shader, shadow_shader,
+                    bind_textures ? slot : -1, buffer), source);
             }
             if (!on_gpu)
                 break;
         }
         if (on_gpu)
         {
+            m_shadow_usable = m_shadow_usable && shadow_ok;
             for (auto& record : records)
                 batches[record.first].push_back(record.second);
         }
@@ -189,15 +227,16 @@ void GEVulkanStaticDrawSource::build(const GEVulkanStaticSceneManager& scene,
     // and the objects of the destination use the same indices
     std::vector<Source> sources;
     std::vector<VkDrawIndexedIndirectCommand> commands;
+    std::vector<std::string> shadow_shaders;
     for (auto& batch : batches)
     {
-        const GESPMBuffer* mesh = std::get<2>(batch.first);
+        const GESPMBuffer* mesh = std::get<3>(batch.first);
         Range& range = m_ranges[std::get<0>(batch.first)];
         if (range.m_count == 0)
             range.m_first = commands.size();
         range.m_count++;
         if (bind_textures)
-            m_materials.push_back(std::get<1>(batch.first));
+            m_materials.push_back(std::get<2>(batch.first));
         VkDrawIndexedIndirectCommand command = {};
         command.indexCount = mesh->getIndexCount();
         command.firstIndex = mesh->getIBOOffset();
@@ -210,6 +249,19 @@ void GEVulkanStaticDrawSource::build(const GEVulkanStaticSceneManager& scene,
             sources.push_back(source);
         }
         commands.push_back(command);
+        shadow_shaders.push_back(std::get<1>(batch.first));
+    }
+    if (m_shadow_usable)
+    {
+        for (unsigned i = 0; i < shadow_shaders.size(); i++)
+        {
+            auto& ranges = m_shadow_ranges[shadow_shaders[i]];
+            if (!ranges.empty() &&
+                ranges.back().m_first + ranges.back().m_count == i)
+                ranges.back().m_count++;
+            else
+                ranges.push_back({ i, 1 });
+        }
     }
     m_command_count = commands.size();
     m_source_count = sources.size();
@@ -221,7 +273,7 @@ void GEVulkanStaticDrawSource::build(const GEVulkanStaticSceneManager& scene,
         objects_size > limits.maxStorageBufferRange ||
         (m_source_count + getGroupSize() - 1) / getGroupSize() >
         limits.maxComputeWorkGroupCount[0] ||
-        !createBuffer(sources.data(), commands.data()) || !createPipeline())
+        !createBuffer(sources.data(), commands.data()) || !createPipelines())
     {
         logMessage(GLL_WARNING,
             "Static GPU draws are unavailable, using the CPU");
@@ -285,7 +337,7 @@ bool GEVulkanStaticDrawSource::createBuffer(const void* sources,
 }   // createBuffer
 
 // ----------------------------------------------------------------------------
-bool GEVulkanStaticDrawSource::createPipeline()
+bool GEVulkanStaticDrawSource::createPipelines()
 {
     VkDevice device = getVKDriver()->getDevice();
     // The camera of the view, the records, then the destination commands and
@@ -322,6 +374,19 @@ bool GEVulkanStaticDrawSource::createPipeline()
         &m_pipeline_layout) != VK_SUCCESS)
         return false;
 
+    // Only the pipeline of the cameras is needed to use the GPU draws
+    for (unsigned i = 0; i < SV_COUNT; i++)
+    {
+        m_pipelines[i] = createPipeline((Variant)i);
+        if (i == SV_VIEW && m_pipelines[i] == VK_NULL_HANDLE)
+            return false;
+    }
+    return true;
+}   // createPipelines
+
+// ----------------------------------------------------------------------------
+VkPipeline GEVulkanStaticDrawSource::createPipeline(Variant variant)
+{
     VkComputePipelineCreateInfo pipeline_info = {};
     pipeline_info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     pipeline_info.stage.sType =
@@ -330,18 +395,21 @@ bool GEVulkanStaticDrawSource::createPipeline()
     try
     {
         pipeline_info.stage.module =
-            GEVulkanShaderManager::getShader("static_draws.comp");
+            GEVulkanShaderManager::getShader(g_variant_shaders[variant]);
     }
     catch (const std::runtime_error& e)
     {
         logMessage(GLL_WARNING, "%s", e.what());
-        return false;
+        return VK_NULL_HANDLE;
     }
     pipeline_info.stage.pName = "main";
     pipeline_info.layout = m_pipeline_layout;
-    return vkCreateComputePipelines(device,
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    if (vkCreateComputePipelines(getVKDriver()->getDevice(),
         getVKDriver()->getPipelineCache(), 1, &pipeline_info, NULL,
-        &m_pipeline) == VK_SUCCESS;
+        &pipeline) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    return pipeline;
 }   // createPipeline
 
 }
