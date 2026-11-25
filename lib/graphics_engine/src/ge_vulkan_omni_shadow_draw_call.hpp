@@ -3,6 +3,7 @@
 
 #include "ge_vulkan_shadow_draw_call.hpp"
 #include "ge_main.hpp"
+#include "ge_vulkan_static_draw_batches.hpp"
 
 namespace GE
 {
@@ -17,6 +18,14 @@ private:
     virtual bool skip(irr::scene::ISceneNode* node) const     { return false; }
     // ------------------------------------------------------------------------
     virtual bool useDepthClamp() const                        { return false; }
+    // ------------------------------------------------------------------------
+    // Only the owner of a bucket of lights has them (see
+    // GEVulkanOmniShadowFBO)
+    virtual GEVulkanStaticDrawBatches* createStaticBatches(
+                       const std::shared_ptr<GEVulkanStaticDrawSource>& source)
+    {
+        return new GEVulkanStaticOmniShadowBatches(source, m_data_layout);
+    }
     // ------------------------------------------------------------------------
     // Each layer maps to exactly one array subpass index.
     virtual uint32_t getSubpassForPipelineCreation(GEVulkanDriver* vk,

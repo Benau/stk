@@ -216,6 +216,38 @@ void GEVulkanOmniShadowFBO::buildSixFaceMatrices(unsigned light_id)
 }   // buildSixFaceMatrices
 
 // ----------------------------------------------------------------------------
+void GEVulkanOmniShadowFBO::prepareStaticBatches(
+                    const std::shared_ptr<GEVulkanStaticDrawSource>& source)
+{
+    const int count = (int)m_shadow_draw_calls.size() - (int)getLayerOffset();
+    for (int pointlight_layer = 0; pointlight_layer < count; pointlight_layer++)
+    {
+        const bool owner = getLayerOwner(pointlight_layer) == pointlight_layer;
+        GEVulkanShadowDrawCall* dc =
+            m_shadow_draw_calls[pointlight_layer + getLayerOffset()].get();
+        dc->setStaticSource(
+            owner ? source : std::shared_ptr<GEVulkanStaticDrawSource>());
+    }
+}   // prepareStaticBatches
+
+// ----------------------------------------------------------------------------
+void GEVulkanOmniShadowFBO::dispatchStaticBatches(VkCommandBuffer cmd,
+                                                  GEVulkanCamera* cam)
+{
+    const int count = (int)m_shadow_draw_calls.size() - (int)getLayerOffset();
+    for (int pointlight_layer = 0; pointlight_layer < count; pointlight_layer++)
+    {
+        if (getLayerOwner(pointlight_layer) != pointlight_layer)
+            continue;
+        GEVulkanShadowDrawCall* dc =
+            m_shadow_draw_calls[pointlight_layer + getLayerOffset()].get();
+        // Only the draw calls of the lights of this frame
+        if (dc->getRenderState() && dc->hasStaticBatches())
+            dc->dispatchStaticBatches(cmd, cam);
+    }
+}   // dispatchStaticBatches
+
+// ----------------------------------------------------------------------------
 void GEVulkanOmniShadowFBO::generate()
 {
     assert(m_light_handler != NULL);
@@ -276,6 +308,11 @@ void GEVulkanOmniShadowFBO::generate()
             {
                 for (irr::scene::ISceneNode* node : m_nodes)
                     m_shadow_draw_calls[layer]->addNode(node);
+                if (!m_shadow_draw_calls[layer]->hasStaticBatches())
+                {
+                    for (irr::scene::ISceneNode* node : m_static_nodes)
+                        m_shadow_draw_calls[layer]->addNode(node);
+                }
                 m_shadow_draw_calls[layer]->generate(m_vk);
             }
         }

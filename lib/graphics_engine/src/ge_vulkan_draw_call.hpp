@@ -541,6 +541,8 @@ public:
         std::swap(m_rendered_dspm, other->m_rendered_dspm);
         std::swap(m_data_descriptor_sets, other->m_data_descriptor_sets);
         std::swap(m_dspm_descriptor_sets, other->m_dspm_descriptor_sets);
+        // The commands of the static draws are in the batches
+        m_static_batches.swap(other->m_static_batches);
     }
     // ------------------------------------------------------------------------
     GEVulkanStaticDrawBatches* prepareStaticBatches(

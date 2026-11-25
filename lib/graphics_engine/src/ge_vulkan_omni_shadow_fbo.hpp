@@ -23,6 +23,10 @@ private:
 
     std::vector<irr::scene::ISceneNode*> m_nodes;
 
+    // The nodes of the static scene which the GPU draws for the camera, the
+    // owners of the buckets which have no static draws need them
+    std::vector<irr::scene::ISceneNode*> m_static_nodes;
+
     std::vector<GEOmniLight> m_lights;
     // ------------------------------------------------------------------------
     virtual unsigned getLayerOffset() const                       { return 0; }
@@ -64,18 +68,21 @@ public:
     {
         m_light_handler = lh;
         m_nodes.clear();
+        m_static_nodes.clear();
     }
     // ------------------------------------------------------------------------
     virtual void addNode(irr::scene::ISceneNode* n)   { m_nodes.push_back(n); }
     // ------------------------------------------------------------------------
-    // The draw calls of the lights don't use the static draws yet
+    // Only the owner of each bucket of lights has static draws, the other
+    // layers of the bucket draw with them (see getLayerOwner)
     virtual void prepareStaticBatches(
-                  const std::shared_ptr<GEVulkanStaticDrawSource>& source)   {}
+                  const std::shared_ptr<GEVulkanStaticDrawSource>& source);
     // ------------------------------------------------------------------------
-    virtual void addStaticNode(irr::scene::ISceneNode* n)  { addNode(n); }
+    virtual void addStaticNode(irr::scene::ISceneNode* n)
+                                               { m_static_nodes.push_back(n); }
     // ------------------------------------------------------------------------
     virtual void dispatchStaticBatches(VkCommandBuffer cmd,
-                                       GEVulkanCamera* cam)                  {}
+                                       GEVulkanCamera* cam);
     // ------------------------------------------------------------------------
     virtual void generate();
     // ------------------------------------------------------------------------
