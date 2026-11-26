@@ -1,0 +1,2 @@
+#define SSIL_UPSAMPLE
+#include "utils/ssao_upsample.glsl"
