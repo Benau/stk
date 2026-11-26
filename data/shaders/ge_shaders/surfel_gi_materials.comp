@@ -1,0 +1,86 @@
+#extension GL_EXT_ray_query : require
+#define SURFEL_SET 2
+#define MESH_TEXTURES_SET 3
+#include "utils/get_vertex_color.glsl"
+#include "utils/sample_mesh_texture.glsl"
+#include "utils/rt_utils.glsl"
+#include "utils/rt_scene.glsl"
+#include "utils/surfel_gi.glsl"
+#include "utils/surfel_gi_rgb.glsl"
+#include "../utils/rgb_conversion.frag"
+
+layout(local_size_x = 64) in;
+layout(set = RT_SCENE_SET, binding = 4, std430) writeonly buffer SurfelGIMaterials
+{
+    uvec2 u_surfel_gi_materials[];
+};
+shared vec3 reflectance[64];
+shared vec3 emission[64];
+
+vec4 sampleFootprint(int slot, vec2 uv, vec2 extent)
+{
+    vec2 footprint = extent * vec2(textureSize(f_mesh_textures[GE_SAMPLE_TEX_INDEX(slot)], 0)) * 0.25;
+    float lod = log2(max(1.0, max(footprint.x, footprint.y)));
+    return textureLod(f_mesh_textures[GE_SAMPLE_TEX_INDEX(slot)], uv, lod);
+}
+
+void main()
+{
+    uint lane = gl_LocalInvocationIndex;
+    uint subset = (gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 4u + lane / 16u;
+    reflectance[lane] = vec3(0.0);
+    emission[lane] = vec3(0.0);
+    if (subset < pc.m_geometry_count)
+    {
+        RTGeometry geometry = u_rt_geometries[subset];
+        if (geometry.m_shading_type < RT_SHADING_ALPHATEST)
+        {
+            vec2 cell = (vec2(lane & 3u, (lane >> 2u) & 3u) + 0.5) * 0.25;
+            uvec4 bounds = geometry.m_surfel_gi_uv_bounds;
+            vec2 first = unpackHalf2x16(bounds.x);
+            vec2 second = unpackHalf2x16(bounds.z);
+            vec2 extent = min(unpackHalf2x16(bounds.y) - first, 1.0);
+            vec2 extent_two = min(unpackHalf2x16(bounds.w) - second, 1.0);
+            vec2 uv = first + extent * cell + vec2(geometry.m_uv_shift_x, geometry.m_uv_shift_y);
+            vec2 uv_two = second + extent_two * cell;
+            int base = int(geometry.m_material_id) * TOTAL_MESH_TEXTURE_LAYER;
+            if (geometry.m_shading_type == RT_SHADING_SPLATTING)
+            {
+                vec3 mask = sampleFootprint(base + 1, uv_two, extent_two).rgb;
+                vec4 weights = vec4(mask, max(1.0 - dot(mask, vec3(1.0)), 0.0));
+                for (int layer = 0; layer < 4; ++layer)
+                    reflectance[lane] += weights[layer] * sampleFootprint(base + 2 + layer, uv, extent).rgb;
+            }
+            else
+            {
+                vec4 texel = sampleFootprint(base, uv, extent);
+                vec3 albedo;
+                if (geometry.m_shading_type == RT_SHADING_DECAL)
+                {
+                    vec4 overlay = sampleFootprint(base + 1, uv_two, extent_two);
+                    albedo = mix(texel.rgb, overlay.rgb, overlay.a);
+                }
+                else
+                {
+                    albedo = applySolidMaterialHue(texel, geometry.m_hue) *
+                        getVertexColor(geometry.m_vertex_color).rgb * getVertexColor(geometry.m_surfel_gi_vertex_color).rgb;
+                }
+                vec2 metallic_emit = sampleFootprint(base + 2, uv, extent).gb;
+                reflectance[lane] = albedo * (1.0 - metallic_emit.x);
+                emission[lane] = albedo * (4.0 * metallic_emit.y);
+            }
+        }
+    }
+    for (uint stride = 8u; stride > 0u; stride >>= 1u)
+    {
+        barrier();
+        if ((lane & 15u) < stride)
+        {
+            reflectance[lane] += reflectance[lane + stride];
+            emission[lane] += emission[lane + stride];
+        }
+    }
+    if ((lane & 15u) == 0u && subset < pc.m_geometry_count)
+        u_surfel_gi_materials[subset] = uvec2(packSurfelGIRGB(reflectance[lane] / 16.0),
+            packSurfelGIRGB(emission[lane] / 16.0));
+}

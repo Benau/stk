@@ -7,21 +7,40 @@ layout(local_size_x = 64) in;
 
 #define SURFEL_SET 2
 #include "utils/surfel_gi.glsl"
+#include "utils/surfel_gi_volume.glsl"
+#include "utils/surfel_gi_ray_work.glsl"
 
 void main()
 {
     uint i = gl_GlobalInvocationID.x;
+    if (i < pc.m_camera_count)
+        volume_cameras[i] = pc.m_cameras[i];
+    if (i == 0u)
+    {
+        volume_info = uvec4(pc.m_camera_count, uint(probes.length()) / (pc.m_camera_count * SURFEL_GI_LAYER), 0u, 0u);
+        new_surfels.dispatch[0] = 0u;
+        new_surfels.dispatch[1] = 1u;
+        new_surfels.dispatch[2] = 1u;
+        new_surfels.count = 0u;
+    }
+    if (i < pc.m_camera_count * SURFEL_GI_BANDS)
+        probe_work[i / SURFEL_GI_BANDS].counts[i % SURFEL_GI_BANDS] = 0u;
+    if ((pc.m_cache & SURFEL_GI_RESET_CACHE) != 0u)
+        for (uint slot = i; slot < uint(probes.length()); slot += gl_NumWorkGroups.x * gl_WorkGroupSize.x)
+            probes[slot].frame = 0u;
     if (i < 2u)
     {
+        shadow_dispatch[i] = uvec4(0u, 1u, 1u, 0u);
         u_trace_lists.m_dispatch[i] = uint[3](0u, 1u, 1u);
         u_trace_lists.m_count[i] = 0u;
     }
     if (i < SURFEL_CELL_COUNT)
     {
         u_cell_count[i] = 0u;
+        u_cell_surfels[SURFEL_OVERFLOW_HEADS + i] = ~0u;
         u_cell_spawns[i] = 0u;
     }
-    if (pc.m_reset == 0u || i >= pc.m_surfel_count)
+    if ((pc.m_cache & SURFEL_GI_RESET_CACHE) == 0u || i >= pc.m_surfel_count)
         return;
     u_surfels[i].m_radius = 0.0;
     // Popped from the end, so the first surfels are used first
