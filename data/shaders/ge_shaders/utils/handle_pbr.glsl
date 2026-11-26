@@ -3,6 +3,10 @@ layout (set = 2, binding = 1) uniform samplerCube u_specular;
 layout (set = 2, binding = 3) uniform sampler2DArrayShadow u_shadow_map;
 
 #include "camera.glsl"
+#if defined(RAY_QUERY_ENABLED) && defined(SPLIT)
+#define SURFEL_GI_FORWARD
+#include "surfel_gi_volume.glsl"
+#endif
 #include "constants_utils.glsl"
 #include "spm_data.glsl"
 #include "pbr_utils.glsl"
@@ -29,7 +33,7 @@ vec3 gtaoMultiBounce(float visibility, vec3 albedo)
 // used with u_surfel_gi
 // solid_reflection is the specular radiance of GEVulkanSolidReflection (the
 // traced color mixed with the specular IBL), it replaces the specular IBL if
-// has_solid_reflection. With u_stochastic_reflection it's the traced radiance
+// has_solid_reflection. With u_specular_gi it's the traced radiance
 // premultiplied by its coverage (alpha), the rest is the specular IBL
 // (alpha is unused otherwise)
 vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
@@ -66,7 +70,7 @@ vec3 handlePBRDeferred(vec3 diffuse_color, vec3 pbr, vec3 world_normal,
     // nothing is traced)
     if (has_solid_reflection)
     {
-        if (u_stochastic_reflection)
+        if (u_specular_gi)
         {
             radiance = solid_reflection.rgb + radiance *
                 (1.0 - solid_reflection.a);
@@ -154,9 +158,14 @@ vec3 handlePBR(vec3 diffuse_color, vec3 pbr, vec4 world_position,
     vec3 normal = (u_camera.m_view_matrix * vec4(world_normal, 0.0)).xyz;
     float perceptual_roughness = 1.0 - pbr.x;
 
+    vec4 indirect = vec4(0.0);
+#ifdef SURFEL_GI_FORWARD
+    if (u_surfel_gi)
+        indirect = lookupVolume(world_position.xyz, world_normal, true);
+#endif
     vec3 mixed_color = handlePBRDeferred(diffuse_color, pbr, world_normal,
         eyedir, normal, perceptual_roughness, world_position, xpos.z, 1.0, 1.0,
-        vec4(0.0), false, vec4(0.0));
+        indirect, false, vec4(0.0));
 
     mixed_color += accumulateLights(u_global_light.m_light_count,
         diffuse_color, normal, xpos, eyedir, perceptual_roughness, pbr.y,

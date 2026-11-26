@@ -7,6 +7,7 @@ layout(location = 8) in vec4 f_world_position;
 
 layout(location = 0) out vec4 o_color;
 layout(location = 1) out vec4 o_normal;
+layout(location = 2) out vec2 o_vertex_normal;
 
 #include "utils/sample_mesh_texture.glsl"
 #include "../utils/rgb_conversion.frag"
@@ -33,6 +34,7 @@ void main()
     {
         o_color = vec4(diffuse_color, 0.4);
         o_normal.xy = EncodeNormal(normal);
+        o_vertex_normal = o_normal.xy;
         o_normal.zw = vec2(0.0);
     }
     else

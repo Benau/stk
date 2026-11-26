@@ -15,3 +15,11 @@ vec3 hsvToRgb(vec3 c)
     vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
     return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
 }
+
+vec3 applySolidMaterialHue(vec4 texel, float hue)
+{
+    if (hue <= 0.0 || texel.a > 0.5)
+        return texel.rgb;
+    vec3 hsv = rgbToHsv(texel.rgb);
+    return hsvToRgb(vec3(hue, max(hsv.y, texel.a * 2.5), hsv.z));
+}

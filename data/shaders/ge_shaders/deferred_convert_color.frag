@@ -9,6 +9,8 @@ layout(binding = 2) uniform sampler2D u_bloom_wide;
 // GEConfig::m_bloom_blend_texture (lens dust), mapped on the whole viewport and
 // only used if u_bloom_blend
 layout(binding = 3) uniform sampler2D u_bloom_blend_tex;
+// Half-rate screen-space indirect diffuse light, written after lighting.
+layout(binding = 4) uniform sampler2D u_ssil_texture;
 #define GE_LOAD_HDR(tex) texelFetch(tex, ivec2(gl_FragCoord.xy), 0)
 #else
 layout (input_attachment_index = 0, binding = 0) uniform subpassInput u_hdr;
@@ -98,6 +100,8 @@ void main()
         if (u_bloom_blend)
             hdr.rgb += sampleBloomBlend();
     }
+    if (u_ssao)
+        hdr.rgb += texelFetch(u_ssil_texture, ivec2(gl_FragCoord.xy), 0).rgb;
 #endif
     vec4 color = vec4(convertColor(hdr.xyz), 1.0);
     // An offscreen RTT can have an HDR attachment with alpha, which is the

@@ -15,6 +15,7 @@ layout(location = 0) out vec4 o_color;
 #include "utils/handle_pbr.glsl"
 #include "../utils/encode_normal.frag"
 layout(location = 1) out vec4 o_normal;
+layout(location = 2) out vec2 o_vertex_normal;
 #endif
 
 void main()
@@ -41,6 +42,7 @@ void main()
     {
         o_color = vec4(diffuse_color, pbr.z);
         o_normal.xy = EncodeNormal(normal);
+        o_vertex_normal = o_normal.xy;
         o_normal.zw = pbr.xy;
     }
     else

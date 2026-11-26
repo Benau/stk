@@ -31,6 +31,15 @@ struct RTGeometry
     float m_hue;
     uint m_vertex_color;
     uint m_flags;
+    uint m_owner;
+    uint m_surfel_gi_vertex_color;
+    uint m_grass_position_word;
+    vec4 m_row0;
+    vec4 m_row1;
+    vec4 m_row2;
+    uvec4 m_surfel_gi_uv_bounds;
+    vec4 m_bounds_min;
+    vec4 m_bounds_max;
 };
 layout(set = RT_SCENE_SET, binding = 2, std430) readonly buffer RTGeometries
 {
@@ -66,6 +75,7 @@ const uint RT_MASK_DYNAMIC = 2u;
 // Same as GERTGeometry flags
 const uint RT_GEOMETRY_CACHE_VERTEX = 1;
 const uint RT_GEOMETRY_CACHE_INDEX = 2;
+const uint RT_GEOMETRY_STATIC = 4u;
 
 const float RT_RAY_MIN = 0.02;
 const float RT_RAY_MAX = 2000.0;
@@ -95,6 +105,18 @@ uint getRTVertexWord(RTGeometry geometry, uint vertex_index, uint word)
     if ((geometry.m_flags & RT_GEOMETRY_CACHE_VERTEX) != 0u)
         return u_mesh_cache[at];
     return u_rt_data[at];
+}
+
+vec3 getRTVertexPosition(RTGeometry geometry, uint vertex_index)
+{
+    if (geometry.m_shading_type == RT_SHADING_GRASS)
+    {
+        uint word = geometry.m_grass_position_word + vertex_index * 3u;
+        return uintBitsToFloat(uvec3(u_rt_data[word], u_rt_data[word + 1u],
+            u_rt_data[word + 2u]));
+    }
+    return uintBitsToFloat(uvec3(getRTVertexWord(geometry, vertex_index, 0u),
+        getRTVertexWord(geometry, vertex_index, 1u), getRTVertexWord(geometry, vertex_index, 2u)));
 }
 
 vec4 getRTVertexColor(RTGeometry geometry, uint vertex_index)
@@ -172,6 +194,25 @@ bool passesAlphaTest(uint geometry_index, uint primitive, vec2 b,
     int base = int(geometry.m_material_id) * TOTAL_MESH_TEXTURE_LAYER;
     return sampleHitTexture(base, 0, uv, min(lod, 1.0)).a * vertex_alpha >= 0.5;
 }
+
+// The interpolated vertex normal of a hit in world space (the same as
+// shadeHit before the normal map), not normalized if it's degenerate
+vec3 getRTHitNormal(uint geometry_index, uint primitive, vec2 b,
+                    mat3 world_to_object)
+{
+    RTGeometry geometry = u_rt_geometries[geometry_index];
+    vec3 normal =
+        getRTVertexNormal(geometry, getRTIndex(geometry, primitive * 3u)) *
+        (1.0 - b.x - b.y) +
+        getRTVertexNormal(geometry, getRTIndex(geometry, primitive * 3u + 1u)) *
+        b.x +
+        getRTVertexNormal(geometry, getRTIndex(geometry, primitive * 3u + 2u)) *
+        b.y;
+    // The inverse transpose of object to world (row vector times matrix)
+    normal = normal * world_to_object;
+    float length2 = dot(normal, normal);
+    return length2 > 1.0e-12 ? normal * inversesqrt(length2) : normal;
+}   // getRTHitNormal
 
 // A ray query can't be a parameter of a function, so it's a macro, the ray
 // goes through the candidates which are discarded

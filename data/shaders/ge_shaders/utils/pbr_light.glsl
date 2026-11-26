@@ -164,7 +164,7 @@ float sampleOmniShadow(int light_id, vec3 light_pos, vec3 world_pos)
 
     int layer = light_id * OMNI_FACES_PER_LIGHT + face;
     if (u_shadow_type == GST_COMBINED)
-        layer += 3;
+        layer += SUN_CASCADES;
 
     mat4 pv   =
         u_global_light.m_lights[light_id].m_shadow_projection_view_matrix[face];
@@ -315,38 +315,44 @@ vec3 calculateLight(int i, vec3 diffuse_color, vec3 normal, vec3 xpos,
     return light_color * attenuation * diffuse_specular;
 }
 
+float sampleSunCascade(sampler2DArrayShadow map, int level, vec3 position,
+                       vec2 base_normal_bias)
+{
+    if (level < 0 || level >= SUN_CASCADES)
+        return -1.0;
+    vec4 light_view_position =
+        u_global_light.m_shadow_projection_view_matrix[level] *
+        vec4(position, 1.0);
+    if (light_view_position.w <= 0.0)
+        return -1.0;
+    light_view_position.xyz /= light_view_position.w;
+    light_view_position.xy = light_view_position.xy * 0.5 + 0.5 +
+        base_normal_bias;
+    return getShadowPCF(map, light_view_position.xy, level,
+        light_view_position.z);
+}
+
 float getShadowFactor(sampler2DArrayShadow map, vec3 world_position, float view_depth, float NdotL, vec3 normal, vec3 lightdir)
 {
-    float end_factor = smoothstep(130., 150., view_depth);
-    if (view_depth >= 150. || NdotL <= 0.001)
-    {
-        return end_factor;
-    }
-
-    float shadow = 1.0;
-    float factor = smoothstep(9.0, 10.0, view_depth) + smoothstep(40.0, 45.0, view_depth);
+    if (NdotL <= 0.001)
+        return 0.0;
+    float factor = smoothstep(9.0, 10.0, view_depth) + smoothstep(40.0, 45.0, view_depth) +
+        smoothstep(200.0, 210.0, view_depth);
     int level = int(factor);
-
-    vec2 base_normal_bias = (u_global_light.m_shadow_view_matrix * vec4(normal, 0.)).xy;
-    base_normal_bias *= (1.0 - max(0.0, dot(-normal, lightdir))) / float(u_shadow_size);
-
-    vec4 light_view_position = u_global_light.m_shadow_projection_view_matrix[level] * vec4(world_position, 1.0);
-    light_view_position.xyz /= light_view_position.w;
-    light_view_position.xy = light_view_position.xy * 0.5 + 0.5 + base_normal_bias;
-
-    shadow = mix(getShadowPCF(map, light_view_position.xy, level, light_view_position.z), 1.0, end_factor);
-
-    if (factor == float(level))
+    vec2 base_normal_bias =
+        (u_global_light.m_shadow_view_matrix * vec4(normal, 0.)).xy;
+    base_normal_bias *=
+        ((1.0 - max(0.0, dot(-normal, lightdir))) / float(u_shadow_size));
+    float shadow = sampleSunCascade(map, level, world_position,
+        base_normal_bias);
+    float blend = fract(factor);
+    if (blend > 0.0 && level + 1 < SUN_CASCADES)
     {
-        return shadow;
+        float next_shadow = sampleSunCascade(map, level + 1, world_position,
+            base_normal_bias);
+        if (next_shadow >= 0.0)
+            shadow = shadow >= 0.0 ? mix(shadow, next_shadow, blend) :
+                next_shadow;
     }
-
-    // Blend with next cascade by factor
-    light_view_position = u_global_light.m_shadow_projection_view_matrix[level + 1] * vec4(world_position, 1.0);
-    light_view_position.xyz /= light_view_position.w;
-    light_view_position.xy = light_view_position.xy * 0.5 + 0.5 + base_normal_bias;
-
-    shadow = mix(shadow, getShadowPCF(map, light_view_position.xy, level + 1, light_view_position.z), factor - float(level));
-
-    return shadow;
+    return shadow >= 0.0 ? shadow : 1.0;
 }

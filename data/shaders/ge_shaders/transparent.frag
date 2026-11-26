@@ -9,6 +9,11 @@ layout(location = 0) out vec4 o_color;
 #include "utils/sample_mesh_texture.glsl"
 #ifdef PBR_ENABLED
 #include "utils/camera.glsl"
+#if defined(RAY_QUERY_ENABLED) && defined(SPLIT)
+layout(location = 5) in vec3 f_normal;
+#define SURFEL_GI_FORWARD
+#include "utils/surfel_gi_volume.glsl"
+#endif
 #include "utils/global_light_data.glsl"
 #include "utils/unproject_position.glsl"
 #endif
@@ -19,6 +24,14 @@ void main()
     vec3 mixed_color = color.xyz;
     float alpha = color.w;
 #ifdef PBR_ENABLED
+    #ifdef SURFEL_GI_FORWARD
+    if (u_surfel_gi)
+    {
+        vec4 indirect = lookupVolume(f_world_position.xyz, normalize(f_normal), true);
+        mixed_color *= mix(vec3(1.0), indirect.rgb, indirect.a);
+    }
+    #endif
+    mixed_color += 0.2 * color.rgb;
     mixed_color = convertColor(mixed_color);
     // Linear fog, and the solid materials have exponential fog in
     // handle_pbr.glsl
