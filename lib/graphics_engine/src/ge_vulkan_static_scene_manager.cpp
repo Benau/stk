@@ -7,7 +7,6 @@
 #include "ge_vulkan_draw_call.hpp"
 #include "ge_vulkan_lod_node.hpp"
 #include "ge_vulkan_scene_manager.hpp"
-#include "ge_vulkan_shadow_fbo.hpp"
 #include "ge_vulkan_static_draw_batches.hpp"
 #include "ge_vulkan_static_draw_source.hpp"
 #include "../source/Irrlicht/CEmptySceneNode.h"
@@ -225,7 +224,6 @@ void GEVulkanStaticSceneManager::registerNodes(GEVulkanSceneManager* manager,
     // The entries which the GPU draws for this view are not registered
     // (except for the shadows, which are still generated on the CPU)
     const GEVulkanStaticDrawBatches* batches = dc->prepareStaticBatches(*this);
-    GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
     for (unsigned i = 0; i < m_entries.size(); i++)
     {
         const Entry& entry = m_entries[i];
@@ -237,8 +235,8 @@ void GEVulkanStaticSceneManager::registerNodes(GEVulkanSceneManager* manager,
         node->refreshTextureDescriptorID();
         if (!batches || batches->onCPU(i))
             manager->registerNodeForRendering(node, scene::ESNRP_SOLID);
-        else if (sfbo)
-            sfbo->addNode(node);
+        else
+            manager->registerMeshForLighting(node);
     }
 }   // registerNodes
 
