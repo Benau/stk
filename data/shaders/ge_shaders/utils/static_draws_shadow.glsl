@@ -2,6 +2,7 @@
 // objects flagged as small (see GEVulkanShadowDrawCall::isSmallForFarShadow)
 // are skipped when the w of the camera of the level of detail is not zero
 // (the far cascade)
+#define SKIP_NEAR_PLANE 1
 #include "static_draws_frustum.glsl"
 
 // ----------------------------------------------------------------------------

@@ -9,10 +9,14 @@
 // Same tests as GECullingTool::isCulled, the box of the camera first
 bool isInFrustum(const Source source)
 {
+#ifndef SKIP_NEAR_PLANE
     if (any(lessThan(source.max_edge, CULL_MIN_EDGE)) ||
         any(greaterThan(source.min_edge, CULL_MAX_EDGE)))
         return false;
     for (int i = 0; i < 6; i++)
+#else
+    for (int i = 1; i < 6; i++)
+#endif
     {
         vec4 plane = CULL_PLANE(i);
         // The corner of the box which is the furthest along the normal
