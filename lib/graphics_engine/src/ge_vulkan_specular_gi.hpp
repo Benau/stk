@@ -1,5 +1,5 @@
-#ifndef HEADER_GE_VULKAN_STOCHASTIC_REFLECTION_HPP
-#define HEADER_GE_VULKAN_STOCHASTIC_REFLECTION_HPP
+#ifndef HEADER_GE_VULKAN_SPECULAR_GI_HPP
+#define HEADER_GE_VULKAN_SPECULAR_GI_HPP
 
 #include "ge_vulkan_prev_camera.hpp"
 #include "ge_vulkan_solid_reflection.hpp"
@@ -8,19 +8,19 @@
 
 namespace GE
 {
-// The stochastic reflection of FidelityFX SSSR, used instead of
-// GEVulkanSolidReflection with GEConfig::m_stochastic_reflection (decided when
-// it's created), with the same traces (see utils/stochastic_reflection.glsl):
+// The specular GI of FidelityFX SSSR, used instead of
+// GEVulkanSolidReflection with GEConfig::m_specular_gi (decided when
+// it's created), with the same traces (see utils/specular_gi.glsl):
 // the classify and the trace are at half size, a few samples of the lobe of
-// the specular BRDF per texel (stochastic_reflection_classify.comp,
-// stochastic_reflection_ssr.comp and stochastic_reflection_rt.comp), then
+// the specular BRDF per texel (specular_gi_classify.comp,
+// specular_gi_ssr.comp and specular_gi_rt.comp), then
 //
-//   mipmap  : stochastic_reflection_mipmap.comp, the mip chain of the trace
+//   mipmap  : specular_gi_mipmap.comp, the mip chain of the trace
 //             (the average of the traced texels)
-//   resolve  : stochastic_reflection_resolve.comp, the spatial filter of the
+//   resolve  : specular_gi_resolve.comp, the spatial filter of the
 //              trace (the prefilter of FidelityFX DNSR) into the output
 //   temporal : with the frame cache (GEConfig::m_frame_cache, it can be
-//              changed at any time), stochastic_reflection_temporal.comp:
+//              changed at any time), specular_gi_temporal.comp:
 //              the resolve writes another target, which is mixed with the
 //              history of the last frames into the output (the
 //              reprojection and the temporal resolve of FidelityFX DNSR),
@@ -28,7 +28,7 @@ namespace GE
 //
 // and the output is the radiance premultiplied by its coverage (RGBA16F, half
 // size), which the lighting pass upsamples and mixes with the specular IBL.
-class GEVulkanStochasticReflection : public GEVulkanSolidReflection
+class GEVulkanSpecularGI : public GEVulkanSolidReflection
 {
 private:
     // The trace (RGBA16F, half size), with its mip chain (m_trace_levels
@@ -53,7 +53,7 @@ private:
     GEVulkanAttachmentTexture* m_current;
 
     // The history of the temporal filter: the radiance (RGBA16F) and the
-    // surface of every texel (RG32UI, see stochastic_reflection_temporal.comp,
+    // surface of every texel (RG32UI, see specular_gi_temporal.comp,
     // 0 where it can't be reused). One is read and the other one written in
     // a frame, they swap every frame which writes one
     std::array<GEVulkanAttachmentTexture*, 2> m_history;
@@ -61,7 +61,7 @@ private:
     std::array<GEVulkanAttachmentTexture*, 2> m_history_surface;
 
     // GEVulkanPrevCamera of every viewport of the frame (up to
-    // g_stochastic_max_viewports), updated before its temporal filter
+    // g_specular_gi_max_viewports), updated before its temporal filter
     VkBuffer m_prev_camera_buffer;
 
     VmaAllocation m_prev_camera_memory;
@@ -126,7 +126,7 @@ private:
     // ------------------------------------------------------------------------
     // The set (m_layout and m_set): the level 0 of the trace instead of the
     // output, the list, the normal, the depth, the levels of the trace, the
-    // trace (sampled) and the output, see StochasticBinding
+    // trace (sampled) and the output, see SpecularGIBinding
     void createDescriptor(GEVulkanAttachmentTexture* depth,
                           GEVulkanAttachmentTexture* normal);
     // ------------------------------------------------------------------------
@@ -137,7 +137,8 @@ private:
     void createTemporalDescriptors(
                                  const irr::core::dimension2d<irr::u32>& size);
     // ------------------------------------------------------------------------
-    void createPipelines();
+    void createPipelines(bool surfel_gi);
+    VkDeviceSize getTraceDispatchOffset(bool rt) const override;
     // ------------------------------------------------------------------------
     // Clears the levels of an image to 0 (it's in the general layout)
     void clearImage(VkCommandBuffer cmd, VkImage image, unsigned levels);
@@ -145,8 +146,8 @@ protected:
     // ------------------------------------------------------------------------
     virtual const char* getTraceShader(bool rt) const
     {
-        return rt ? "stochastic_reflection_rt.comp" :
-            "stochastic_reflection_ssr.comp";
+        return rt ? "specular_gi_rt.comp" :
+            "specular_gi_ssr.comp";
     }
     // ------------------------------------------------------------------------
     // Also clears the trace (and the history which is written) once per
@@ -168,21 +169,21 @@ protected:
                              GEVulkanCamera* cam);
 public:
     // ------------------------------------------------------------------------
-    GEVulkanStochasticReflection(GEVulkanDriver* vk,
+    GEVulkanSpecularGI(GEVulkanDriver* vk,
                                  const irr::core::dimension2d<irr::u32>& size,
                                  GEVulkanAttachmentTexture* depth,
                                  GEVulkanAttachmentTexture* normal, bool ssr,
-                                 bool rt);
+                                 bool rt, bool surfel_gi);
     // ------------------------------------------------------------------------
-    ~GEVulkanStochasticReflection();
+    ~GEVulkanSpecularGI();
     // ------------------------------------------------------------------------
-    virtual bool isStochastic() const                          { return true; }
+    virtual bool isSpecularGI() const                          { return true; }
     // ------------------------------------------------------------------------
     // The screen space trace also writes the length of the rays for the
     // temporal filter
     virtual std::vector<std::pair<uint32_t, VkDescriptorType> >
         getTraceOutputBindings() const;
-};   // GEVulkanStochasticReflection
+};   // GEVulkanSpecularGI
 
 }
 

@@ -1,12 +1,12 @@
-// The mip chain of the trace target of the stochastic reflection of
-// GEVulkanSolidReflection (see utils/stochastic_reflection.glsl), levels 1 to
+// The mip chain of the trace target of the specular GI of
+// GEVulkanSolidReflection (see utils/specular_gi.glsl), levels 1 to
 // 3 from level 0, for the texels of the viewport of a camera (pc.m_rect, in
 // pixels of the g-buffer). A group of 8x8 threads reads an 8x8 tile of level 0
 // (pc.m_origin is the first tile, a multiple of 8), whose 4x4, 2x2 and 1x1
 // texels of the next levels it writes.
 //
 // A texel of a level is the average of the texels of level 0 under it which
-// were traced in this frame (isStochasticReflectionTexel, the test of the
+// were traced in this frame (isSpecularGITexel, the test of the
 // classify) and not of all of them: the other ones are 0 (the target is
 // cleared every frame), and an average with them would lower the coverage of
 // the edges of a glossy surface, which the lighting pass would take as rays
@@ -18,7 +18,7 @@ layout(set = 0, binding = 2) uniform sampler2D u_normal;
 layout(set = 0, binding = 3) uniform sampler2D u_depth;
 
 #include "utils/constants_utils.glsl"
-#include "utils/stochastic_reflection.glsl"
+#include "utils/specular_gi.glsl"
 
 // Older Metal GPUs need a separate texture argument for each writable mip.
 layout(set = 0, binding = 0, rgba16f) uniform readonly image2D u_level0;
@@ -32,7 +32,7 @@ layout(push_constant) uniform PushConstants
     ivec4 m_rect;
     // The first texel of level 0 of the dispatch
     ivec2 m_origin;
-    // Levels of the target (STOCHASTIC_REFLECTION_LEVELS at most)
+    // Levels of the target (SPECULAR_GI_LEVELS at most)
     int m_levels;
 } pc;
 
@@ -59,10 +59,10 @@ void main()
     const ivec2 texel = pc.m_origin + ivec2(gl_GlobalInvocationID.xy);
     const uint index = uint(local.x + 8 * local.y);
     bool traced = all(lessThan(texel, imageSize(u_level0))) &&
-        isStochasticReflectionTexel(texel, pc.m_rect, u_normal, u_depth);
+        isSpecularGITexel(texel, pc.m_rect, u_normal, u_depth);
     s_sum[index] = traced ? imageLoad(u_level0, texel) : vec4(0.0);
     s_count[index] = traced ? 1.0 : 0.0;
-    for (int level = 1; level < STOCHASTIC_REFLECTION_LEVELS; level++)
+    for (int level = 1; level < SPECULAR_GI_LEVELS; level++)
     {
         barrier();
         // The texels of this level in the tile

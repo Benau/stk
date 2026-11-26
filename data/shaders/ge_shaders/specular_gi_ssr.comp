@@ -1,5 +1,5 @@
-// Screen space stochastic reflection of the solid materials
-// (GEVulkanSolidReflection, see utils/stochastic_reflection.glsl), one thread
+// Screen space specular GI of the solid materials
+// (GEVulkanSolidReflection, see utils/specular_gi.glsl), one thread
 // per glossy texel of the list: samples of the lobe of the specular BRDF are
 // traced over the depth buffer (SOLID_REFLECTION_SSR_FAST) or the HiZ depth,
 // the same traces as solid_reflection_ssr.comp.
@@ -11,8 +11,8 @@
 // hits on another reflective surface fade out, like solid_reflection_ssr.comp)
 // and it's rejected on the sky, on a back face and on the pixel itself (the
 // trace over the depth buffer always ends somewhere, the FFX_SSSR_ValidateHit
-// of FidelityFX SSSR). The main is the one of utils/stochastic_reflection.glsl
-// (8 threads trace the rays of a texel).
+// of FidelityFX SSSR). The main is the one of utils/specular_gi.glsl
+// (one thread traces all rays of its texel).
 //
 // Set 0 is the one of GEVulkanHiZDepth::getRenderingDescriptorSet() (same
 // layout as the displace pass, the first image is the history instead of the
@@ -28,15 +28,18 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 // After the samplers of GVDFP_HDR, see GEVulkanDeferredFBOSplit
 #define SOLID_REFLECTION_BINDING 7
 // The length of the rays for the temporal filter, after the list
-#define STOCHASTIC_REFLECTION_RAY_LENGTH_BINDING 9
-#define STOCHASTIC_REFLECTION_SURFACE
-#define STOCHASTIC_REFLECTION_TRACE
+#define SPECULAR_GI_RAY_LENGTH_BINDING 9
+#define SPECULAR_GI_SURFACE
+#define SPECULAR_GI_TRACE
+#define SPECULAR_GI_SSSR
 
 layout(set = 0, binding = 0) uniform sampler2D u_history;
 layout(set = 0, binding = 1) uniform sampler2DShadow u_depth_shadow;
 layout(set = 0, binding = 2) uniform sampler2D u_hiz_depth;
 layout(set = 2, binding = 1) uniform sampler2D u_normal;
 layout(set = 2, binding = 2) uniform sampler2D u_depth;
+layout(set = 2, binding = 5) uniform sampler2D u_surfel_gi_texture;
+layout(set = 3, binding = 2) uniform samplerCube u_skybox;
 // Level 0 of the trace target
 layout(set = SOLID_REFLECTION_SET, binding = SOLID_REFLECTION_BINDING,
     rgba16f) uniform writeonly image2D u_trace;
@@ -48,22 +51,27 @@ const uint u_hiz_iterations =
     u_solid_reflection == SOLID_REFLECTION_SSR_HIZ400 ? 400u :
     u_solid_reflection == SOLID_REFLECTION_SSR_HIZ200 ? 200u :
     u_solid_reflection == SOLID_REFLECTION_SSR_HIZ100 ? 100u : 0u;
-// The rays of the roughest surface (see getStochasticReflectionRays), more
-// with a longer trace (2 per thread of the texel at most)
+// The rays of the roughest surface (see getSpecularGIRays), more
+// with a longer trace
 const uint u_max_rays =
     u_solid_reflection == SOLID_REFLECTION_SSR_HIZ400 ? 16u :
     u_solid_reflection == SOLID_REFLECTION_SSR_HIZ200 ? 12u :
     u_solid_reflection == SOLID_REFLECTION_SSR_HIZ100 ? 8u : 4u;
 #include "utils/pbr_utils.glsl"
+#ifdef RAY_QUERY_ENABLED
+#define SURFEL_GI_FORWARD
+#include "utils/surfel_gi_volume.glsl"
+#endif
+#include "utils/surfel_gi_specular.glsl"
 #include "utils/unproject_position.glsl"
 #include "../utils/decodeNormal.frag"
 
 #define SSR_HIZ
 #include "../utils/ssr.glsl"
-#include "utils/stochastic_reflection.glsl"
+#include "utils/specular_gi.glsl"
 
 // ----------------------------------------------------------------------------
-float traceStochasticReflectionRay(StochasticReflectionSurface surface,
+float traceSpecularGIRay(SpecularGISurface surface,
                                    ivec2 pixel, vec3 direction, out vec3 hdr,
                                    out float hit_distance, out bool moving)
 {
@@ -107,7 +115,7 @@ float traceStochasticReflectionRay(StochasticReflectionSurface surface,
     // The ray didn't leave the pixel, it's an immediate self reflection
     if (all(lessThanEqual(abs(hit_pixel - pixel), ivec2(1))))
         return 0.0;
-    // The sky has no radiance of a surface, the IBL is the environment
+    // A sky pixel has no screen-space hit.
     float hit_depth = texelFetch(u_depth, hit_pixel, 0).x;
     if (hit_depth == 0.0)
         return 0.0;
@@ -125,4 +133,4 @@ float traceStochasticReflectionRay(StochasticReflectionSurface surface,
         hit_depth), u_camera.m_viewport, u_camera.m_inverse_projection_matrix),
         surface.m_view_position);
     return clamp(weight, 0.0, 1.0);
-}   // traceStochasticReflectionRay
+}   // traceSpecularGIRay

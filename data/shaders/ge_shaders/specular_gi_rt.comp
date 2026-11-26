@@ -1,5 +1,5 @@
-// Ray traced stochastic reflection of the solid materials
-// (GEVulkanSolidReflection, see utils/stochastic_reflection.glsl), one thread
+// Ray traced specular GI of the solid materials
+// (GEVulkanSolidReflection, see utils/specular_gi.glsl), one thread
 // per glossy texel of the list: samples of the lobe of the specular BRDF are
 // traced in the ray traced scene (GEVulkanRTScene), so they have no history and
 // no screen edges, a ray only misses the sky (the specular IBL which the
@@ -7,7 +7,7 @@
 //
 // The hit is shaded by utils/rt_reflection.glsl (shared with the reflection of
 // the displace materials and solid_reflection_rt.comp). The main is the one of
-// utils/stochastic_reflection.glsl (8 threads trace the rays of a texel).
+// utils/specular_gi.glsl (8 threads trace the rays of a texel).
 //
 // Set 0 is the one of GEVulkanRTScene (acceleration structure, data buffer,
 // geometry buffer, mesh cache), set 1 the camera and the global light, set 2
@@ -19,10 +19,10 @@ layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 #define MESH_TEXTURES_SET 4
 #define SOLID_REFLECTION_SET 5
-#define STOCHASTIC_REFLECTION_SURFACE
-#define STOCHASTIC_REFLECTION_TRACE
+#define SPECULAR_GI_SURFACE
+#define SPECULAR_GI_TRACE
 // Its hits are hdr, a hit on a small bright source would be a firefly
-#define STOCHASTIC_REFLECTION_KARIS
+#define SPECULAR_GI_KARIS
 
 layout(set = 2, binding = 1) uniform sampler2D u_normal;
 layout(set = 2, binding = 2) uniform sampler2D u_depth;
@@ -47,19 +47,19 @@ layout(set = SOLID_REFLECTION_SET, binding = 0, rgba16f) uniform writeonly
 #include "utils/rt_utils.glsl"
 #include "utils/rt_scene.glsl"
 
-// The rays of the roughest surface (see getStochasticReflectionRays), one per
+// The rays of the roughest surface (see getSpecularGIRays), one per
 // thread of the texel
 const uint u_max_rays = 8u;
 
 #include "utils/rt_reflection.glsl"
-#include "utils/stochastic_reflection.glsl"
+#include "utils/specular_gi.glsl"
 
 // ----------------------------------------------------------------------------
-float traceStochasticReflectionRay(StochasticReflectionSurface surface,
+float traceSpecularGIRay(SpecularGISurface surface,
                                    ivec2 pixel, vec3 direction, out vec3 hdr,
                                    out float hit_distance, out bool moving)
 {
     // A ray only misses the sky, the specular IBL is the environment
     return traceReflection(surface.m_world_position, direction, hdr,
         hit_distance, moving) ? 1.0 : 0.0;
-}   // traceStochasticReflectionRay
+}   // traceSpecularGIRay

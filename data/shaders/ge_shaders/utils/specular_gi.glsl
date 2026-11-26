@@ -1,57 +1,53 @@
-// The stochastic reflection of the glossy solid materials
-// (GEVulkanSolidReflection with GEConfig::m_stochastic_reflection), shared by
+// The specular GI of the glossy solid materials
+// (GEVulkanSolidReflection with GEConfig::m_specular_gi), shared by
 // its passes. It's the algorithm of FidelityFX SSSR: a rough surface doesn't
 // reflect a single mirror ray, a few samples of the lobe of its specular BRDF
 // (a GGX visible normal distribution) are traced and their radiance is stored
 // raw, the lighting pass applies the split-sum BRDF of the surface to the
 // average once (handlePBRDeferred), like the composite of FidelityFX SSSR. The
 // trace is the screen space one over the depth buffer or the HiZ depth
-// (stochastic_reflection_ssr.comp) or the ray traced one
-// (stochastic_reflection_rt.comp).
+// (specular_gi_ssr.comp) or the ray traced one
+// (specular_gi_rt.comp).
 //
 // FidelityFX traces one ray per pixel and denoises it temporally. Here a
 // texel traces a few rays, so the reflection is usable in a single frame, and
 // the passes are:
 //
-//   classify : stochastic_reflection_classify.comp, the glossy texels of the
+//   classify : specular_gi_classify.comp, the glossy texels of the
 //              half size target are added to a list (one texel is the 2x2
 //              pixels of the g-buffer whose top left pixel, its
-//              representative pixel getStochasticReflectionPixel, is
+//              representative pixel getSpecularGIPixel, is
 //              traced)
 //   trace    : the texels of the list (indirect dispatch), a few rays each
 //              (more for a rougher surface, one for a mirror), into level 0
-//              of the trace target. The rays of a texel are traced by 8
-//              threads (STOCHASTIC_REFLECTION_THREADS) at the same time and
-//              summed: a trace is latency bound, a thread which traces its
-//              rays one after another waits for each of them (3 times slower
-//              with the ray traced scene, twice with 400 iterations of HiZ)
-//   mipmap   : stochastic_reflection_mipmap.comp, levels 1 to 3 of the trace
+//              of the trace target. SSSR packs neighboring texels into the
+//              same group; the scene ray tracer uses 8 threads per texel.
+//   mipmap   : specular_gi_mipmap.comp, levels 1 to 3 of the trace
 //              target, the average of the glossy texels only
-//   resolve  : stochastic_reflection_resolve.comp, the texels of the list
+//   resolve  : specular_gi_resolve.comp, the texels of the list
 //              (one thread each, its own indirect dispatch), the spatial
 //              filter of the trace (the
 //              prefilter of the reflection denoiser of FidelityFX, DNSR),
 //              into the resolved target which the lighting pass reads
-//   temporal : stochastic_reflection_temporal.comp, with the frame cache
+//   temporal : specular_gi_temporal.comp, with the frame cache
 //              (GEConfig::m_frame_cache) only, the texels of the list: the
 //              resolved trace is mixed with the history of the last frames
 //              (the reprojection and the temporal resolve of FidelityFX DNSR,
 //              see there), the resolve writes into another target then and
 //              this one writes the target of the lighting pass. The rays of
 //              a texel are other ones in every frame
-//              (getStochasticReflectionSample), which the history averages
+//              (getSpecularGISample), which the history averages
 //
 // The trace target stores the radiance premultiplied by its coverage (rgb *
 // alpha, the alpha is the confidence of the rays over their count) so the
 // averages of the mipmap and the resolve are the averages of the radiance
-// weighted by the coverage, and the lighting pass mixes the specular IBL of
-// the pixel with the reflection by the coverage at full resolution (a ray
-// without a hit is the environment, the prefiltered IBL has no noise). It
+// weighted by the coverage. Screen-space rays fill their missing radiance
+// from the skybox; a surfel estimate carries its own coverage. It
 // needs the alpha, so the targets are RGBA16F (half size: 2 bytes per pixel
 // of the screen).
 //
 // Only the glossy texels are traced. The mipmap and the resolve test the
-// g-buffer of a texel (isStochasticReflectionTexel, the same test as the
+// g-buffer of a texel (isSpecularGITexel, the same test as the
 // classify), so they never average a texel which wasn't traced in this frame,
 // but a tap of the resolve is a bilinear sample of 4 texels, whose neighbors
 // of the tested one can be any texel: the trace target is cleared every frame
@@ -63,7 +59,7 @@
 // The shader which includes it defines SOLID_REFLECTION_SET and
 // SOLID_REFLECTION_BINDING if they're not 0, and includes
 // utils/constants_utils.glsl, utils/pbr_utils.glsl,
-// utils/camera.glsl (if it uses getStochasticReflectionSurface),
+// utils/camera.glsl (if it uses getSpecularGISurface),
 // utils/unproject_position.glsl and ../utils/decodeNormal.frag before it
 
 #ifndef SOLID_REFLECTION_SET
@@ -75,28 +71,30 @@
 #endif
 
 // Levels of the trace target (the mipmap writes 1 to 3)
-const int STOCHASTIC_REFLECTION_LEVELS = 4;
+const int SPECULAR_GI_LEVELS = 4;
 
 // The height of a viewport which the sizes in texels of the filters are for,
 // they are scaled by the height of the viewport, so a filter covers the same
 // part of the screen whatever its resolution (REFERENCE_HEIGHT of
 // GEVulkanPostProcessing)
-const float STOCHASTIC_REFLECTION_REFERENCE_HEIGHT = 1080.0;
+const float SPECULAR_GI_REFERENCE_HEIGHT = 1080.0;
 
-// Threads which trace the rays of a texel together, the y of the indirect
-// dispatch of the trace (a group of 64 threads has 64 / 8 texels, so the 8
-// groups in y have the 64 texels of the x of the dispatch)
-const uint STOCHASTIC_REFLECTION_THREADS = 8u;
+// Threads per texel: SSSR uses the resolve dispatch, RT the wider trace dispatch.
+#ifdef SPECULAR_GI_SSSR
+const uint SPECULAR_GI_THREADS = 1u;
+#else
+const uint SPECULAR_GI_THREADS = 8u;
+#endif
 
-// The glossy texels (packStochasticReflectionTexel), m_trace_dispatch is the
+// The glossy texels (packSpecularGITexel), m_trace_dispatch is the
 // indirect dispatch of the trace (x groups of 64 texels, y is
-// STOCHASTIC_REFLECTION_THREADS) and m_resolve_dispatch the one of the
-// resolve and the temporal filter (x groups of 64 texels, one thread each). y
-// and z are written by GEVulkanStochasticReflection before the classify, and
+// 8 for RT) and m_resolve_dispatch the one of the screen-space trace,
+// resolve and temporal filter (x groups of 64 texels, one thread each). y
+// and z are written by GEVulkanSpecularGI before the classify, and
 // m_frame: the frame of the temporal filter, never 0, or 0 without it (the
 // rays of a texel are the same in every frame then)
 layout(std430, set = SOLID_REFLECTION_SET,
-    binding = SOLID_REFLECTION_BINDING + 1) buffer StochasticReflectionList
+    binding = SOLID_REFLECTION_BINDING + 1) buffer SpecularGIList
 {
     uint m_count;
     uint m_trace_dispatch[3];
@@ -106,39 +104,39 @@ layout(std430, set = SOLID_REFLECTION_SET,
 } u_reflection_list;
 
 // ----------------------------------------------------------------------------
-uint packStochasticReflectionTexel(ivec2 texel)
+uint packSpecularGITexel(ivec2 texel)
 {
     return uint(texel.x) | (uint(texel.y) << 16u);
-}   // packStochasticReflectionTexel
+}   // packSpecularGITexel
 
 // ----------------------------------------------------------------------------
-ivec2 unpackStochasticReflectionTexel(uint packed)
+ivec2 unpackSpecularGITexel(uint packed)
 {
     return ivec2(packed & 0xFFFFu, packed >> 16u);
-}   // unpackStochasticReflectionTexel
+}   // unpackSpecularGITexel
 
 // ----------------------------------------------------------------------------
 // The texel of the thread of the resolve, false if it has none (the last
 // group isn't full)
-bool getStochasticReflectionTexel(out ivec2 texel)
+bool getSpecularGITexel(out ivec2 texel)
 {
     texel = ivec2(0);
     if (gl_GlobalInvocationID.x >= u_reflection_list.m_count)
         return false;
-    texel = unpackStochasticReflectionTexel(
+    texel = unpackSpecularGITexel(
         u_reflection_list.m_texels[gl_GlobalInvocationID.x]);
     return true;
-}   // getStochasticReflectionTexel
+}   // getSpecularGITexel
 
 // ----------------------------------------------------------------------------
 // The pixel of the g-buffer which a texel of the half size targets traces.
 // It's the top left one of its 2x2 pixels, so a pixel of the screen with even
 // coordinates is exactly at a texel and an odd one half way between two, which
 // the upsample of the lighting pass uses (deferred_pbr.frag)
-ivec2 getStochasticReflectionPixel(ivec2 texel)
+ivec2 getSpecularGIPixel(ivec2 texel)
 {
     return texel * 2;
-}   // getStochasticReflectionPixel
+}   // getSpecularGIPixel
 
 // ----------------------------------------------------------------------------
 // The texel is traced: its pixel is in the viewport rect (x0, y0, x1
@@ -146,48 +144,37 @@ ivec2 getStochasticReflectionPixel(ivec2 texel)
 // pixel, never to two), glossy and not the sky (reverse z, depth 0). The same
 // test for the classify, the mipmap, the resolve and the upsample of the
 // lighting pass
-bool isStochasticReflectionTexel(ivec2 texel, ivec4 rect, sampler2D normal,
+bool isSpecularGITexel(ivec2 texel, ivec4 rect, sampler2D normal,
                                  sampler2D depth)
 {
-    ivec2 pixel = getStochasticReflectionPixel(texel);
+    ivec2 pixel = getSpecularGIPixel(texel);
     if (any(lessThan(pixel, rect.xy)) || any(greaterThanEqual(pixel, rect.zw)))
         return false;
-    return texelFetch(normal, pixel, 0).z >= SOLID_REFLECTION_MIN_GLOSS &&
+    return usesSpecularGISSR(texelFetch(normal, pixel, 0).z) &&
         texelFetch(depth, pixel, 0).x != 0.0;
-}   // isStochasticReflectionTexel
+}   // isSpecularGITexel
 
 // ----------------------------------------------------------------------------
 // The viewport rect of the camera in pixels (x0, y0, x1, y1 exclusive)
-ivec4 getStochasticReflectionRect(vec4 viewport)
+ivec4 getSpecularGIRect(vec4 viewport)
 {
     ivec2 offset = ivec2(viewport.xy);
     return ivec4(offset, offset + ivec2(viewport.zw));
-}   // getStochasticReflectionRect
-
-// ----------------------------------------------------------------------------
-// The reflection fades in from the lowest gloss which reflects, so a surface
-// of a gloss just above it doesn't switch from the IBL to the traced
-// radiance (the coverage is multiplied by it)
-float getStochasticReflectionFade(float gloss)
-{
-    return smoothstep(SOLID_REFLECTION_MIN_GLOSS,
-        SOLID_REFLECTION_MIN_GLOSS + 0.1, gloss);
-}   // getStochasticReflectionFade
+}   // getSpecularGIRect
 
 // ----------------------------------------------------------------------------
 // Rays of a texel: the lobe of a mirror is a single direction, one ray has all
-// of it, the roughest surface which reflects (perceptual roughness 0.5) gets
-// max_rays
-uint getStochasticReflectionRays(float perceptual_roughness, uint max_rays)
+// of it, the roughest surface traced by SSSR gets max_rays
+uint getSpecularGIRays(float perceptual_roughness, uint max_rays)
 {
     float rays = ceil(float(max_rays) * perceptual_roughness /
-        (1.0 - SOLID_REFLECTION_MIN_GLOSS));
+        SPECULAR_GI_MAX_SSSR_ROUGHNESS);
     return clamp(uint(rays), 1u, max_rays);
-}   // getStochasticReflectionRays
+}   // getSpecularGIRays
 
 // ----------------------------------------------------------------------------
 // PCG2D of Jarzynski and Olano 2020, "Hash Functions for GPU Rendering"
-uvec2 hashStochasticReflection(uvec2 v)
+uvec2 hashSpecularGI(uvec2 v)
 {
     v = v * 1664525u + 1013904223u;
     v.x += v.y * 1664525u;
@@ -197,7 +184,19 @@ uvec2 hashStochasticReflection(uvec2 v)
     v.y += v.x * 1664525u;
     v ^= v >> 16u;
     return v;
-}   // hashStochasticReflection
+}   // hashSpecularGI
+
+#ifdef SPECULAR_GI_SSSR
+bool chooseSurfelSpecularGI(ivec2 texel, float perceptual_roughness)
+{
+    if (!u_surfel_gi || perceptual_roughness <= SPECULAR_GI_SSSR_ONLY_ROUGHNESS)
+        return false;
+    float probability = smoothstep(SPECULAR_GI_SSSR_ONLY_ROUGHNESS,
+        SPECULAR_GI_SURFEL_ONLY_ROUGHNESS, perceptual_roughness);
+    uint rank = hashSpecularGI(uvec2(texel)).y + u_reflection_list.m_frame * 0x9E3779B9u;
+    return float(rank >> 8u) * (1.0 / 16777216.0) < probability;
+}
+#endif
 
 // ----------------------------------------------------------------------------
 // The i-th uniform point in [0, 1)² of the rays of a texel: the R2 sequence
@@ -211,9 +210,9 @@ uvec2 hashStochasticReflection(uvec2 v)
 // history averages more and more points of the same well spread sequence. The
 // sequence is in 32 bit fixed point there (its wrap is the fract, exactly in
 // every frame)
-vec2 getStochasticReflectionSample(ivec2 texel, uint i, uint rays)
+vec2 getSpecularGISample(ivec2 texel, uint i, uint rays)
 {
-    uvec2 seed = hashStochasticReflection(uvec2(texel));
+    uvec2 seed = hashSpecularGI(uvec2(texel));
     if (u_reflection_list.m_frame == 0u)
     {
         vec2 offset = vec2(seed >> 8u) / 16777216.0;
@@ -223,18 +222,18 @@ vec2 getStochasticReflectionSample(ivec2 texel, uint i, uint rays)
     const uvec2 step = uvec2(3242174889u, 2447445414u);
     uvec2 point = seed + (u_reflection_list.m_frame * rays + i) * step;
     return vec2(point >> 8u) / 16777216.0;
-}   // getStochasticReflectionSample
+}   // getSpecularGISample
 
 // ----------------------------------------------------------------------------
 // The alpha (the roughness squared) of the lobe of a reflection. It's not
 // perceptualRoughnessToRoughness: the minimum roughness of it keeps the
 // highlights of the lights from being too small, but a lobe of that roughness
 // is a few degrees wide, so a mirror (gloss 1) would reflect a noisy image
-// (its reflection isn't filtered, see stochastic_reflection_resolve.comp)
-float getStochasticReflectionAlpha(float perceptual_roughness)
+// (its reflection isn't filtered, see specular_gi_resolve.comp)
+float getSpecularGIAlpha(float perceptual_roughness)
 {
     return perceptual_roughness * perceptual_roughness;
-}   // getStochasticReflectionAlpha
+}   // getSpecularGIAlpha
 
 // ----------------------------------------------------------------------------
 // A world space direction of the lobe of the specular BRDF: the reflection of
@@ -242,10 +241,10 @@ float getStochasticReflectionAlpha(float perceptual_roughness)
 // sampled with the spherical caps of Eto and Tokuyoshi 2023, "Bounded VNDF
 // Sampling for Smith-GGX Reflections" (fewer samples go below the surface
 // than with the method of Heitz 2018). view is the direction from the surface
-// to the eye, alpha the roughness (getStochasticReflectionAlpha), xi a
+// to the eye, alpha the roughness (getSpecularGIAlpha), xi a
 // uniform point in [0, 1)². The basis is the one of Duff et al. 2017,
 // "Building an Orthonormal Basis, Revisited"
-vec3 sampleStochasticReflection(vec3 view, vec3 normal, float alpha, vec2 xi)
+vec3 sampleSpecularGI(vec3 view, vec3 normal, float alpha, vec2 xi)
 {
     // A mirror, the lobe is a single direction (like the IsMirrorReflection
     // of FidelityFX SSSR)
@@ -281,13 +280,13 @@ vec3 sampleStochasticReflection(vec3 view, vec3 normal, float alpha, vec2 xi)
     vec3 m = normalize(vec3(m_std.xy * alpha, m_std.z));
     vec3 o = reflect(-i, m);
     return normalize(o.x * t1 + o.y * t2 + o.z * normal);
-}   // sampleStochasticReflection
+}   // sampleSpecularGI
 
 // ----------------------------------------------------------------------------
 // The radiance of the hits of the rays of a texel, which the trace shaders
-// accumulate (addStochasticReflectionRay) and store
-// (getStochasticReflectionOutput)
-struct StochasticReflectionSum
+// accumulate (addSpecularGIRay) and store
+// (getSpecularGIOutput)
+struct SpecularGISum
 {
     // The radiance of the hits weighted by their confidence, and the
     // confidence of the hits (0 for a miss, 1 for a sure hit) in w
@@ -299,9 +298,12 @@ struct StochasticReflectionSum
     float m_distance;
     // The confidence of the hits on a node which can move
     float m_moving;
-#ifdef STOCHASTIC_REFLECTION_KARIS
+#ifdef SPECULAR_GI_SSSR
+    vec3 m_sky;
+#endif
+#ifdef SPECULAR_GI_KARIS
     // m_radiance with every ray weighted by 1 / (1 + its luminance) (the
-    // Karis average, see addStochasticReflectionRay), and the sum of the
+    // Karis average, see addSpecularGIRay), and the sum of the
     // weights of all rays, hits and misses
     vec4 m_karis;
     float m_karis_weight;
@@ -309,7 +311,7 @@ struct StochasticReflectionSum
 };
 
 // ----------------------------------------------------------------------------
-void addStochasticReflectionRay(inout StochasticReflectionSum sum,
+void addSpecularGIRay(inout SpecularGISum sum,
                                 vec3 radiance, float confidence,
                                 float hit_distance, bool moving)
 {
@@ -320,13 +322,13 @@ void addStochasticReflectionRay(inout StochasticReflectionSum sum,
     sum.m_rays += 1.0;
     sum.m_distance += hit_distance * confidence;
     sum.m_moving += moving ? confidence : 0.0;
-#ifdef STOCHASTIC_REFLECTION_KARIS
+#ifdef SPECULAR_GI_KARIS
     float hit_weight = confidence / (1.0 + dot(hit,
         vec3(0.2126, 0.7152, 0.0722)));
     sum.m_karis += vec4(hit, 1.0) * hit_weight;
     sum.m_karis_weight += hit_weight + (1.0 - confidence) * 1.0;
 #endif
-}   // addStochasticReflectionRay
+}   // addSpecularGIRay
 
 // ----------------------------------------------------------------------------
 // The length of the rays of a texel to their hits (their average, weighted by
@@ -334,36 +336,35 @@ void addStochasticReflectionRay(inout StochasticReflectionSum sum,
 // reprojects the reflected position with it. It's negative if a ray hit a node
 // which can move: there are no motion vectors, the history of its reflection
 // is somewhere else, so the temporal filter keeps few frames of it
-float getStochasticReflectionRayLength(StochasticReflectionSum sum)
+float getSpecularGIRayLength(SpecularGISum sum)
 {
     if (sum.m_radiance.w <= 0.0)
         return 0.0;
     float ray_length = max(sum.m_distance / sum.m_radiance.w, 1e-3);
     return sum.m_moving > 0.0 ? -ray_length : ray_length;
-}   // getStochasticReflectionRayLength
+}   // getSpecularGIRayLength
 
 // ----------------------------------------------------------------------------
 // The output of the trace of a texel: the average radiance premultiplied by
-// the coverage and the coverage, both faded by the gloss
-vec4 getStochasticReflectionOutput(StochasticReflectionSum sum, float gloss)
+// the coverage and the coverage
+vec4 getSpecularGIOutput(SpecularGISum sum)
 {
     if (sum.m_rays <= 0.0)
         return vec4(0.0);
-#ifdef STOCHASTIC_REFLECTION_KARIS
+#ifdef SPECULAR_GI_KARIS
     if (sum.m_karis_weight <= 0.0)
         return vec4(0.0);
-    return sum.m_karis * (getStochasticReflectionFade(gloss) /
-        sum.m_karis_weight);
+    return sum.m_karis / sum.m_karis_weight;
 #else
-    return sum.m_radiance * (getStochasticReflectionFade(gloss) / sum.m_rays);
+    return sum.m_radiance / sum.m_rays;
 #endif
-}   // getStochasticReflectionOutput
+}   // getSpecularGIOutput
 
-#ifdef STOCHASTIC_REFLECTION_SURFACE
+#ifdef SPECULAR_GI_SURFACE
 // ----------------------------------------------------------------------------
 // The surface of the pixel of a texel which the trace shaders trace from, the
 // includer declares u_normal and u_depth (the g-buffer)
-struct StochasticReflectionSurface
+struct SpecularGISurface
 {
     vec3 m_view_position;
     vec3 m_world_position;
@@ -371,14 +372,13 @@ struct StochasticReflectionSurface
     vec3 m_view_eyedir;
     vec3 m_world_eyedir;
     vec3 m_world_normal;
-    float m_gloss;
     float m_perceptual_roughness;
 };
 
 // ----------------------------------------------------------------------------
-StochasticReflectionSurface getStochasticReflectionSurface(ivec2 pixel)
+SpecularGISurface getSpecularGISurface(ivec2 pixel)
 {
-    StochasticReflectionSurface surface;
+    SpecularGISurface surface;
     vec4 normal_data = texelFetch(u_normal, pixel, 0);
     float depth = texelFetch(u_depth, pixel, 0).x;
     surface.m_view_position = getPosFromUVDepth(vec3(vec2(pixel) + 0.5,
@@ -389,74 +389,83 @@ StochasticReflectionSurface getStochasticReflectionSurface(ivec2 pixel)
     surface.m_world_eyedir = normalize((u_camera.m_inverse_view_matrix *
         vec4(surface.m_view_eyedir, 0.0)).xyz);
     surface.m_world_normal = DecodeNormal(normal_data.xy);
-    surface.m_gloss = normal_data.z;
     surface.m_perceptual_roughness = 1.0 - normal_data.z;
     return surface;
-}   // getStochasticReflectionSurface
+}   // getSpecularGISurface
 #endif
 
-#ifdef STOCHASTIC_REFLECTION_TRACE
+#ifdef SPECULAR_GI_TRACE
 // The main of the trace shaders, which define the trace of a ray after they
 // include this: the confidence of the ray of the world space direction from
 // the surface (0 if it has no hit), the radiance of its hit (hdr), its
 // distance from the surface (hit_distance, in world units) and if it's a node
 // which can move (moving). They
 // declare u_trace (level 0 of the trace target) and u_max_rays (the rays of
-// the roughest surface, see getStochasticReflectionRays) before, and have 64
+// the roughest surface, see getSpecularGIRays) before, and have 64
 // threads in a group
-float traceStochasticReflectionRay(StochasticReflectionSurface surface,
+float traceSpecularGIRay(SpecularGISurface surface,
                                    ivec2 pixel, vec3 direction,
                                    out vec3 hdr, out float hit_distance,
                                    out bool moving);
 
-// The length of the rays of the texels (getStochasticReflectionRayLength),
+// The length of the rays of the texels (getSpecularGIRayLength),
 // only written with the temporal filter. It's binding 7 of the set of the
 // reflection, the screen space trace has it in GVDFP_HDR after the list
-#ifndef STOCHASTIC_REFLECTION_RAY_LENGTH_BINDING
-#define STOCHASTIC_REFLECTION_RAY_LENGTH_BINDING 7
+#ifndef SPECULAR_GI_RAY_LENGTH_BINDING
+#define SPECULAR_GI_RAY_LENGTH_BINDING 7
 #endif
 layout(set = SOLID_REFLECTION_SET,
-    binding = STOCHASTIC_REFLECTION_RAY_LENGTH_BINDING, r32f) uniform
+    binding = SPECULAR_GI_RAY_LENGTH_BINDING, r32f) uniform
     writeonly image2D u_ray_length;
 
 // The sums of the rays of each thread of the group
-shared StochasticReflectionSum s_stochastic_sums[64];
+shared SpecularGISum s_specular_gi_sums[64];
 
 // ----------------------------------------------------------------------------
 void main()
 {
     // The texel of the thread and the first of its rays, the next ones are
-    // STOCHASTIC_REFLECTION_THREADS rays later
+    // SPECULAR_GI_THREADS rays later
     const uint lane = gl_LocalInvocationID.x;
-    const uint first_ray = lane % STOCHASTIC_REFLECTION_THREADS;
-    const uint index = (gl_WorkGroupID.x * STOCHASTIC_REFLECTION_THREADS +
-        gl_WorkGroupID.y) * (64u / STOCHASTIC_REFLECTION_THREADS) +
-        lane / STOCHASTIC_REFLECTION_THREADS;
+    const uint first_ray = lane % SPECULAR_GI_THREADS;
+    const uint index = (gl_WorkGroupID.x * SPECULAR_GI_THREADS +
+        gl_WorkGroupID.y) * (64u / SPECULAR_GI_THREADS) +
+        lane / SPECULAR_GI_THREADS;
     const bool valid = index < u_reflection_list.m_count;
     ivec2 texel = ivec2(0);
-    StochasticReflectionSurface surface;
-#ifdef STOCHASTIC_REFLECTION_KARIS
-    StochasticReflectionSum sum = StochasticReflectionSum(vec4(0.0), 0.0,
+    SpecularGISurface surface;
+#ifdef SPECULAR_GI_SSSR
+    bool use_surfel = false;
+#endif
+#ifdef SPECULAR_GI_SSSR
+    SpecularGISum sum = SpecularGISum(vec4(0.0), 0.0, 0.0, 0.0, vec3(0.0));
+#elif defined(SPECULAR_GI_KARIS)
+    SpecularGISum sum = SpecularGISum(vec4(0.0), 0.0,
         0.0, 0.0, vec4(0.0), 0.0);
 #else
-    StochasticReflectionSum sum = StochasticReflectionSum(vec4(0.0), 0.0,
+    SpecularGISum sum = SpecularGISum(vec4(0.0), 0.0,
         0.0, 0.0);
 #endif
     if (valid)
     {
-        texel = unpackStochasticReflectionTexel(
+        texel = unpackSpecularGITexel(
             u_reflection_list.m_texels[index]);
-        ivec2 pixel = getStochasticReflectionPixel(texel);
-        surface = getStochasticReflectionSurface(pixel);
-        float alpha = getStochasticReflectionAlpha(
+        ivec2 pixel = getSpecularGIPixel(texel);
+        surface = getSpecularGISurface(pixel);
+        float alpha = getSpecularGIAlpha(
             surface.m_perceptual_roughness);
-        uint rays = getStochasticReflectionRays(
+        uint rays = getSpecularGIRays(
             surface.m_perceptual_roughness, u_max_rays);
-        for (uint i = first_ray; i < rays; i += STOCHASTIC_REFLECTION_THREADS)
+#ifdef SPECULAR_GI_SSSR
+        use_surfel = chooseSurfelSpecularGI(texel, surface.m_perceptual_roughness);
+        if (use_surfel)
+            rays = 0u;
+#endif
+        for (uint i = first_ray; i < rays; i += SPECULAR_GI_THREADS)
         {
-            vec3 direction = sampleStochasticReflection(
+            vec3 direction = sampleSpecularGI(
                 surface.m_world_eyedir, surface.m_world_normal, alpha,
-                getStochasticReflectionSample(texel, i, rays));
+                getSpecularGISample(texel, i, rays));
             // Below the surface of the normal map, the ray would hit the
             // mesh itself
             if (dot(direction, surface.m_world_normal) <= 0.0)
@@ -464,34 +473,59 @@ void main()
             vec3 hdr;
             float hit_distance;
             bool moving;
-            float confidence = traceStochasticReflectionRay(surface, pixel,
+            float confidence = traceSpecularGIRay(surface, pixel,
                 direction, hdr, hit_distance, moving);
-            addStochasticReflectionRay(sum, hdr, confidence, hit_distance,
+            addSpecularGIRay(sum, hdr, confidence, hit_distance,
                 moving);
+#ifdef SPECULAR_GI_SSSR
+            if (confidence < 1.0)
+                sum.m_sky += (1.0 - confidence) * textureLod(u_skybox, direction, 0.0).rgb;
+#endif
         }
     }
-    s_stochastic_sums[lane] = sum;
-    barrier();
+    if (SPECULAR_GI_THREADS > 1u)
+    {
+        s_specular_gi_sums[lane] = sum;
+        barrier();
+    }
     // The first thread of the texel sums the rays of all of them
     if (valid && first_ray == 0u)
     {
-        for (uint i = 1u; i < STOCHASTIC_REFLECTION_THREADS; i++)
+        for (uint i = 1u; i < SPECULAR_GI_THREADS; i++)
         {
-            sum.m_radiance += s_stochastic_sums[lane + i].m_radiance;
-            sum.m_rays += s_stochastic_sums[lane + i].m_rays;
-            sum.m_distance += s_stochastic_sums[lane + i].m_distance;
-            sum.m_moving += s_stochastic_sums[lane + i].m_moving;
-#ifdef STOCHASTIC_REFLECTION_KARIS
-            sum.m_karis += s_stochastic_sums[lane + i].m_karis;
-            sum.m_karis_weight += s_stochastic_sums[lane + i].m_karis_weight;
+            sum.m_radiance += s_specular_gi_sums[lane + i].m_radiance;
+            sum.m_rays += s_specular_gi_sums[lane + i].m_rays;
+            sum.m_distance += s_specular_gi_sums[lane + i].m_distance;
+            sum.m_moving += s_specular_gi_sums[lane + i].m_moving;
+#ifdef SPECULAR_GI_KARIS
+            sum.m_karis += s_specular_gi_sums[lane + i].m_karis;
+            sum.m_karis_weight += s_specular_gi_sums[lane + i].m_karis_weight;
 #endif
         }
-        imageStore(u_trace, texel, getStochasticReflectionOutput(sum,
-            surface.m_gloss));
+        vec4 result = getSpecularGIOutput(sum);
+        float ray_length = getSpecularGIRayLength(sum);
+#ifdef SPECULAR_GI_SSSR
+        if (use_surfel)
+        {
+            result = getSurfelSpecularGI(texelFetch(u_surfel_gi_texture, getSpecularGIPixel(texel), 0));
+            ray_length = 0.001;
+        }
+        else if (sum.m_rays > 0.0)
+        {
+            float misses = sum.m_rays - sum.m_radiance.a;
+            if (misses > 0.0)
+            {
+                vec3 direction = reflect(-surface.m_world_eyedir, surface.m_world_normal);
+                result.rgb += (misses / sum.m_rays) * resolveSpecularGISky(sum.m_sky / misses,
+                    surface.m_world_position, surface.m_world_normal, direction);
+            }
+            result.a = 1.0;
+        }
+#endif
+        imageStore(u_trace, texel, result);
         if (u_reflection_list.m_frame != 0u)
         {
-            imageStore(u_ray_length, texel,
-                vec4(getStochasticReflectionRayLength(sum)));
+            imageStore(u_ray_length, texel, vec4(ray_length));
         }
     }
 }   // main

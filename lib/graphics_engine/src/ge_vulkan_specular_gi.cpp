@@ -1,4 +1,4 @@
-#include "ge_vulkan_stochastic_reflection.hpp"
+#include "ge_vulkan_specular_gi.hpp"
 
 #include "ge_main.hpp"
 #include "ge_vulkan_attachment_texture.hpp"
@@ -19,7 +19,7 @@ namespace GE
 namespace
 {
 // ----------------------------------------------------------------------------
-// Push constants of stochastic_reflection_mipmap.comp
+// Push constants of specular_gi_mipmap.comp
 struct MipmapPushConstants
 {
     int32_t m_rect[4];
@@ -28,7 +28,7 @@ struct MipmapPushConstants
 };
 
 // ----------------------------------------------------------------------------
-// Push constants of stochastic_reflection_temporal.comp
+// Push constants of specular_gi_temporal.comp
 struct TemporalPushConstants
 {
     uint32_t m_viewport_index;
@@ -38,27 +38,27 @@ struct TemporalPushConstants
 // ----------------------------------------------------------------------------
 // The viewports of a frame which have the temporal filter, the other ones have
 // no history (more than any splitscreen has)
-const unsigned g_stochastic_max_viewports = 8;
+const unsigned g_specular_gi_max_viewports = 8;
 
 // ----------------------------------------------------------------------------
-// Levels of the trace target of the stochastic reflection
-// (STOCHASTIC_REFLECTION_LEVELS of utils/stochastic_reflection.glsl)
-const unsigned g_stochastic_levels = 4;
+// Levels of the trace target of the specular GI
+// (SPECULAR_GI_LEVELS of utils/specular_gi.glsl)
+const unsigned g_specular_gi_levels = 4;
 
 // ----------------------------------------------------------------------------
 // The count, the indirect dispatch of the trace and of the resolve, and a
-// padding, before the texels of the list of the stochastic reflection, and the
-// threads which trace a texel (STOCHASTIC_REFLECTION_THREADS), see
-// utils/stochastic_reflection.glsl
-const unsigned g_stochastic_list_header = 8;
-const uint32_t g_stochastic_threads = 8;
-const VkDeviceSize g_stochastic_trace_dispatch = sizeof(uint32_t);
-const VkDeviceSize g_stochastic_resolve_dispatch = 4 * sizeof(uint32_t);
+// padding, before the texels of the list of the specular GI, and the
+// threads which trace a texel (SPECULAR_GI_THREADS), see
+// utils/specular_gi.glsl
+const unsigned g_specular_gi_list_header = 8;
+const uint32_t g_specular_gi_threads = 8;
+const VkDeviceSize g_specular_gi_trace_dispatch = sizeof(uint32_t);
+const VkDeviceSize g_specular_gi_resolve_dispatch = 4 * sizeof(uint32_t);
 
 // ----------------------------------------------------------------------------
-// The bindings of the set of the stochastic reflection, see
-// utils/stochastic_reflection.glsl and its passes
-enum StochasticBinding : unsigned
+// The bindings of the set of the specular GI, see
+// utils/specular_gi.glsl and its passes
+enum SpecularGIBinding : unsigned
 {
     SB_TRACE = 0,
     SB_LIST,
@@ -74,7 +74,7 @@ enum StochasticBinding : unsigned
 };
 
 // ----------------------------------------------------------------------------
-// The bindings of the set of stochastic_reflection_temporal.comp
+// The bindings of the set of specular_gi_temporal.comp
 enum TemporalBinding : unsigned
 {
     TB_CURRENT = 0,
@@ -89,11 +89,11 @@ enum TemporalBinding : unsigned
 }   // anonymous namespace
 
 // ----------------------------------------------------------------------------
-GEVulkanStochasticReflection::GEVulkanStochasticReflection(GEVulkanDriver* vk,
+GEVulkanSpecularGI::GEVulkanSpecularGI(GEVulkanDriver* vk,
                                    const irr::core::dimension2d<irr::u32>& size,
                                    GEVulkanAttachmentTexture* depth,
                                    GEVulkanAttachmentTexture* normal, bool ssr,
-                                   bool rt)
+                                   bool rt, bool surfel_gi)
                             : GEVulkanSolidReflection(vk, size, ssr, rt),
                               m_trace_image(VK_NULL_HANDLE),
                               m_trace_memory(VK_NULL_HANDLE),
@@ -121,7 +121,7 @@ GEVulkanStochasticReflection::GEVulkanStochasticReflection(GEVulkanDriver* vk,
     try
     {
         // The radiance premultiplied by the coverage needs the alpha, see
-        // utils/stochastic_reflection.glsl (rgba16f is a storage format of
+        // utils/specular_gi.glsl (rgba16f is a storage format of
         // every device)
         const irr::core::dimension2d<irr::u32> half = halfSize(size);
         m_reflection = new GEVulkanAttachmentTexture(vk, half,
@@ -160,27 +160,26 @@ GEVulkanStochasticReflection::GEVulkanStochasticReflection(GEVulkanDriver* vk,
         clearImage(cmd, m_trace_image, m_trace_levels);
         GEVulkanCommandLoader::endSingleTimeCommands(cmd);
         // The header and every texel of the half size target
-        createList(half, g_stochastic_list_header);
+        createList(half, g_specular_gi_list_header);
         createDescriptor(depth, normal);
         createTemporalDescriptors(half);
-        createClassifyPipeline("stochastic_reflection_classify.comp");
-        createPipelines();
+        createPipelines(surfel_gi);
     }
     catch (...)
     {
         destroy();
         throw;
     }
-}   // GEVulkanStochasticReflection
+}   // GEVulkanSpecularGI
 
 // ----------------------------------------------------------------------------
-GEVulkanStochasticReflection::~GEVulkanStochasticReflection()
+GEVulkanSpecularGI::~GEVulkanSpecularGI()
 {
     destroy();
-}   // ~GEVulkanStochasticReflection
+}   // ~GEVulkanSpecularGI
 
 // ----------------------------------------------------------------------------
-void GEVulkanStochasticReflection::destroy()
+void GEVulkanSpecularGI::destroy()
 {
     m_vk->waitIdle();
     VkDevice device = m_vk->getDevice();
@@ -247,13 +246,13 @@ void GEVulkanStochasticReflection::destroy()
 }   // destroy
 
 // ----------------------------------------------------------------------------
-void GEVulkanStochasticReflection::createTraceImage(
+void GEVulkanSpecularGI::createTraceImage(
                                    const irr::core::dimension2d<irr::u32>& size)
 {
     // The levels of the mipmap, fewer if the target is smaller than 8 texels
     const unsigned max_levels = (unsigned)std::floor(std::log2(
         (float)std::max(size.Width, size.Height))) + 1;
-    m_trace_levels = std::min(g_stochastic_levels, max_levels);
+    m_trace_levels = std::min(g_specular_gi_levels, max_levels);
     VkImageCreateInfo image_info = {};
     image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     image_info.imageType = VK_IMAGE_TYPE_2D;
@@ -276,7 +275,7 @@ void GEVulkanStochasticReflection::createTraceImage(
         &m_trace_image, &m_trace_memory, NULL) != VK_SUCCESS)
     {
         throw std::runtime_error("vmaCreateImage failed for the trace of "
-            "GEVulkanStochasticReflection");
+            "GEVulkanSpecularGI");
     }
 
     VkImageViewCreateInfo view_info = {};
@@ -291,7 +290,7 @@ void GEVulkanStochasticReflection::createTraceImage(
         &m_trace_view) != VK_SUCCESS)
     {
         throw std::runtime_error("vkCreateImageView failed for the trace of "
-            "GEVulkanStochasticReflection");
+            "GEVulkanSpecularGI");
     }
     view_info.subresourceRange.levelCount = 1;
     for (unsigned i = 0; i < m_trace_levels; i++)
@@ -301,7 +300,7 @@ void GEVulkanStochasticReflection::createTraceImage(
             &m_trace_level_views[i]) != VK_SUCCESS)
         {
             throw std::runtime_error("vkCreateImageView failed for a level of "
-                "the trace of GEVulkanStochasticReflection");
+                "the trace of GEVulkanSpecularGI");
         }
     }
 
@@ -326,7 +325,7 @@ void GEVulkanStochasticReflection::createTraceImage(
 }   // createTraceImage
 
 // ----------------------------------------------------------------------------
-void GEVulkanStochasticReflection::clearImage(VkCommandBuffer cmd,
+void GEVulkanSpecularGI::clearImage(VkCommandBuffer cmd,
                                               VkImage image, unsigned levels)
 {
     // The image is in the general layout, which a transfer can write
@@ -341,10 +340,10 @@ void GEVulkanStochasticReflection::clearImage(VkCommandBuffer cmd,
 
 // ----------------------------------------------------------------------------
 std::vector<std::pair<uint32_t, VkDescriptorType> >
-    GEVulkanStochasticReflection::getTraceOutputBindings() const
+    GEVulkanSpecularGI::getTraceOutputBindings() const
 {
     // The trace target and the list are SB_TRACE and SB_LIST, the ones of
-    // GEVulkanSolidReflection, see stochastic_reflection_ssr.comp
+    // GEVulkanSolidReflection, see specular_gi_ssr.comp
     std::vector<std::pair<uint32_t, VkDescriptorType> > bindings =
         GEVulkanSolidReflection::getTraceOutputBindings();
     bindings.emplace_back(SB_RAY_LENGTH, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
@@ -352,11 +351,11 @@ std::vector<std::pair<uint32_t, VkDescriptorType> >
 }   // getTraceOutputBindings
 
 // ----------------------------------------------------------------------------
-void GEVulkanStochasticReflection::createDescriptor(
+void GEVulkanSpecularGI::createDescriptor(
                                               GEVulkanAttachmentTexture* depth,
                                               GEVulkanAttachmentTexture* normal)
 {
-    // See StochasticBinding
+    // See SpecularGIBinding
     VkDevice device = m_vk->getDevice();
     std::array<VkDescriptorSetLayoutBinding, SB_COUNT> bindings = {};
     for (unsigned i = 0; i < bindings.size(); i++)
@@ -385,13 +384,13 @@ void GEVulkanStochasticReflection::createDescriptor(
         VK_SUCCESS)
     {
         throw std::runtime_error("vkCreateDescriptorSetLayout failed for "
-            "GEVulkanStochasticReflection");
+            "GEVulkanSpecularGI");
     }
 
     // m_set and m_resolve_set
     std::array<VkDescriptorPoolSize, 3> pool_sizes = {};
     pool_sizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    pool_sizes[0].descriptorCount = (2 + g_stochastic_levels) * 2;
+    pool_sizes[0].descriptorCount = (2 + g_specular_gi_levels) * 2;
     pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     pool_sizes[1].descriptorCount = 2;
     pool_sizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -405,7 +404,7 @@ void GEVulkanStochasticReflection::createDescriptor(
         VK_SUCCESS)
     {
         throw std::runtime_error("vkCreateDescriptorPool failed for "
-            "GEVulkanStochasticReflection");
+            "GEVulkanSpecularGI");
     }
 
     const std::array<VkDescriptorSetLayout, 2> layouts =
@@ -420,7 +419,7 @@ void GEVulkanStochasticReflection::createDescriptor(
         VK_SUCCESS)
     {
         throw std::runtime_error("vkAllocateDescriptorSets failed for "
-            "GEVulkanStochasticReflection");
+            "GEVulkanSpecularGI");
     }
     m_set = sets[0];
     m_resolve_set = sets[1];
@@ -438,7 +437,7 @@ void GEVulkanStochasticReflection::createDescriptor(
     depth_info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     // The levels which the target doesn't have are the last one, the mipmap
     // doesn't write them
-    std::array<VkDescriptorImageInfo, g_stochastic_levels> level_infos = {};
+    std::array<VkDescriptorImageInfo, g_specular_gi_levels> level_infos = {};
     for (unsigned i = 0; i < level_infos.size(); i++)
     {
         level_infos[i].imageView =
@@ -486,18 +485,18 @@ void GEVulkanStochasticReflection::createDescriptor(
 }   // createDescriptor
 
 // ----------------------------------------------------------------------------
-void GEVulkanStochasticReflection::createTemporalDescriptors(
+void GEVulkanSpecularGI::createTemporalDescriptors(
                                    const irr::core::dimension2d<irr::u32>& size)
 {
     VmaAllocationCreateInfo buffer_alloc = {};
     buffer_alloc.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     if (!m_vk->createBuffer(sizeof(GEVulkanPrevCamera) *
-        g_stochastic_max_viewports, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+        g_specular_gi_max_viewports, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
         VK_BUFFER_USAGE_TRANSFER_DST_BIT, buffer_alloc, m_prev_camera_buffer,
         m_prev_camera_memory))
     {
         throw std::runtime_error("createBuffer failed for the cameras of "
-            "GEVulkanStochasticReflection");
+            "GEVulkanSpecularGI");
     }
 
     // See TemporalBinding
@@ -520,7 +519,7 @@ void GEVulkanStochasticReflection::createTemporalDescriptors(
         &m_temporal_layout) != VK_SUCCESS)
     {
         throw std::runtime_error("vkCreateDescriptorSetLayout failed for "
-            "the temporal filter of GEVulkanStochasticReflection");
+            "the temporal filter of GEVulkanSpecularGI");
     }
 
     std::array<VkDescriptorPoolSize, 2> pool_sizes = {};
@@ -537,7 +536,7 @@ void GEVulkanStochasticReflection::createTemporalDescriptors(
         VK_SUCCESS)
     {
         throw std::runtime_error("vkCreateDescriptorPool failed for the "
-            "temporal filter of GEVulkanStochasticReflection");
+            "temporal filter of GEVulkanSpecularGI");
     }
 
     const std::array<VkDescriptorSetLayout, 2> layouts =
@@ -551,7 +550,7 @@ void GEVulkanStochasticReflection::createTemporalDescriptors(
         VK_SUCCESS)
     {
         throw std::runtime_error("vkAllocateDescriptorSets failed for the "
-            "temporal filter of GEVulkanStochasticReflection");
+            "temporal filter of GEVulkanSpecularGI");
     }
 
     VkDescriptorBufferInfo buffer_info = {};
@@ -591,8 +590,12 @@ void GEVulkanStochasticReflection::createTemporalDescriptors(
 }   // createTemporalDescriptors
 
 // ----------------------------------------------------------------------------
-void GEVulkanStochasticReflection::createPipelines()
+void GEVulkanSpecularGI::createPipelines(bool surfel_gi)
 {
+    const VkBool32 enabled = surfel_gi ? VK_TRUE : VK_FALSE;
+    const VkSpecializationMapEntry entry = { 16, 0, sizeof(enabled) };
+    const VkSpecializationInfo constants = { 1, &entry, sizeof(enabled), &enabled };
+    createClassifyPipeline("specular_gi_classify.comp", &constants);
     // The resolve has the camera of the viewport, the same layout as every
     // draw call
     if (m_data_layout == VK_NULL_HANDLE)
@@ -606,9 +609,9 @@ void GEVulkanStochasticReflection::createPipelines()
     const std::array<VkDescriptorSetLayout, 3> set_layouts =
         {{ m_layout, m_data_layout, m_temporal_layout }};
     const std::array<const char*, 3> shaders =
-        {{ "stochastic_reflection_mipmap.comp",
-        "stochastic_reflection_resolve.comp",
-        "stochastic_reflection_temporal.comp" }};
+        {{ "specular_gi_mipmap.comp",
+        "specular_gi_resolve.comp",
+        "specular_gi_temporal.comp" }};
     std::array<VkPipelineLayout*, 3> layouts =
         {{ &m_mipmap_layout, &m_resolve_layout, &m_temporal_pipeline_layout }};
     std::array<VkPipeline*, 3> pipelines =
@@ -638,6 +641,7 @@ void GEVulkanStochasticReflection::createPipelines()
         pipeline_info.stage.module =
             GEVulkanShaderManager::getShader(shaders[i]);
         pipeline_info.stage.pName = "main";
+        pipeline_info.stage.pSpecializationInfo = &constants;
         pipeline_info.layout = *layouts[i];
         if (vkCreateComputePipelines(m_vk->getDevice(),
             m_vk->getPipelineCache(), 1, &pipeline_info, NULL, pipelines[i]) !=
@@ -649,8 +653,13 @@ void GEVulkanStochasticReflection::createPipelines()
     }
 }   // createPipelines
 
+VkDeviceSize GEVulkanSpecularGI::getTraceDispatchOffset(bool rt) const
+{
+    return rt ? g_specular_gi_trace_dispatch : g_specular_gi_resolve_dispatch;
+}
+
 // ----------------------------------------------------------------------------
-void GEVulkanStochasticReflection::finishTrace(VkCommandBuffer cmd,
+void GEVulkanSpecularGI::finishTrace(VkCommandBuffer cmd,
                                                const Viewport& vp,
                                                GEVulkanCamera* cam)
 {
@@ -698,7 +707,7 @@ void GEVulkanStochasticReflection::finishTrace(VkCommandBuffer cmd,
     dc->bindDataDescriptorSet(m_vk, cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_resolve_layout, 1);
     // The texels of the list, one thread each
-    vkCmdDispatchIndirect(cmd, m_list, g_stochastic_resolve_dispatch);
+    vkCmdDispatchIndirect(cmd, m_list, g_specular_gi_resolve_dispatch);
     if (!m_temporal)
         return;
 
@@ -721,7 +730,7 @@ void GEVulkanStochasticReflection::finishTrace(VkCommandBuffer cmd,
         0, NULL);
     vkCmdPushConstants(cmd, m_temporal_pipeline_layout,
         VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(temporal_pc), &temporal_pc);
-    vkCmdDispatchIndirect(cmd, m_list, g_stochastic_resolve_dispatch);
+    vkCmdDispatchIndirect(cmd, m_list, g_specular_gi_resolve_dispatch);
 
     // The next frame reads the history of the viewport with its camera of
     // this frame
@@ -734,7 +743,7 @@ void GEVulkanStochasticReflection::finishTrace(VkCommandBuffer cmd,
 }   // finishTrace
 
 // ----------------------------------------------------------------------------
-void GEVulkanStochasticReflection::resetList(VkCommandBuffer cmd, bool first,
+void GEVulkanSpecularGI::resetList(VkCommandBuffer cmd, bool first,
                                              const Viewport& vp,
                                              GEVulkanCamera* cam)
 {
@@ -756,7 +765,7 @@ void GEVulkanStochasticReflection::resetList(VkCommandBuffer cmd, bool first,
     else
     {
         // Once per frame, before the trace of the first viewport: the texels
-        // which aren't traced are 0 (see utils/stochastic_reflection.glsl).
+        // which aren't traced are 0 (see utils/specular_gi.glsl).
         // The barrier before (at the start of the frame) is after the resolve
         // of the last frame, the one after the list is before the trace
         clearImage(cmd, m_trace_image, m_trace_levels);
@@ -767,6 +776,7 @@ void GEVulkanStochasticReflection::resetList(VkCommandBuffer cmd, bool first,
         m_prev_viewports.swap(m_viewports);
         m_viewports.clear();
         m_viewport_index = 0;
+        m_temporal = getGEConfig()->m_frame_cache;
         if (m_temporal)
         {
             // Never 0 (no temporal filter)
@@ -784,7 +794,7 @@ void GEVulkanStochasticReflection::resetList(VkCommandBuffer cmd, bool first,
     // if it had the same rect (with as many viewports, the one which was
     // filtered at the same index)
     m_viewport_history = false;
-    if (m_temporal && m_viewport_index < g_stochastic_max_viewports)
+    if (m_temporal && m_viewport_index < g_specular_gi_max_viewports)
     {
         for (const ViewportHistory& prev : m_prev_viewports)
         {
@@ -798,10 +808,10 @@ void GEVulkanStochasticReflection::resetList(VkCommandBuffer cmd, bool first,
         }
     }
     // No texel and no group of the dispatches (x), the trace has the threads
-    // of a texel in y, see utils/stochastic_reflection.glsl, and the frame of
+    // of a texel in y, see utils/specular_gi.glsl, and the frame of
     // the temporal filter
-    const std::array<uint32_t, g_stochastic_list_header> header =
-        {{ 0, 0, g_stochastic_threads, 1, 0, 1, 1, m_temporal ? m_frame : 0 }};
+    const std::array<uint32_t, g_specular_gi_list_header> header =
+        {{ 0, 0, g_specular_gi_threads, 1, 0, 1, 1, m_temporal ? m_frame : 0 }};
     vkCmdUpdateBuffer(cmd, m_list, 0, sizeof(header), header.data());
 }   // resetList
 
