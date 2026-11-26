@@ -115,8 +115,8 @@ void CustomVideoSettingsDialog::beforeAddingWidgets()
     const bool vk = std::string(UserConfigParams::m_render_driver) == "vulkan";
     fillReflection("solid_reflection", vk, UserConfigParams::m_solid_reflection);
     fillReflection("water_reflection", vk, UserConfigParams::m_water_reflection);
-    getWidget<CheckBoxWidget>("stochastic_reflection")
-        ->setState(UserConfigParams::m_stochastic_reflection);
+    getWidget<CheckBoxWidget>("specular_gi")
+        ->setState(UserConfigParams::m_specular_gi);
     getWidget<CheckBoxWidget>("bloom")->setState(UserConfigParams::m_bloom);
     getWidget<CheckBoxWidget>("lightscattering")->setState(UserConfigParams::m_light_scatter);
     getWidget<CheckBoxWidget>("pointlight_shadows")->setState(UserConfigParams::m_pointlight_shadows);
@@ -412,8 +412,8 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
                 UserConfigParams::m_water_reflection) : 0;
             // Kept as it is without the advanced pipeline, it's only an option
             // of the solid reflection
-            UserConfigParams::m_stochastic_reflection =
-                getWidget<CheckBoxWidget>("stochastic_reflection")->getState();
+            UserConfigParams::m_specular_gi =
+                getWidget<CheckBoxWidget>("specular_gi")->getState();
             bool god_rays_changed = false;
             bool god_rays = advanced_pipeline &&
                 getWidget<CheckBoxWidget>("lightshaft")->getState();
@@ -494,18 +494,18 @@ GUIEngine::EventPropagation CustomVideoSettingsDialog::processEvent(const std::s
             OptionsScreenVideo::getInstance()->updateBlurSlider();
             GE::GESolidReflectionType prev_solid = GE::getGEConfig()->m_solid_reflection;
             GE::GEDisplaceReflectionType prev_displace = GE::getGEConfig()->m_displace_reflection;
-            const bool prev_stochastic =
-                GE::getGEConfig()->m_stochastic_reflection;
+            const bool prev_specular_gi =
+                GE::getGEConfig()->m_specular_gi;
             OptionsScreenVideo::setSSR();
             if (GE::getDriver()->getDriverType() == video::EDT_VULKAN)
             {
-                // The stochastic reflection has other passes and a half size
+                // The specular GI has other passes and a half size
                 // target, the render target is created again
                 bool need_recreate_swapchain =
                     GE::getGEConfig()->m_solid_reflection != prev_solid ||
                     GE::getGEConfig()->m_displace_reflection != prev_displace ||
-                    GE::getGEConfig()->m_stochastic_reflection !=
-                    prev_stochastic;
+                    GE::getGEConfig()->m_specular_gi !=
+                    prev_specular_gi;
                 // Which shadows are ray traced (the FBO has the ray traced
                 // shadow only if there is one), also changed by the size 0
                 if (prev_rt_shadow_type != GE::getRTShadowType())
@@ -613,7 +613,7 @@ void CustomVideoSettingsDialog::updateActivation()
         water->setCustomText(_C("Reflection", "Ray traced"));
     // GE only, it samples the reflection of the solid materials (screen space
     // or ray traced)
-    getWidget<CheckBoxWidget>("stochastic_reflection")->setActive(vk &&
+    getWidget<CheckBoxWidget>("specular_gi")->setActive(vk &&
         real_light && (solid_rt || solid->getValue() != 0));
     getWidget<CheckBoxWidget>("lightshaft")->setActive(light || (vk && real_light));
     getWidget<CheckBoxWidget>("ibl")->setActive(light || (vk && real_light));

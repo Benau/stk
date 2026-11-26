@@ -65,9 +65,9 @@ public:
     void         updateBlurSlider();
     void         updateScaleRTTsSlider();
     static void updateImageQuality(bool force_reload_texture);
-    /** Sets the GE screen space reflections (and the stochastic one) from
+    /** Sets the GE screen space reflections (and specular GI) from
      *  UserConfigParams::m_solid_reflection, m_water_reflection and
-     *  m_stochastic_reflection. */
+     *  m_specular_gi. */
     static void setSSR();
     /** The name of a level of UserConfigParams::m_solid_reflection or
      *  m_water_reflection (0 is disabled), the labels of the spinners of

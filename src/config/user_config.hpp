@@ -1059,10 +1059,10 @@ namespace UserConfigParams
             PARAM_DEFAULT(BoolUserConfigParam(false, "ssr",
             &m_graphics_quality, "Enable screen space reflection (old, see "
             "solid_reflection and water_reflection)"));
-    PARAM_PREFIX BoolUserConfigParam        m_stochastic_reflection
-            PARAM_DEFAULT(BoolUserConfigParam(false, "stochastic_reflection",
-            &m_graphics_quality, "Blur the reflection of the rough solid "
-            "materials (stochastic reflection, Vulkan only)"));
+    PARAM_PREFIX BoolUserConfigParam        m_specular_gi
+            PARAM_DEFAULT(BoolUserConfigParam(false, "specular_gi",
+            &m_graphics_quality, "Specular GI for rough solid materials "
+            "(Vulkan only)"));
 
     // Mirrored to GE::GERayTracingConfig (RayTracingSettingsDialog)
     PARAM_PREFIX BoolUserConfigParam        m_ray_tracing
@@ -1088,6 +1088,9 @@ namespace UserConfigParams
             PARAM_DEFAULT(BoolUserConfigParam(false, "ray_tracing_gi",
             &m_graphics_quality, "Ray traced indirect diffuse light of the "
             "track (global illumination with surfels, can be slow)"));
+    PARAM_PREFIX BoolUserConfigParam        m_ge_frame_cache
+            PARAM_DEFAULT(BoolUserConfigParam(true, "ge_frame_cache", &m_graphics_quality,
+            "Reuse converged Vulkan GI and specular GI history"));
     PARAM_PREFIX BoolUserConfigParam        m_ray_tracing_dynamic_objects
             PARAM_DEFAULT(BoolUserConfigParam(false,
             "ray_tracing_dynamic_objects", &m_graphics_quality,

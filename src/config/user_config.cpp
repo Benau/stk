@@ -559,7 +559,8 @@ void BoolUserConfigParam::findYourDataInAChildOf(const XMLNode* node)
 void BoolUserConfigParam::findYourDataInAnAttributeOf(const XMLNode* node)
 {
     std::string text_value = "";
-    node->get( m_param_name, &text_value );
+    if (!node->get(m_param_name, &text_value))
+        return;
 
     if (text_value == "true")
     {
@@ -708,7 +709,11 @@ bool UserConfig::loadConfig()
     {
         all_params[i]->findYourDataInAChildOf(root.get());
     }
-
+    const XMLNode* graphics = root->getNode("GFX");
+    bool specular_gi;
+    if (graphics && !graphics->get("specular_gi", &specular_gi) &&
+        graphics->get("stochastic_reflection", &specular_gi))
+        UserConfigParams::m_specular_gi = specular_gi;
 
     // ---- Read Saved GP's
     UserConfigParams::m_saved_grand_prix_list.clearAndDeleteAll();

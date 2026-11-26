@@ -654,8 +654,8 @@ void OptionsScreenVideo::setSSR()
     GE::getGEConfig()->m_solid_reflection = GE::GESolidReflectionType(solid);
     GE::getGEConfig()->m_displace_reflection =
         GE::GEDisplaceReflectionType(displace);
-    GE::getGEConfig()->m_stochastic_reflection =
-        UserConfigParams::m_stochastic_reflection;
+    GE::getGEConfig()->m_specular_gi =
+        UserConfigParams::m_specular_gi;
 }   // setSSR
 
 // --------------------------------------------------------------------------------------------
@@ -685,6 +685,7 @@ void OptionsScreenVideo::setRayTracing()
     rt.m_shadow = UserConfigParams::m_ray_tracing_shadow;
     rt.m_shadow_scale = UserConfigParams::m_ray_tracing_shadow_scale;
     rt.m_gi = UserConfigParams::m_ray_tracing_gi;
+    GE::getGEConfig()->m_frame_cache = UserConfigParams::m_ge_frame_cache;
 }   // setRayTracing
 
 // --------------------------------------------------------------------------------------------

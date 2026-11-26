@@ -107,9 +107,9 @@
                     <spacer width="70" height="10"/>
 
                     <div layout="horizontal-row" proportion="1" height="fit">
-                        <checkbox id="stochastic_reflection"/>
+                        <checkbox id="specular_gi"/>
                         <spacer width="10" height="10"/>
-                        <label text="Soft reflections on rough surfaces" I18N="Video settings"/>
+                        <label text="Specular GI (rough reflections)" I18N="Video settings"/>
                     </div>
                 </div>
 
