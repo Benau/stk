@@ -1,0 +1,95 @@
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+#define SURFEL_SET 2
+#include "utils/surfel_gi.glsl"
+#include "utils/surfel_gi_volume.glsl"
+#include "utils/camera.glsl"
+#include "utils/unproject_position.glsl"
+
+layout(set = SURFEL_SET, binding = 0) uniform sampler2D u_depth;
+layout(set = SURFEL_SET, binding = 1) uniform sampler2D u_normal;
+#include "../utils/decodeNormal.frag"
+#ifdef SHADER_STORAGE_IMAGE_EXTENDED_FORMATS
+layout(set = SURFEL_SET, binding = 2, rg16f) uniform writeonly image2D u_contact;
+#else
+layout(set = SURFEL_SET, binding = 2, rgba16f) uniform writeonly image2D u_contact;
+#endif
+layout(set = SURFEL_SET, binding = 13, rgba32ui) uniform readonly uimage2D u_representatives;
+layout(set = SURFEL_SET, binding = 14, rgba16f) uniform writeonly image2D u_full;
+
+vec4 loadRepresentative(ivec2 texel, out vec2 contact)
+{
+    uvec4 value = imageLoad(u_representatives, texel);
+    contact = unpackHalf2x16(value.y);
+    return vec4(unpackSurfelGIRGB(value.x), uintBitsToFloat(value.z));
+}
+
+void storeLighting(ivec2 pixel, float depth, vec4 gi, vec2 contact)
+{
+    vec2 result = vec2(0.0);
+    if (depth > 0.0)
+    {
+        vec3 view = getPosFromUVDepth(vec3(vec2(pixel) + 0.5, depth), u_camera.m_viewport,
+            u_camera.m_inverse_projection_matrix);
+        vec3 world = (u_camera.m_inverse_view_matrix * vec4(view, 1.0)).xyz;
+        float contact_radius = 2.0 * getSurfelRadius(getSurfelCameraDistance(world));
+        result = vec2(contact_radius, 1.0 - contact.x + min(contact.x, contact.y / contact_radius));
+        if (gi.a < 1.0)
+        {
+            vec3 normal = DecodeNormal(texelFetch(u_normal, pixel, 0).xy);
+            vec4 probe = lookupVolume(world, normal, true);
+            float fill = (1.0 - gi.a) * probe.a;
+            gi = vec4((gi.rgb * gi.a + probe.rgb * fill) / max(gi.a + fill, 1e-6), gi.a + fill);
+        }
+    }
+    imageStore(u_full, pixel, gi);
+    imageStore(u_contact, pixel, vec4(result, 0.0, 0.0));
+}
+
+void main()
+{
+    ivec2 pixel = pc.m_rect.xy + ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, pc.m_rect.zw)))
+        return;
+    ivec2 local = pixel - pc.m_rect.xy;
+    ivec2 base = local / 2;
+    ivec2 half_size = (pc.m_rect.zw - pc.m_rect.xy + 1) / 2;
+    float center_depth = texelFetch(u_depth, pixel, 0).x;
+    if (center_depth == 0.0 || all(equal(local, 2 * base)))
+    {
+        vec2 contact = vec2(0.0);
+        vec4 value = vec4(0.0);
+        if (center_depth != 0.0)
+            value = loadRepresentative(base, contact);
+        storeLighting(pixel, center_depth, value, contact);
+        return;
+    }
+    vec3 normal = DecodeNormal(texelFetch(u_normal, pixel, 0).xy);
+    vec4 sum = vec4(0.0);
+    vec2 contact_sum = vec2(0.0);
+    float weight_sum = 0.0;
+    for (int y = -1; y <= 1; ++y)
+    {
+        for (int x = -1; x <= 1; ++x)
+        {
+            ivec2 tap = base + ivec2(x, y);
+            if (any(lessThan(tap, ivec2(0))) || any(greaterThanEqual(tap, half_size)))
+                continue;
+            ivec2 tap_pixel = pc.m_rect.xy + tap * 2;
+            float depth = texelFetch(u_depth, tap_pixel, 0).x;
+            if (depth == 0.0)
+                continue;
+            vec2 delta = vec2(tap_pixel - pixel);
+            float facing = max(dot(normal, DecodeNormal(texelFetch(u_normal, tap_pixel, 0).xy)), 0.0);
+            float weight = exp2(-0.5 * dot(delta, delta) - 48.0 * abs(depth - center_depth) /
+                max(depth, center_depth)) * pow(facing, 8.0);
+            vec2 contact;
+            vec4 value = loadRepresentative(tap, contact);
+            contact_sum += contact * weight;
+            sum += vec4(value.rgb * value.a, value.a) * weight;
+            weight_sum += weight;
+        }
+    }
+    vec4 gi = vec4(sum.rgb / max(sum.a, 1e-6), sum.a / max(weight_sum, 0.01));
+    storeLighting(pixel, center_depth, gi, contact_sum / max(weight_sum, 0.01));
+}

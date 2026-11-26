@@ -1,97 +1,26 @@
-// Last pass of GEVulkanSurfelGI (see utils/surfel_gi.glsl and
-// utils/surfel_gi_apply.glsl), one thread per pixel of the viewport of a
-// camera, in 8x8 tiles: the irradiance of every pixel from the surfels, and a
-// new surfel where they don't cover the static scene enough.
-//
-// With the history of the frame cache (SURFEL_CACHE_DEFER), it only writes the
-// pixels which reuse their irradiance (and the sky): the others are in a list
-// for surfel_gi_gather.comp, which looks for the surfels of only them, then
-// surfel_gi_spawn.comp spawns in the tiles. A group of threads takes as long
-// as its slowest one, so a tile with a few pixels which can't be reused would
-// cost as much as one with none (the pixels around a new surface, or the ones
-// of a new surfel), the list packs them in full groups.
 #extension GL_EXT_ray_query : require
-
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
-
+layout(local_size_x = 8, local_size_y = 8) in;
 #include "utils/surfel_gi_apply.glsl"
 
-// The least covered pixel of the tile which needs a surfel
-// (getSurfelSpawnKey)
-shared uint s_spawn;
-// The pixels of the tile in the list of the misses, and the first of them
-shared uint s_miss_count;
-shared uint s_miss_first;
+layout(set = SURFEL_SET, binding = 13, rgba32ui) uniform writeonly uimage2D u_representatives;
 
 void main()
 {
-    if (gl_LocalInvocationIndex == 0u)
-    {
-        s_spawn = 0xFFFFFFFFu;
-        s_miss_count = 0u;
-    }
-    barrier();
-
-    const ivec2 pixel = pc.m_rect.xy + ivec2(gl_GlobalInvocationID.xy);
-    const bool inside = all(lessThan(pixel, pc.m_rect.zw));
-    SurfelPixel p;
-    const bool surface = inside && loadSurfelPixel(pixel, p);
-    vec3 history = vec3(0.0);
-    bool reused = false;
-    if (surface && (pc.m_cache & SURFEL_CACHE_HISTORY) != 0u &&
-        isSurfelHistoryTurn(pixel))
-        reused = getSurfelHistory(p, history);
-
-    if ((pc.m_cache & SURFEL_CACHE_DEFER) != 0u)
-    {
-        // The pixels which reuse their irradiance and the sky are done, the
-        // others are added to the list together (one atomic of the list for
-        // the tile)
-        const bool miss = surface && !reused;
-        if (inside && !miss)
-        {
-            storeSurfelPixel(pixel, p, surface ? vec4(history, 1.0) :
-                vec4(0.0), surface);
-        }
-        uint slot = 0u;
-        if (miss)
-            slot = atomicAdd(s_miss_count, 1u);
-        barrier();
-        if (gl_LocalInvocationIndex == 0u && s_miss_count != 0u)
-        {
-            s_miss_first = atomicAdd(u_misses.m_count, s_miss_count);
-            atomicMax(u_misses.m_dispatch[0],
-                (s_miss_first + s_miss_count + 63u) / 64u);
-        }
-        barrier();
-        if (miss)
-            u_misses.m_pixels[s_miss_first + slot] = packSurfelPixel(pixel);
+    ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 pixel = pc.m_rect.xy + texel * 2;
+    if (any(greaterThanEqual(pixel, pc.m_rect.zw)))
         return;
-    }
-
-    SurfelGather g = getEmptySurfelGather();
-    if (surface && !reused)
-        g = gatherSurfels(p);
-    if (inside)
+    SurfelPixel surface;
+    bool visible = loadSurfelPixel(pixel, surface);
+    vec4 gi = vec4(0.0);
+    vec2 contact = vec2(0.0);
+    if (visible)
     {
-        vec4 gi = vec4(0.0);
-        bool cacheable = false;
-        if (reused)
-        {
-            gi = vec4(history, 1.0);
-            cacheable = true;
-        }
-        else if (surface)
-            gi = resolveSurfelPixel(p, g, cacheable);
-        storeSurfelPixel(pixel, p, gi, cacheable);
+        SurfelGather gathered = gatherSurfels(surface);
+        float coverage = clamp(gathered.m_weight_sum * 2.0, 0.0, 1.0);
+        if (gathered.m_weight_sum > 0.0)
+            gi = vec4(gathered.m_irradiance / gathered.m_weight_sum, coverage);
+        contact = vec2(coverage, coverage * gathered.m_origin_distance_sum / max(gathered.m_weight_sum, 1e-6));
     }
-
-    if (surface && !reused)
-        atomicMin(s_spawn, getSurfelSpawnKey(pixel, p, g));
-    barrier();
-    // The thread of the pixel of the key spawns (the tile is the group)
-    if (s_spawn == 0xFFFFFFFFu || (s_spawn & 63u) != gl_LocalInvocationIndex ||
-        !isSurfelSpawnTurn(pixel))
-        return;
-    spawnSurfel(p, g);
+    imageStore(u_representatives, texel, uvec4(packSurfelGIRGB(gi.rgb), packHalf2x16(contact), floatBitsToUint(gi.a), 0u));
 }
