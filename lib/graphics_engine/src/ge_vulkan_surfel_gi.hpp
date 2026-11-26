@@ -2,7 +2,6 @@
 #define HEADER_GE_VULKAN_SURFEL_GI_HPP
 
 #include "ge_vma.hpp"
-#include "ge_vulkan_prev_camera.hpp"
 #include "ge_vulkan_pipeline_constants.hpp"
 #include "ge_vulkan_post_processing.hpp"
 
@@ -14,44 +13,19 @@ namespace GE
 {
 class GEVulkanAttachmentTexture;
 
-// Diffuse global illumination of the static scene with surfels (see
-// isSurfelGI()), owned by GEVulkanDeferredFBOSplit (only one for all the
-// viewports of it, like GEVulkanRTShadow). It's compute shaders between the
-// g-buffer and the lighting pass, see utils/surfel_gi.glsl:
-//
-// 1. surfel_gi_clear.comp: the cells of the grid are cleared (and the pool on
-//    the first frame or when the static scene is built again)
-// 2. surfel_gi_update.comp: the surfels which are not used anymore are free,
-//    the others are sized by their distance to the cameras and put in the
-//    cells of the grid
-// 3. surfel_gi_trace.comp: a few rays per surfel in the static scene, which
-//    update the irradiance of the surfel
-// 4. surfel_gi_apply.comp: the irradiance of every pixel from the surfels of
-//    its cell (the output image), and new surfels where the static scene is
-//    not covered. With the frame cache (GERayTracingConfig::m_gi_frame_cache)
-//    a pixel reuses the irradiance of the last frame if its surface is still
-//    on the screen (the history), and the pixels which can't are done by
-//    surfel_gi_gather.comp and surfel_gi_spawn.comp after it
-//
-// Only the static BLAS of GEVulkanRTScene (GRTIM_STATIC) is traced: the
-// surfels are created on it and never move, so they don't follow the nodes
-// which move, and the karts don't block the rays or the shadows of the hits.
-// The pixels of the dynamic nodes still get the irradiance of the surfels
-// around them.
-//
-// The output has the size of the FBO: the irradiance (the same as the diffuse
-// environment map, which the lighting pass replaces with it) and the coverage
-// of the surfels in alpha. It's black without a ray traced scene (menus).
+// One shared surfel grid and one scrolling probe field per camera. Each frame
+// updates persistent anchors, bins new surfels, traces the shared ray budget,
+// then resolves quarter-rate diffuse irradiance and coverage per viewport.
 class GEVulkanSurfelGI : public GEVulkanPostProcessing
 {
 public:
     // Same as the constants of utils/surfel_gi.glsl
     enum : uint32_t
     {
-        // Surfels of every viewport (SURFEL_PER_CAMERA), the buffers have
+        // Surfels of every viewport, the buffers have
         // room for MAX_CAMERAS of them and a frame only uses the ones of its
         // viewports
-        SURFELS_PER_CAMERA = 32768,
+        SURFELS_PER_CAMERA = 65536,
         MAX_CAMERAS = 4,
         MAX_SURFELS = SURFELS_PER_CAMERA * MAX_CAMERAS,
         CELL_COUNT = 65536,
@@ -77,7 +51,6 @@ private:
         int32_t m_rect[4];
         uint32_t m_frame;
         uint32_t m_camera_count;
-        uint32_t m_reset;
         // The env set of the first viewport has the skybox (binding 2), not
         // the dummy one (no skybox, or it's loading)
         uint32_t m_has_skybox;
@@ -90,11 +63,11 @@ private:
         uint32_t m_surfel_count;
         // CACHE_* bits, see isFrameCache()
         uint32_t m_cache;
-        // The viewport of surfel_gi_apply.comp (its GEVulkanPrevCamera)
-        uint32_t m_viewport_index;
         // The list of the surfels which surfel_gi_trace.comp traces with the
         // frame cache (TRACE_*)
         uint32_t m_trace_list;
+        uint32_t m_geometry_count;
+        float m_depth_step;
     };
     static_assert(sizeof(SurfelPushConstants) <= 128, "The push constants "
         "which every device has");
@@ -112,17 +85,8 @@ private:
     // Bits of m_cache of the push constants
     enum : uint32_t
     {
-        // The frame cache: the irradiance of the pixels of the last frame is
-        // reused, and the converged surfels trace fewer rays (see
-        // surfel_gi_apply.comp and surfel_gi_trace.comp)
         CACHE_FRAME = 1,
-        // The history of the last frame can be read, it was written by the
-        // same viewports with the cache on
-        CACHE_HISTORY = 2,
-        // The pixels which can't be reused are in a list, which
-        // surfel_gi_gather.comp looks for the surfels of (and
-        // surfel_gi_spawn.comp spawns in the tiles)
-        CACHE_DEFER = 4
+        RESET_CACHE = 16
     };
 
     enum BufferIndex : unsigned
@@ -136,17 +100,14 @@ private:
         BI_CELL_SURFEL,
         // The number of surfels spawned in every cell in the frame
         BI_CELL_SPAWN,
-        // GEVulkanPrevCamera of every viewport
-        BI_PREV_CAMERA,
-        // The pixels which can't be reused (the count, the indirect dispatch
-        // of surfel_gi_gather.comp and the pixels), and the spawn of every
-        // 8x8 tile (see utils/surfel_gi_apply.glsl), for CACHE_DEFER
-        BI_MISS,
-        BI_TILE_SPAWN,
+        BI_SPAWN_QUEUE,
         // With the frame cache, the surfels which surfel_gi_trace.comp traces
         // in the frame in TRACE_LIST_COUNT lists, every one with its indirect
         // dispatch and its count (see u_trace_lists of utils/surfel_gi.glsl)
         BI_TRACE_LIST,
+        BI_PROBES,
+        BI_RAY_WORK,
+        BI_LIGHT_CACHE,
         BI_COUNT
     };
 
@@ -158,23 +119,43 @@ private:
 
     std::array<Buffer, BI_COUNT> m_buffers;
 
+    enum : uint32_t
+    {
+        PROBE_LEVEL_SIZE = 16 * 8 * 16,
+        PROBE_BATCH = 256,
+        PROBE_RAYS = 16,
+        PRIMARY_RAY_BUDGET = 100000,
+        PROBE_BANDS = 8
+    };
+
+    struct Probe
+    {
+        int32_t m_cell[3];
+        uint32_t m_frame;
+        float m_statistics[4];
+        float m_offset[3];
+        float m_proximity;
+        uint32_t m_light[6 * 6];
+        uint32_t m_depth[14 * 14];
+        float m_sky_visibility[4];
+    };
+    static_assert(sizeof(Probe) == 992, "Probe must match the shader stride");
+
+    unsigned m_probe_layers = MAX_CAMERAS;
+    unsigned m_grid_probe_limit = 0;
+    std::array<unsigned, MAX_CAMERAS> m_probe_levels = {};
+
     // RGBA16F, general layout all the time (storage image and sampled)
     GEVulkanAttachmentTexture* m_gi;
+    GEVulkanAttachmentTexture* m_contact;
 
-    // The irradiance of every pixel which can be reused in the next frame
-    // (RG32UI, general layout, see surfel_gi_apply.comp), one is read and the
-    // other one written in a frame, they swap every frame
-    std::array<GEVulkanAttachmentTexture*, 2> m_history;
+    GEVulkanAttachmentTexture* m_representatives;
 
-    // Binding 0 is the depth and 1 is the normal of the g-buffer (combined
-    // image samplers), 2 is the output, 3 to 11 the buffers, 12 the history
-    // which is read and 13 the one which is written
     VkDescriptorSetLayout m_layout;
 
     VkDescriptorPool m_pool;
 
-    // Set i reads m_history[i] and writes the other one
-    std::array<VkDescriptorSet, 2> m_sets;
+    VkDescriptorSet m_set;
 
     // Same definition as the data descriptor set layout of draw calls (camera
     // and the global light), see GEVulkanRTShadow
@@ -200,11 +181,19 @@ private:
     enum PipelineIndex : unsigned
     {
         PI_CLEAR = 0,
+        PI_MATERIALS,
         PI_UPDATE,
         PI_TRACE,
+        PI_SHADOW,
+        PI_TRACE_RESOLVE,
         PI_APPLY,
-        PI_GATHER,
         PI_SPAWN,
+        PI_SPAWN_BIN,
+        PI_TRACE_SCHEDULE,
+        PI_PROBE_TRACE,
+        PI_PROBE_FILTER,
+        PI_SHARE,
+        PI_UPSCALE,
         PI_COUNT
     };
 
@@ -226,19 +215,13 @@ private:
     // The pool in use, the pool is cleared when it changes (the cameras of
     // the viewports)
     uint32_t m_surfel_count;
+    float m_depth_step;
+    float m_grid_cameras[MAX_CAMERAS][4] = {};
 
     // The output was cleared to black (nothing is traced), it's not cleared
     // again until something is traced
     bool m_cleared;
 
-    // The camera of every viewport in the last frame, and how many viewports
-    // it had (0 if it can't be reused: the cache was off, or the pool was
-    // cleared)
-    std::array<GEVulkanPrevCamera, MAX_CAMERAS> m_prev_cameras;
-    unsigned m_prev_camera_count;
-
-    // The history which the next frame reads (the index of m_sets)
-    unsigned m_history_index;
     // ------------------------------------------------------------------------
     void createBuffers();
     // ------------------------------------------------------------------------
@@ -255,10 +238,6 @@ private:
     void createPipeline(const char* shader, VkPipeline* pipeline,
                         const VkSpecializationInfo* specialization = NULL)
                                                                          const;
-    // ------------------------------------------------------------------------
-    // Empties the list of the misses and the spawns of the tiles before
-    // surfel_gi_apply.comp of a viewport (CACHE_DEFER)
-    void clearMissList(VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
     // Black, and sampled by the lighting pass after it
     void clearOutput(VkCommandBuffer cmd);
@@ -284,6 +263,9 @@ public:
     // ------------------------------------------------------------------------
     // Sampled by the lighting pass in general layout
     VkImageView getImageView() const;
+    VkImageView getContactView() const;
+    VkBuffer getProbeField() const { return m_buffers[BI_PROBES].m_buffer; }
+    void prepareProbeField(const std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCamera*> >& views);
 };   // GEVulkanSurfelGI
 
 }

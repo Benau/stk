@@ -1,8 +1,10 @@
 #include "ge_vulkan_surfel_gi.hpp"
+#include "ge_vulkan_features.hpp"
 
 #include "ge_main.hpp"
 #include "ge_vulkan_attachment_texture.hpp"
 #include "ge_vulkan_camera_scene_node.hpp"
+#include "ge_vulkan_command_loader.hpp"
 #include "ge_vulkan_draw_call.hpp"
 #include "ge_vulkan_driver.hpp"
 #include "ge_vulkan_environment_map.hpp"
@@ -35,25 +37,28 @@ uint32_t groups8(int32_t size)
     return (uint32_t)(std::max(size, 0) + 7) / 8;
 }   // groups8
 
-// ----------------------------------------------------------------------------
-// Before a transfer write (fill or update) of a buffer which is written by
-// the transfer in every frame and used by the compute shaders. The barriers
-// after the last write only make it visible to the compute shaders (and the
-// indirect dispatches), so the write of the next frame, which is in another
-// command buffer, needs the last one to be available to the transfer too
-void transferBarrier(VkCommandBuffer cmd, bool indirect_read)
+unsigned probeLevels(const GEVulkanCamera& camera)
 {
-    VkMemoryBarrier barrier = {};
-    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
-        VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-    if (indirect_read)
-        barrier.srcAccessMask |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-        VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, NULL, 0, NULL);
-}   // transferBarrier
+    using irr::core::vector3df;
+    using irr::core::aabbox3df;
+    const auto* frustum = camera.getViewFrustum();
+    const vector3df eye = camera.getAbsolutePosition();
+    const float radius = std::sqrt(std::max({eye.getDistanceFromSQ(frustum->getFarLeftDown()),
+        eye.getDistanceFromSQ(frustum->getFarRightDown()), eye.getDistanceFromSQ(frustum->getFarLeftUp()),
+        eye.getDistanceFromSQ(frustum->getFarRightUp())}));
+    const vector3df extent(radius, radius, radius);
+    const aabbox3df sphere(eye - extent, eye + extent);
+    const auto* scene = camera.getSceneBounds();
+    float spacing = 2.0f;
+    for (unsigned levels = 1; ; ++levels, spacing *= 4.0f)
+    {
+        const vector3df cell(std::floor(eye.X / spacing), std::floor(eye.Y / spacing), std::floor(eye.Z / spacing));
+        const vector3df half(7.4f, 3.4f, 7.4f);
+        const aabbox3df interior((cell - half) * spacing, (cell + half) * spacing);
+        if ((scene && scene->isFullInside(interior)) || sphere.isFullInside(interior) || !std::isfinite(radius))
+            return levels;
+    }
+}
 
 }   // anonymous namespace
 
@@ -63,14 +68,14 @@ GEVulkanSurfelGI::GEVulkanSurfelGI(GEVulkanDriver* vk,
                                    GEVulkanAttachmentTexture* depth,
                                    GEVulkanAttachmentTexture* normal)
                 : GEVulkanPostProcessing(vk, size), m_buffers(), m_gi(NULL),
-                  m_history(), m_layout(VK_NULL_HANDLE),
-                  m_pool(VK_NULL_HANDLE), m_sets(),
+                  m_contact(NULL),
+                  m_representatives(NULL), m_layout(VK_NULL_HANDLE),
+                  m_pool(VK_NULL_HANDLE), m_set(VK_NULL_HANDLE),
                   m_data_layout(VK_NULL_HANDLE),
                   m_pipeline_layout(VK_NULL_HANDLE), m_options(),
                   m_pipelines(), m_frame(0), m_time(0), m_last_render(0),
                   m_rt_build_count(0), m_needs_reset(true), m_surfel_count(0),
-                  m_cleared(false), m_prev_cameras(), m_prev_camera_count(0),
-                  m_history_index(0)
+                  m_cleared(false)
 {
     for (Buffer& b : m_buffers)
     {
@@ -78,8 +83,8 @@ GEVulkanSurfelGI::GEVulkanSurfelGI(GEVulkanDriver* vk,
         b.m_memory = VK_NULL_HANDLE;
     }
     m_pipelines.fill(VK_NULL_HANDLE);
-    m_history.fill(NULL);
-    m_sets.fill(VK_NULL_HANDLE);
+    m_depth_step = depth->getInternalFormat() == VK_FORMAT_D16_UNORM ? 1.0f / 65535.0f :
+        depth->getInternalFormat() == VK_FORMAT_D24_UNORM_S8_UINT ? 1.0f / 16777215.0f : 0.0f;
     if (!m_vk->getRTScene())
         throw std::runtime_error("No ray traced scene for GEVulkanSurfelGI");
     try
@@ -88,17 +93,21 @@ GEVulkanSurfelGI::GEVulkanSurfelGI(GEVulkanDriver* vk,
             VK_FORMAT_R16G16B16A16_SFLOAT,
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
             VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        const VkFormat contact_format = GEVulkanFeatures::supportsShaderStorageImageExtendedFormats() ?
+            VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_R16G16B16A16_SFLOAT;
+        m_contact = new GEVulkanAttachmentTexture(vk, size, contact_format,
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+            VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
         initializeGeneralImages(&m_gi, 1);
-        // Only read and written by surfel_gi_apply.comp (it's never read
-        // before it's written, see CACHE_HISTORY)
-        for (GEVulkanAttachmentTexture*& history : m_history)
-        {
-            history = new GEVulkanAttachmentTexture(vk, size,
-                VK_FORMAT_R32G32_UINT, VK_IMAGE_USAGE_STORAGE_BIT,
-                VK_IMAGE_ASPECT_COLOR_BIT);
-        }
-        initializeGeneralImages(m_history.data(), m_history.size());
+        initializeGeneralImages(&m_contact, 1);
+        m_representatives = new GEVulkanAttachmentTexture(vk, halfSize(size),
+            VK_FORMAT_R32G32B32A32_UINT, VK_IMAGE_USAGE_STORAGE_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT);
+        initializeGeneralImages(&m_representatives, 1);
         createBuffers();
+        VkCommandBuffer init = GEVulkanCommandLoader::beginSingleTimeCommands();
+        vkCmdFillBuffer(init, getProbeField(), 0, 80, 0);
+        GEVulkanCommandLoader::endSingleTimeCommands(init);
         createDescriptors(depth, normal);
     }
     catch (...)
@@ -151,15 +160,14 @@ void GEVulkanSurfelGI::destroy()
     }
     delete m_gi;
     m_gi = NULL;
-    for (GEVulkanAttachmentTexture*& history : m_history)
-    {
-        delete history;
-        history = NULL;
-    }
+    delete m_contact;
+    m_contact = NULL;
+    delete m_representatives;
+    m_representatives = NULL;
     m_data_layout = VK_NULL_HANDLE;
     m_pool = VK_NULL_HANDLE;
     m_layout = VK_NULL_HANDLE;
-    m_sets.fill(VK_NULL_HANDLE);
+    m_set = VK_NULL_HANDLE;
 }   // destroy
 
 // ----------------------------------------------------------------------------
@@ -168,39 +176,37 @@ VkImageView GEVulkanSurfelGI::getImageView() const
     return (VkImageView)m_gi->getTextureHandler();
 }   // getImageView
 
+VkImageView GEVulkanSurfelGI::getContactView() const
+{
+    return (VkImageView)m_contact->getTextureHandler();
+}
+
 // ----------------------------------------------------------------------------
 void GEVulkanSurfelGI::createBuffers()
 {
-    // Only the gpu reads and writes them, surfel_gi_clear.comp fills them on
-    // the first frame (the cameras of the last frame are updated by the
-    // command buffer)
     const std::array<VkDeviceSize, BI_COUNT> sizes =
     {{
         sizeof(Surfel) * MAX_SURFELS,
         sizeof(int32_t) + sizeof(uint32_t) * MAX_SURFELS,
         sizeof(uint32_t) * CELL_COUNT,
-        sizeof(uint32_t) * CELL_COUNT * CELL_CAPACITY,
+        sizeof(uint32_t) * (CELL_COUNT * (CELL_CAPACITY + 1) + 2 * MAX_SURFELS),
         sizeof(uint32_t) * CELL_COUNT,
-        sizeof(GEVulkanPrevCamera) * MAX_CAMERAS,
-        sizeof(uint32_t) * (4 + m_size.Width * m_size.Height),
-        sizeof(uint32_t) * ((m_size.Width + 7) / 8) * ((m_size.Height + 7) / 8),
-        sizeof(uint32_t) * (4 * TRACE_LIST_COUNT +
-            TRACE_LIST_COUNT * MAX_SURFELS)
+        sizeof(uint32_t) * (4 + MAX_SURFELS),
+        sizeof(uint32_t) * (5 * TRACE_LIST_COUNT +
+            TRACE_LIST_COUNT * MAX_SURFELS),
+        80 + sizeof(Probe) * PROBE_LEVEL_SIZE * m_probe_layers,
+        sizeof(uint32_t) * (8 + PRIMARY_RAY_BUDGET * (4 + 8) + MAX_CAMERAS * PROBE_BANDS * (1 + PROBE_BATCH)),
+        64 * MAX_SURFELS
     }};
     for (unsigned i = 0; i < BI_COUNT; i++)
     {
         VmaAllocationCreateInfo alloc_info = {};
         alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        if (i == BI_PREV_CAMERA || i == BI_TILE_SPAWN)
-            usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        if (i == BI_TRACE_LIST)
+        if (i == BI_PROBES)
+            usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        if (i == BI_TRACE_LIST || i == BI_SPAWN_QUEUE || i == BI_RAY_WORK)
             usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
-        if (i == BI_MISS)
-        {
-            usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
-        }
         if (!m_vk->createBuffer(sizes[i], usage, alloc_info,
             m_buffers[i].m_buffer, m_buffers[i].m_memory))
         {
@@ -210,12 +216,67 @@ void GEVulkanSurfelGI::createBuffers()
     }
 }   // createBuffers
 
+void GEVulkanSurfelGI::prepareProbeField(const std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCamera*> >& views)
+{
+    unsigned cameras = 0, levels = 1;
+    for (const auto& view : views)
+    {
+        Viewport viewport;
+        if (!getViewport(view.first, view.second, &viewport))
+            continue;
+        m_probe_levels[cameras] = probeLevels(*view.second);
+        levels = std::max(levels, m_probe_levels[cameras]);
+        if (++cameras == MAX_CAMERAS)
+            break;
+    }
+    const VkDeviceSize layer_size = sizeof(Probe) * PROBE_LEVEL_SIZE;
+    const auto& limits = m_vk->getPhysicalDeviceProperties().limits;
+    const unsigned capacity = unsigned((limits.maxStorageBufferRange - 80) / layer_size);
+    const unsigned layers = std::min(cameras * levels, capacity);
+    if (layers <= m_probe_layers)
+        return;
+    VmaAllocationCreateInfo allocation = {};
+    allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    Buffer field = {};
+    if (!m_vk->createBuffer(80 + layer_size * layers, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, allocation, field.m_buffer, field.m_memory))
+        return;
+    m_vk->waitIdle();
+    VkCommandBuffer cmd = GEVulkanCommandLoader::beginSingleTimeCommands();
+    VkMemoryBarrier readable = {};
+    readable.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    readable.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+    readable.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &readable, 0, nullptr, 0, nullptr);
+    VkBufferCopy copy = {0, 0, 80 + layer_size * m_probe_layers};
+    vkCmdCopyBuffer(cmd, getProbeField(), field.m_buffer, 1, &copy);
+    vkCmdFillBuffer(cmd, field.m_buffer, copy.size, VK_WHOLE_SIZE, 0);
+    VkMemoryBarrier ready = {};
+    ready.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    ready.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    ready.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &ready, 0, nullptr, 0, nullptr);
+    GEVulkanCommandLoader::endSingleTimeCommands(cmd);
+    VkDescriptorBufferInfo info = {field.m_buffer, 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet write = {};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = m_set;
+    write.dstBinding = 3 + BI_PROBES;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    write.descriptorCount = 1;
+    write.pBufferInfo = &info;
+    vkUpdateDescriptorSets(m_vk->getDevice(), 1, &write, 0, nullptr);
+    std::swap(field, m_buffers[BI_PROBES]);
+    vmaDestroyBuffer(m_vk->getVmaAllocator(), field.m_buffer, field.m_memory);
+    m_probe_layers = layers;
+}
+
 // ----------------------------------------------------------------------------
 void GEVulkanSurfelGI::createDescriptors(GEVulkanAttachmentTexture* depth,
                                          GEVulkanAttachmentTexture* normal)
 {
-    // The g-buffer (combined image samplers), the output, the buffers and the
-    // history which is read and written (storage images)
     const unsigned binding_count = 3 + BI_COUNT + 2;
     VkDevice device = m_vk->getDevice();
     std::array<VkDescriptorSetLayoutBinding, binding_count> bindings = {};
@@ -240,17 +301,16 @@ void GEVulkanSurfelGI::createDescriptors(GEVulkanAttachmentTexture* depth,
             "GEVulkanSurfelGI");
     }
 
-    const unsigned set_count = m_sets.size();
     std::array<VkDescriptorPoolSize, 3> pool_sizes = {};
     pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    pool_sizes[0].descriptorCount = 2 * set_count;
+    pool_sizes[0].descriptorCount = 2;
     pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    pool_sizes[1].descriptorCount = 3 * set_count;
+    pool_sizes[1].descriptorCount = 3;
     pool_sizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    pool_sizes[2].descriptorCount = BI_COUNT * set_count;
+    pool_sizes[2].descriptorCount = BI_COUNT;
     VkDescriptorPoolCreateInfo pool_info = {};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pool_info.maxSets = set_count;
+    pool_info.maxSets = 1;
     pool_info.poolSizeCount = pool_sizes.size();
     pool_info.pPoolSizes = pool_sizes.data();
     if (vkCreateDescriptorPool(device, &pool_info, NULL, &m_pool) !=
@@ -260,62 +320,56 @@ void GEVulkanSurfelGI::createDescriptors(GEVulkanAttachmentTexture* depth,
             "GEVulkanSurfelGI");
     }
 
-    std::array<VkDescriptorSetLayout, 2> set_layouts = {{ m_layout, m_layout }};
     VkDescriptorSetAllocateInfo alloc_info = {};
     alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     alloc_info.descriptorPool = m_pool;
-    alloc_info.descriptorSetCount = set_count;
-    alloc_info.pSetLayouts = set_layouts.data();
-    if (vkAllocateDescriptorSets(device, &alloc_info, m_sets.data()) !=
+    alloc_info.descriptorSetCount = 1;
+    alloc_info.pSetLayouts = &m_layout;
+    if (vkAllocateDescriptorSets(device, &alloc_info, &m_set) !=
         VK_SUCCESS)
     {
         throw std::runtime_error("vkAllocateDescriptorSets failed for "
             "GEVulkanSurfelGI");
     }
 
-    for (unsigned set = 0; set < set_count; set++)
+    std::array<VkDescriptorImageInfo, 5> image_infos = {};
+    image_infos[0].sampler = m_vk->getSampler(GVS_NEAREST);
+    image_infos[0].imageView = (VkImageView)depth->getTextureHandler();
+    image_infos[0].imageLayout =
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    image_infos[1].sampler = m_vk->getSampler(GVS_NEAREST);
+    image_infos[1].imageView = (VkImageView)normal->getTextureHandler();
+    image_infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    image_infos[2].imageView = getContactView();
+    image_infos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    image_infos[3].imageView = (VkImageView)m_representatives->getTextureHandler();
+    image_infos[3].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    image_infos[4].imageView = getImageView();
+    image_infos[4].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    std::array<VkDescriptorBufferInfo, BI_COUNT> buffer_infos = {};
+    for (unsigned i = 0; i < BI_COUNT; i++)
     {
-        std::array<VkDescriptorImageInfo, 5> image_infos = {};
-        image_infos[0].sampler = m_vk->getSampler(GVS_NEAREST);
-        image_infos[0].imageView = (VkImageView)depth->getTextureHandler();
-        image_infos[0].imageLayout =
-            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        image_infos[1].sampler = m_vk->getSampler(GVS_NEAREST);
-        image_infos[1].imageView = (VkImageView)normal->getTextureHandler();
-        image_infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        image_infos[2].imageView = getImageView();
-        image_infos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        // Read the history of this set, write the other one
-        image_infos[3].imageView =
-            (VkImageView)m_history[set]->getTextureHandler();
-        image_infos[3].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        image_infos[4].imageView =
-            (VkImageView)m_history[(set + 1) % set_count]->getTextureHandler();
-        image_infos[4].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        std::array<VkDescriptorBufferInfo, BI_COUNT> buffer_infos = {};
-        for (unsigned i = 0; i < BI_COUNT; i++)
-        {
-            buffer_infos[i].buffer = m_buffers[i].m_buffer;
-            buffer_infos[i].offset = 0;
-            buffer_infos[i].range = VK_WHOLE_SIZE;
-        }
-        std::array<VkWriteDescriptorSet, binding_count> writes = {};
-        for (unsigned i = 0; i < writes.size(); i++)
-        {
-            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            writes[i].dstSet = m_sets[set];
-            writes[i].dstBinding = i;
-            writes[i].descriptorCount = 1;
-            writes[i].descriptorType = bindings[i].descriptorType;
-            if (i < 3)
-                writes[i].pImageInfo = &image_infos[i];
-            else if (i < 3 + BI_COUNT)
-                writes[i].pBufferInfo = &buffer_infos[i - 3];
-            else
-                writes[i].pImageInfo = &image_infos[i - BI_COUNT];
-        }
-        vkUpdateDescriptorSets(device, writes.size(), writes.data(), 0, NULL);
+        buffer_infos[i].buffer = m_buffers[i].m_buffer;
+        buffer_infos[i].offset = 0;
+        buffer_infos[i].range = VK_WHOLE_SIZE;
     }
+    std::array<VkWriteDescriptorSet, binding_count> writes = {};
+    for (unsigned i = 0; i < writes.size(); i++)
+    {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = m_set;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = bindings[i].descriptorType;
+        if (i < 3)
+            writes[i].pImageInfo = &image_infos[i];
+        else if (i < 3 + BI_COUNT)
+            writes[i].pBufferInfo = &buffer_infos[i - 3];
+        else
+            writes[i].pImageInfo = &image_infos[i - BI_COUNT];
+    }
+    vkUpdateDescriptorSets(device, writes.size(), writes.data(), 0, NULL);
+
 }   // createDescriptors
 
 // ----------------------------------------------------------------------------
@@ -342,7 +396,7 @@ void GEVulkanSurfelGI::createPipeline(const char* shader, VkPipeline* pipeline,
 // ----------------------------------------------------------------------------
 bool GEVulkanSurfelGI::isFrameCache()
 {
-    return getGEConfig()->m_ray_tracing.m_gi_frame_cache;
+    return getGEConfig()->m_frame_cache;
 }   // isFrameCache
 
 // ----------------------------------------------------------------------------
@@ -386,12 +440,20 @@ void GEVulkanSurfelGI::createPipelines()
     // the skybox, which doesn't need them
     GEVulkanPipelineConstants constants(m_vk, m_options);
     createPipeline("surfel_gi_clear.comp", &m_pipelines[PI_CLEAR]);
+    createPipeline("surfel_gi_materials.comp", &m_pipelines[PI_MATERIALS]);
+    createPipeline("surfel_gi_shadow.comp", &m_pipelines[PI_SHADOW]);
+    createPipeline("surfel_gi_trace_resolve.comp", &m_pipelines[PI_TRACE_RESOLVE]);
     createPipeline("surfel_gi_update.comp", &m_pipelines[PI_UPDATE]);
     createPipeline("surfel_gi_trace.comp", &m_pipelines[PI_TRACE],
         constants.getInfo());
     createPipeline("surfel_gi_apply.comp", &m_pipelines[PI_APPLY]);
-    createPipeline("surfel_gi_gather.comp", &m_pipelines[PI_GATHER]);
     createPipeline("surfel_gi_spawn.comp", &m_pipelines[PI_SPAWN]);
+    createPipeline("surfel_gi_spawn_bin.comp", &m_pipelines[PI_SPAWN_BIN]);
+    createPipeline("surfel_gi_trace_schedule.comp", &m_pipelines[PI_TRACE_SCHEDULE]);
+    createPipeline("surfel_gi_probe_trace.comp", &m_pipelines[PI_PROBE_TRACE], constants.getInfo());
+    createPipeline("surfel_gi_probe_filter.comp", &m_pipelines[PI_PROBE_FILTER]);
+    createPipeline("surfel_gi_share.comp", &m_pipelines[PI_SHARE]);
+    createPipeline("surfel_gi_upscale.comp", &m_pipelines[PI_UPSCALE]);
 }   // createPipelines
 
 // ----------------------------------------------------------------------------
@@ -411,11 +473,14 @@ void GEVulkanSurfelGI::clearOutput(VkCommandBuffer cmd)
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &barrier, 0, NULL, 0, NULL);
     VkClearColorValue black = {};
+    vkCmdFillBuffer(cmd, getProbeField(), sizeof(SurfelPushConstants::m_cameras), sizeof(uint32_t), 0);
     VkImageSubresourceRange range = {};
     range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     range.levelCount = 1;
     range.layerCount = 1;
     vkCmdClearColorImage(cmd, m_gi->getImage(), VK_IMAGE_LAYOUT_GENERAL,
+        &black, 1, &range);
+    vkCmdClearColorImage(cmd, m_contact->getImage(), VK_IMAGE_LAYOUT_GENERAL,
         &black, 1, &range);
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
@@ -427,38 +492,11 @@ void GEVulkanSurfelGI::clearOutput(VkCommandBuffer cmd)
 }   // clearOutput
 
 // ----------------------------------------------------------------------------
-void GEVulkanSurfelGI::clearMissList(VkCommandBuffer cmd)
-{
-    // The passes of the last viewport (or the last frame) read them, and the
-    // fills of the last frame have to be finished
-    transferBarrier(cmd, true);
-    // No pixel and no group of the dispatch (x), the dispatch has y and z of
-    // 1, and no spawn in the tiles
-    vkCmdFillBuffer(cmd, m_buffers[BI_MISS].m_buffer, 0,
-        2 * sizeof(uint32_t), 0);
-    vkCmdFillBuffer(cmd, m_buffers[BI_MISS].m_buffer, 2 * sizeof(uint32_t),
-        2 * sizeof(uint32_t), 1);
-    vkCmdFillBuffer(cmd, m_buffers[BI_TILE_SPAWN].m_buffer, 0, VK_WHOLE_SIZE,
-        0xFFFFFFFF);
-    VkMemoryBarrier barrier = {};
-    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
-        VK_ACCESS_SHADER_WRITE_BIT;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, NULL, 0,
-        NULL);
-}   // clearMissList
-
-// ----------------------------------------------------------------------------
 bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
     const std::vector<std::pair<GEVulkanDrawCall*,
     GEVulkanCamera*> >& p)
 {
     GEVulkanRTScene* rt_scene = m_vk->getRTScene();
-    // The history is only written if this frame is traced
-    const unsigned prev_camera_count = m_prev_camera_count;
-    m_prev_camera_count = 0;
     std::vector<Viewport> viewports;
     std::vector<GEVulkanCamera*> cameras;
     for (auto& q : p)
@@ -512,10 +550,15 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
         clearOutput(cmd);
         return false;
     }
-    m_cleared = false;
-
     SurfelPushConstants pc = {};
     pc.m_frame = ++m_frame;
+    if (!pc.m_frame)
+    {
+        pc.m_frame = ++m_frame;
+        m_needs_reset = true;
+    }
+    pc.m_geometry_count = rt_scene->getActiveGeometries(m_vk->getCurrentBufferIdx());
+    pc.m_depth_step = m_depth_step;
     // The time of the frame, at most a tenth of a second (a hitch, or the
     // first frame) so a long pause doesn't fill in everything at once
     const uint64_t now = getMonoTimeMs();
@@ -523,11 +566,9 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
     if (m_frame > 1)
         dt_ms = std::min<uint64_t>(now - m_last_render, 100);
     m_last_render = now;
-    m_time += (uint32_t)dt_ms;
-    pc.m_time = m_time;
     pc.m_steps = (float)dt_ms * (60.0f / 1000.0f);
     const unsigned camera_count =
-        std::min<unsigned>((unsigned)p.size(), MAX_CAMERAS);
+        std::min<unsigned>((unsigned)cameras.size(), MAX_CAMERAS);
     pc.m_camera_count = camera_count;
     // Every camera has its own budget, the ids above the pool in use are not
     // in the free stack, so it's cleared when the count of them changes
@@ -540,45 +581,32 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
     for (unsigned i = 0; i < camera_count; i++)
     {
         const irr::core::matrix4& inverse_view =
-            p[i].second->getUBOData()->m_inverse_view_matrix;
+            cameras[i]->getUBOData()->m_inverse_view_matrix;
         pc.m_cameras[i][0] = inverse_view[12];
         pc.m_cameras[i][1] = inverse_view[13];
         pc.m_cameras[i][2] = inverse_view[14];
-        pc.m_cameras[i][3] = 1.0f;
+        pc.m_cameras[i][3] = float(m_probe_levels[i]);
+        const unsigned prior = unsigned(m_grid_cameras[i][3]);
+        if ((prior > m_grid_probe_limit || m_probe_levels[i] > m_probe_layers / camera_count) &&
+            (prior != m_probe_levels[i] || m_grid_probe_limit != m_probe_layers / camera_count))
+            m_needs_reset = true;
     }
-    // The surfels are on the triangles of the static BLAS, which is new
     if (m_needs_reset || m_rt_build_count != rt_scene->getBuildCount())
     {
-        pc.m_reset = 1;
+        pc.m_cache |= RESET_CACHE;
         m_needs_reset = false;
         m_rt_build_count = rt_scene->getBuildCount();
     }
-    // The history has the irradiance of the surfels of the last frame, seen
-    // by the cameras of its viewports, which can be reused if they are the
-    // same viewports (so a pixel is in the same one) and the surfels were not
-    // cleared
-    const bool cache = isFrameCache();
+    memcpy(m_grid_cameras, pc.m_cameras, sizeof(m_grid_cameras));
+    m_grid_probe_limit = m_probe_layers / camera_count;
+    m_time += (uint32_t)dt_ms;
+    m_cleared = false;
+    pc.m_time = m_time;
     const unsigned viewport_count =
         std::min<unsigned>((unsigned)viewports.size(), MAX_CAMERAS);
-    if (cache)
-    {
+    if (isFrameCache())
         pc.m_cache |= CACHE_FRAME;
-        if (pc.m_reset == 0 && prev_camera_count == viewport_count)
-            pc.m_cache |= CACHE_HISTORY | CACHE_DEFER;
-    }
 
-    // The cameras which the history was rendered with, after the apply of
-    // the last frame read them
-    if ((pc.m_cache & CACHE_HISTORY) != 0)
-    {
-        transferBarrier(cmd, false);
-        vkCmdUpdateBuffer(cmd, m_buffers[BI_PREV_CAMERA].m_buffer, 0,
-            sizeof(GEVulkanPrevCamera) * viewport_count, m_prev_cameras.data());
-    }
-
-    // The depth and the normal of the g-buffer are written, the scene is
-    // built, the cameras of the last frame are updated, and what the last
-    // frame read or wrote has to be finished
     {
         VkMemoryBarrier barrier = {};
         barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -601,9 +629,8 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipeline_layout, 0, 1, rt_scene->getDescriptorSet(buffer_idx), 0,
         NULL);
-    // The history of the last frame is read, the other one written
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_pipeline_layout, 2, 1, &m_sets[m_history_index], 0, NULL);
+        m_pipeline_layout, 2, 1, &m_set, 0, NULL);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipeline_layout, 3, 1,
         m_vk->getMeshTextureDescriptor()->getRTDescriptorSet(), 0, NULL);
@@ -620,32 +647,74 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
     vkCmdPushConstants(cmd, m_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
         sizeof(pc), &pc);
 
-    // 1. Empty cells (and pool)
+    if (pc.m_geometry_count > 0)
+    {
+        const uint32_t groups = (pc.m_geometry_count + 3) / 4;
+        const uint32_t columns = std::min(groups, 65535u);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelines[PI_MATERIALS]);
+        vkCmdDispatch(cmd, columns, (groups + columns - 1) / columns, 1);
+    }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipelines[PI_CLEAR]);
     vkCmdDispatch(cmd,
         groups64(std::max<uint32_t>(CELL_COUNT, pc.m_surfel_count)), 1, 1);
     computeToComputeBarrier(cmd, 0);
 
-    // 2. Recycle, resize and register in the cells (and the lists of the trace)
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipelines[PI_UPDATE]);
     vkCmdDispatch(cmd, groups64(pc.m_surfel_count), 1, 1);
     computeToComputeBarrier(cmd, 0);
 
-    // 3. Rays of the surfels, with the frame cache the ones of the lists of
-    // the update (their sizes are the indirect dispatches)
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_pipelines[PI_TRACE]);
-    if (cache)
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelines[PI_SPAWN]);
+    for (unsigned index = 0; index < viewport_count; ++index)
+    {
+        const Viewport& vp = viewports[index];
+        if (isEmptyRect(vp.m_rect))
+            continue;
+        vp.m_draw_call->bindDataDescriptorSet(m_vk, cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline_layout, 1);
+        std::copy(vp.m_rect.begin(), vp.m_rect.end(), pc.m_rect);
+        vkCmdPushConstants(cmd, m_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        vkCmdDispatch(cmd, groups8(vp.m_rect[2] - vp.m_rect[0]),
+            groups8(vp.m_rect[3] - vp.m_rect[1]), 1);
+        computeToComputeBarrier(cmd, 0);
+    }
+    auto indirect_ready = [cmd]()
     {
         VkMemoryBarrier barrier = {};
         barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT |
+            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 1, &barrier, 0, NULL, 0,
-            NULL);
+            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0, 1, &barrier, 0, NULL, 0, NULL);
+    };
+    indirect_ready();
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelines[PI_SPAWN_BIN]);
+    vkCmdDispatchIndirect(cmd, m_buffers[BI_SPAWN_QUEUE].m_buffer, 0);
+    computeToComputeBarrier(cmd, 0);
+    first_dc->bindDataDescriptorSet(m_vk, cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline_layout, 1);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelines[PI_TRACE_SCHEDULE]);
+    vkCmdDispatch(cmd, groups64(PROBE_LEVEL_SIZE), camera_count, 1);
+    computeToComputeBarrier(cmd, 0);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelines[PI_PROBE_TRACE]);
+    vkCmdDispatch(cmd, PROBE_BATCH, camera_count, 1);
+    auto resolve_shadows = [&](uint32_t phase)
+    {
+        indirect_ready();
+        pc.m_trace_list = phase;
+        vkCmdPushConstants(cmd, m_pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelines[PI_SHADOW]);
+        vkCmdDispatchIndirect(cmd, m_buffers[BI_RAY_WORK].m_buffer, phase * 4 * sizeof(uint32_t));
+        computeToComputeBarrier(cmd, 0);
+    };
+    resolve_shadows(0);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelines[PI_PROBE_FILTER]);
+    vkCmdDispatch(cmd, PROBE_BATCH, camera_count, 1);
+    indirect_ready();
+    auto dispatch_lists = [&](PipelineIndex pipeline)
+    {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelines[pipeline]);
         for (uint32_t list = 0; list < TRACE_LIST_COUNT; list++)
         {
             pc.m_trace_list = list;
@@ -654,13 +723,16 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
             vkCmdDispatchIndirect(cmd, m_buffers[BI_TRACE_LIST].m_buffer,
                 list * 3 * sizeof(uint32_t));
         }
-    }
-    else
-        vkCmdDispatch(cmd, groups64(pc.m_surfel_count), 1, 1);
+    };
+    dispatch_lists(PI_TRACE);
+    resolve_shadows(1);
+    dispatch_lists(PI_TRACE_RESOLVE);
     computeToComputeBarrier(cmd, 0);
 
-    // 4. Irradiance of the pixels and new surfels, per viewport
-    const bool defer = (pc.m_cache & CACHE_DEFER) != 0;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelines[PI_SHARE]);
+    vkCmdDispatch(cmd, groups64(pc.m_surfel_count), 1, 1);
+    computeToComputeBarrier(cmd, 0);
+
     for (unsigned v = 0; v < viewport_count; v++)
     {
         const Viewport& vp = viewports[v];
@@ -670,51 +742,19 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
             VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline_layout, 1);
         for (unsigned i = 0; i < 4; i++)
             pc.m_rect[i] = vp.m_rect[i];
-        pc.m_viewport_index = v;
         vkCmdPushConstants(cmd, m_pipeline_layout,
             VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-        const uint32_t tiles_x = groups8(vp.m_rect[2] - vp.m_rect[0]);
-        const uint32_t tiles_y = groups8(vp.m_rect[3] - vp.m_rect[1]);
-        if (defer)
-            clearMissList(cmd);
+        const int32_t width = vp.m_rect[2] - vp.m_rect[0];
+        const int32_t height = vp.m_rect[3] - vp.m_rect[1];
+        const uint32_t tiles_x = groups8((width + 1) / 2);
+        const uint32_t tiles_y = groups8((height + 1) / 2);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
             m_pipelines[PI_APPLY]);
         vkCmdDispatch(cmd, tiles_x, tiles_y, 1);
-        if (!defer)
-            continue;
-        // The list of the misses is complete, and its size is the indirect
-        // dispatch
-        {
-            VkMemoryBarrier barrier = {};
-            barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
-            barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
-                VK_ACCESS_SHADER_WRITE_BIT |
-                VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 1, &barrier, 0, NULL,
-                0, NULL);
-        }
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-            m_pipelines[PI_GATHER]);
-        vkCmdDispatchIndirect(cmd, m_buffers[BI_MISS].m_buffer,
-            sizeof(uint32_t));
         computeToComputeBarrier(cmd, 0);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-            m_pipelines[PI_SPAWN]);
-        vkCmdDispatch(cmd, groups64(tiles_x * tiles_y), 1, 1);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelines[PI_UPSCALE]);
+        vkCmdDispatch(cmd, groups8(width), groups8(height), 1);
         computeToComputeBarrier(cmd, 0);
-    }
-
-    // The next frame reads the history written now, with the cameras of
-    // this frame
-    if (cache)
-    {
-        m_history_index = (m_history_index + 1) % m_sets.size();
-        m_prev_camera_count = viewport_count;
-        for (unsigned i = 0; i < viewport_count; i++)
-            m_prev_cameras[i].set(cameras[i]->getUBOData());
     }
 
     // Sampled by the lighting pass, the surfels are read by the next frame
@@ -724,7 +764,7 @@ bool GEVulkanSurfelGI::render(VkCommandBuffer cmd,
         barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, NULL, 0,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, NULL, 0,
             NULL);
     }
     // The depth and the normal are read by the compute shaders (execution

@@ -8,7 +8,7 @@ struct LightData
 
 layout(std140, set = 1, binding = 3) uniform GlobalLightBuffer
 {
-    mat4  m_shadow_projection_view_matrix[3];
+    mat4  m_shadow_projection_view_matrix[SUN_CASCADES];
     mat4  m_shadow_view_matrix;
     vec3  m_ambient_color;
     float m_sun_scatter;

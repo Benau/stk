@@ -12,15 +12,6 @@
 //                        cell, and a new surfel where the surfels don't cover
 //                        the static scene enough
 //
-// The scene, the sun and the sky don't change, so the irradiance doesn't
-// either once the surfels converged. With the frame cache (SURFEL_CACHE_FRAME)
-// it's reused: a converged surfel traces a few rays only every
-// SURFEL_CACHED_TRACE_PERIOD frames (its mean has more samples, so it's not
-// noisier), and a pixel whose surfels converged and cover it fully keeps its
-// irradiance in the next frames while its surface stays on the screen (the
-// history of surfel_gi_apply.comp), only every SURFEL_HISTORY_PERIOD frames it
-// looks for its surfels again.
-//
 // A surfel is a disk on a surface of the static scene (the static BLAS of
 // GEVulkanRTScene, RT_MASK_STATIC), it never moves. The grid is a hash of the
 // cells of nested levels around the cameras: the cells of a level are twice
@@ -45,8 +36,6 @@ layout(push_constant) uniform SurfelPushConstants
     // Incremented every frame (random seeds)
     uint m_frame;
     uint m_camera_count;
-    // The pool is cleared (surfel_gi_clear.comp)
-    uint m_reset;
     // The env set (surfel_gi_trace.comp) has the skybox, not the dummy one
     uint m_has_skybox;
     // Milliseconds since the start (wraps), for the life of the surfels
@@ -55,28 +44,21 @@ layout(push_constant) uniform SurfelPushConstants
     // the surfels fill in and follow the lighting in the same time at any
     // frame rate
     float m_steps;
-    // The surfels of the pool in use: SURFEL_PER_CAMERA for every viewport
+    // The surfels of the pool in use: SURFELS_PER_CAMERA for every viewport
     // (the buffers have room for the most viewports), so the budget of a
     // camera doesn't depend on how many players share the screen
     uint m_surfel_count;
     // SURFEL_CACHE_* bits
     uint m_cache;
-    // The viewport of surfel_gi_apply.comp (its u_prev_cameras)
-    uint m_viewport_index;
     // The list of u_trace_lists which surfel_gi_trace.comp traces with the
     // frame cache (SURFEL_TRACE_*)
     uint m_trace_list;
+    uint m_geometry_count;
+    float m_depth_step;
 } pc;
 
-// The frame cache, the irradiance which doesn't change anymore is reused (see
-// above)
 const uint SURFEL_CACHE_FRAME = 1u;
-// The history of surfel_gi_apply.comp was written by the last frame, with the
-// cameras of u_prev_cameras
-const uint SURFEL_CACHE_HISTORY = 2u;
-// The pixels which can't be reused are in a list for surfel_gi_gather.comp
-// (see surfel_gi_apply.comp)
-const uint SURFEL_CACHE_DEFER = 4u;
+const uint SURFEL_GI_RESET_CACHE = 16u;
 
 // Same as Surfel of GEVulkanSurfelGI (std430, 48 bytes), a free surfel has a
 // radius of 0
@@ -116,9 +98,14 @@ layout(std430, set = SURFEL_SET, binding = 4) buffer SurfelPool
     uint m_free[];
 } u_pool;
 
-// Number of surfels in every cell of the grid of the frame, a surfel is in the
-// cell of its center (it can be more than SURFEL_CELL_CAPACITY, the others are
-// not in the cell then, and no surfel spawns in it)
+layout(std430, set = SURFEL_SET, binding = 8) buffer SpawnQueue
+{
+    uint dispatch[3];
+    uint count;
+    uint ids[];
+} new_surfels;
+
+// Number of surfels in every cell, including its overflow list
 layout(std430, set = SURFEL_SET, binding = 5) buffer SurfelCellCount
 {
     uint u_cell_count[];
@@ -152,21 +139,30 @@ layout(std430, set = SURFEL_SET, binding = 7) buffer SurfelCellSpawns
 // the frame would still take a thread. Every list has its indirect dispatch
 // (x, y, z groups of 64) and its count, the ids of list i start at
 // i * pc.m_surfel_count
-layout(std430, set = SURFEL_SET, binding = 11) buffer SurfelTraceLists
+layout(std430, set = SURFEL_SET, binding = 9) buffer SurfelTraceLists
 {
     uint m_dispatch[2][3];
     uint m_count[2];
+    uint m_selected[2];
     uint m_ids[];
 } u_trace_lists;
 
 const uint SURFEL_TRACE_YOUNG = 0u;
 const uint SURFEL_TRACE_CONVERGED = 1u;
 
-// Surfels of the pool for every viewport, they are shared by the cameras (a
-// surface seen by two of them has the same surfels), see pc.m_surfel_count
-const uint SURFEL_PER_CAMERA = 32768u;
 const uint SURFEL_CELL_COUNT = 65536u;
 const uint SURFEL_CELL_CAPACITY = 64u;
+const uint SURFEL_OVERFLOW_HEADS = SURFEL_CELL_COUNT * SURFEL_CELL_CAPACITY;
+const uint SURFEL_OVERFLOW_LINKS = SURFEL_OVERFLOW_HEADS + SURFEL_CELL_COUNT;
+
+uint nextCellSurfel(uint cell, uint index, inout uint link)
+{
+    if (index < SURFEL_CELL_CAPACITY)
+        return u_cell_surfels[cell * SURFEL_CELL_CAPACITY + index];
+    link = index == SURFEL_CELL_CAPACITY ? u_cell_surfels[SURFEL_OVERFLOW_HEADS + cell] :
+        u_cell_surfels[SURFEL_OVERFLOW_LINKS + link];
+    return link / 2u;
+}
 // New surfels of a cell in a step (1/60 s), see trySpawnSurfelInCell()
 const float SURFEL_CELL_SPAWNS_PER_STEP = 8.0;
 // The constants of time are in steps of 1/60 s (pc.m_steps is the time of the
@@ -182,12 +178,8 @@ const float SURFEL_MAX_SAMPLES = 64.0;
 const float SURFEL_CONFIDENT_SAMPLES = 8.0;
 // With the frame cache, a surfel with SURFEL_MAX_SAMPLES converged: it only
 // traces in one of SURFEL_CACHED_TRACE_PERIOD frames (they take turns), and its
-// mean has up to SURFEL_CACHED_MAX_SAMPLES steps, so the same number of rays
-// (it follows a change of the lighting slower, which only happens when the
-// static scene is built again, and the pool is cleared then)
-const uint SURFEL_CACHED_TRACE_PERIOD = 8u;
-const float SURFEL_CACHED_MAX_SAMPLES =
-    SURFEL_MAX_SAMPLES * float(SURFEL_CACHED_TRACE_PERIOD);
+// estimate uses the elapsed time since its last trace
+const uint SURFEL_CACHED_TRACE_PERIOD = 4u;
 // With the frame cache, a surfel with fewer than SURFEL_MAX_SAMPLES traces
 // this many times SURFEL_RAYS in a frame, see surfel_gi_trace.comp
 const uint SURFEL_YOUNG_RAY_SCALE = 4u;
@@ -201,31 +193,23 @@ const uint SURFEL_RAYS_PER_THREAD = 1u;
 // The threads of a surfel of a list of u_trace_lists in surfel_gi_trace.comp
 uint getSurfelTraceThreads(uint list)
 {
-    uint rays = list == SURFEL_TRACE_YOUNG ?
+    uint rays = list == SURFEL_TRACE_YOUNG && (pc.m_cache & SURFEL_CACHE_FRAME) != 0u ?
         SURFEL_RAYS * SURFEL_YOUNG_RAY_SCALE : SURFEL_RAYS;
     return rays / SURFEL_RAYS_PER_THREAD;
 }
 
-// With the frame cache, a pixel which reuses its irradiance looks for its
-// surfels again in one of SURFEL_HISTORY_PERIOD frames at least: it keeps them
-// alive (8 frames are less than SURFEL_MIN_LIFE above 16 FPS), and it follows
-// their radius, which changes with the distance to the camera
-const uint SURFEL_HISTORY_PERIOD = 8u;
 // Milliseconds a surfel which no pixel uses is kept, when the pool has enough
-// free surfels (a quarter of the pool, SURFEL_LOW_POOL_PER_CAMERA per camera)
+// free surfels (a quarter of the active pool)
 const uint SURFEL_MAX_LIFE = 5000u;
-// With fewer free surfels than SURFEL_LOW_POOL_PER_CAMERA of every camera the
+// With fewer than a quarter of the active pool free, the
 // life is shorter, down to SURFEL_MIN_LIFE when the pool is empty: the surfels
 // which nothing used for the longest are recycled first, so a fast camera
 // which keeps seeing new surfaces (a tunnel after a valley) doesn't wait for
 // the old ones to expire
 const uint SURFEL_MIN_LIFE = 500u;
-const int SURFEL_LOW_POOL_PER_CAMERA = 8192;
-// A surfel farther than it from all the cameras is recycled
-const float SURFEL_MAX_DISTANCE = 1000.0;
 // The cells of the first level are SURFEL_CELL_SIZE wide, up to
 // SURFEL_LEVEL_DISTANCE from the cameras, every next level doubles both
-const float SURFEL_CELL_SIZE = 2.0;
+#include "surfel_gi_grid.glsl"
 const float SURFEL_LEVEL_DISTANCE = 16.0;
 const uint SURFEL_LEVELS = 8u;
 
@@ -243,11 +227,6 @@ uint getSurfelLevel(float camera_distance)
     float level = floor(log2(max(camera_distance, SURFEL_LEVEL_DISTANCE) /
         SURFEL_LEVEL_DISTANCE));
     return uint(min(level, float(SURFEL_LEVELS - 1u)));
-}
-
-float getSurfelCellSize(uint level)
-{
-    return SURFEL_CELL_SIZE * exp2(float(level));
 }
 
 // At most half a cell of its level, so the 2x2x2 cells nearest to a position
@@ -297,33 +276,47 @@ uint getSurfelCell(ivec3 cell, uint level)
 
 uint getSurfelCell(vec3 position, uint level)
 {
-    return getSurfelCell(ivec3(floor(position / getSurfelCellSize(level))),
-        level);
+    return getSurfelCell(surfelGICellAt(position, getSurfelCellSize(level)), level);
+}
+
+const float SURFEL_SHARING_RADIUS_SCALE = 2.0;
+
+void binSurfel(uint id, vec3 position, float camera_distance, float radius)
+{
+    float reach = SURFEL_SHARING_RADIUS_SCALE * radius;
+    uint first_level = getSurfelLevel(max(camera_distance - reach, 0.0));
+    uint last_level = getSurfelLevel(camera_distance + reach);
+    uint previous_cell = ~0u;
+    for (uint level = first_level; level <= last_level; ++level)
+    {
+        uint cell = getSurfelCell(position, level);
+        if (cell != previous_cell)
+        {
+            uint slot = atomicAdd(u_cell_count[cell], 1u);
+            if (slot < SURFEL_CELL_CAPACITY)
+                u_cell_surfels[cell * SURFEL_CELL_CAPACITY + slot] = id;
+            else
+            {
+                uint link = 2u * id + (level & 1u);
+                u_cell_surfels[SURFEL_OVERFLOW_LINKS + link] =
+                    atomicExchange(u_cell_surfels[SURFEL_OVERFLOW_HEADS + cell], link);
+            }
+        }
+        previous_cell = cell;
+    }
 }
 
 // The first of the 2x2x2 cells of a level nearest to a position (it's at least
 // half a cell from their sides)
 ivec3 getSurfelNearestCells(vec3 position, float cell_size)
 {
-    return ivec3(floor(position / cell_size - 0.5));
+    return ivec3(floor(surfelGICenterGrid(position, cell_size)));
 }
 
-// The new surfels of a frame are only in the grid in the next one, so every
-// group of pixels which sees an empty cell would spawn in it in the same
-// frame: a cell gets at most SURFEL_CELL_CAPACITY surfels with the ones
-// spawned in this frame. And only SURFEL_CELL_SPAWNS_PER_STEP of them in a
-// step: a cell comes into view as a thin strip at the side of the screen (the
-// floor behind a camera which moves back), which is the least covered pixel
-// of many groups, they would fill the whole cell on the strip and the rest of
-// it would never get a surfel. The next frames spawn where the surfels of
-// this one don't cover it. Returns false if it's full
 bool trySpawnSurfelInCell(uint cell)
 {
-    if (u_cell_count[cell] >= SURFEL_CELL_CAPACITY)
-        return false;
     uint spawned = atomicAdd(u_cell_spawns[cell], 1u);
-    return spawned < uint(ceil(SURFEL_CELL_SPAWNS_PER_STEP * pc.m_steps)) &&
-        u_cell_count[cell] + spawned < SURFEL_CELL_CAPACITY;
+    return spawned < uint(ceil(SURFEL_CELL_SPAWNS_PER_STEP * pc.m_steps));
 }
 
 // A random number in [0, 1) of a seed
