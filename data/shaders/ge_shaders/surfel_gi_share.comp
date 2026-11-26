@@ -1,0 +1,114 @@
+layout(local_size_x = 64) in;
+#define SURFEL_SET 2
+#include "utils/surfel_gi.glsl"
+#include "utils/surfel_gi_cache.glsl"
+
+const vec3 SURFEL_SHARE_LUMINANCE = vec3(0.2126, 0.7152, 0.0722);
+const float SURFEL_SHARE_LUMINANCE_FLOOR = 0.02;
+const float SURFEL_SHARE_LUMINANCE_LIMIT = 3.0;
+
+struct SharedIrradiance
+{
+    vec3 m_sum;
+    float m_weight;
+    float m_log_luminance;
+};
+
+float surfelShareLuminance(vec3 radiance)
+{
+    return max(dot(max(radiance, vec3(0.0)), SURFEL_SHARE_LUMINANCE),
+        SURFEL_SHARE_LUMINANCE_FLOOR);
+}
+
+SharedIrradiance sharedIrradiance(uint id, vec3 position, vec3 normal, float radius)
+{
+    uint level = getSurfelLevel(getSurfelCameraDistance(position));
+    float cell_size = getSurfelCellSize(level);
+    float reach = SURFEL_SHARING_RADIUS_SCALE * radius;
+    ivec3 first = ivec3(floor((position - reach) / cell_size));
+    ivec3 last = ivec3(floor((position + reach) / cell_size));
+    uvec2 attachment = lighting[id].anchor.xw;
+    vec4 local_light = lighting[id].local_irradiance;
+    float local_variance = lighting[id].variance;
+    SharedIrradiance sum;
+    sum.m_sum = vec3(0.0);
+    sum.m_weight = 0.0;
+    sum.m_log_luminance = 0.0;
+    for (int depth = first.z; depth <= last.z; ++depth)
+    for (int row = first.y; row <= last.y; ++row)
+    for (int column = first.x; column <= last.x; ++column)
+    {
+        ivec3 coords = ivec3(column, row, depth);
+        if (getSurfelCellDistance2(position, coords, cell_size) >= reach * reach)
+            continue;
+        uint cell = getSurfelCell(coords, level);
+        uint count = u_cell_count[cell];
+        uint link = ~0u;
+        for (uint index = 0u; index < count; ++index)
+        {
+            uint donor = nextCellSurfel(cell, index, link);
+            vec4 sphere = u_surfels_vec4[donor * 3u];
+            vec3 delta = sphere.xyz - position;
+            float support = min(radius, sphere.w);
+            float limit = SURFEL_SHARING_RADIUS_SCALE * support;
+            float distance_squared = dot(delta, delta);
+            if (donor == id || distance_squared >= limit * limit ||
+                ivec3(floor(sphere.xyz / cell_size)) != coords ||
+                lighting[donor].frame == 0u || lighting[donor].buried != 0u)
+                continue;
+            uint age = pc.m_frame - lighting[donor].frame;
+            uvec2 donor_attachment = lighting[donor].anchor.xw;
+            if (attachment.y != donor_attachment.y ||
+                (attachment.y != 0u && attachment.x != donor_attachment.x))
+                continue;
+            vec3 donor_normal = u_surfels[donor].m_normal;
+            float facing = dot(normal, donor_normal);
+            if (facing <= 0.75)
+                continue;
+            float separation = abs(dot(delta, normal + donor_normal));
+            float thickness = 0.1 * support * sqrt(2.0 + 2.0 * facing);
+            if (separation >= thickness)
+                continue;
+            float weight = (1.0 - distance_squared / (limit * limit)) *
+                smoothstep(0.75, 0.98, facing) * (1.0 - smoothstep(0.0, thickness, separation));
+            vec4 donor_light = lighting[donor].local_irradiance;
+            float noise = 0.03 + sqrt(local_variance + lighting[donor].variance);
+            float difference = length(donor_light.rgb - local_light.rgb) / noise;
+            float trust = smoothstep(0.0, SURFEL_CONFIDENT_SAMPLES, local_light.w);
+            weight *= mix(1.0, 1.0 / (1.0 + 0.25 * difference * difference), trust);
+            weight *= min(donor_light.w, SURFEL_CONFIDENT_SAMPLES) /
+                (1.0 + float(age) / float(4u * SURFEL_CACHED_TRACE_PERIOD));
+            sum.m_sum += donor_light.rgb * weight;
+            sum.m_weight += weight;
+            sum.m_log_luminance += log(surfelShareLuminance(donor_light.rgb)) * weight;
+        }
+    }
+    return sum;
+}
+
+void main()
+{
+    uint id = gl_GlobalInvocationID.x;
+    if (id >= pc.m_surfel_count || u_surfels[id].m_radius <= 0.0 || lighting[id].buried != 0u)
+        return;
+    vec4 local_light = lighting[id].local_irradiance;
+    vec3 position = u_surfels[id].m_position;
+    vec3 normal = u_surfels[id].m_normal;
+    float radius = u_surfels[id].m_radius;
+    SharedIrradiance neighbors = sharedIrradiance(id, position, normal, radius);
+    float self_weight = min(local_light.w, SURFEL_CONFIDENT_SAMPLES);
+    float weight = self_weight + neighbors.m_weight;
+    if (weight <= 0.0)
+        return;
+    vec3 estimate = (self_weight * local_light.rgb + neighbors.m_sum) / weight;
+    float log_luminance = (self_weight * log(surfelShareLuminance(local_light.rgb)) +
+        neighbors.m_log_luminance) / weight;
+    float luminance_limit = SURFEL_SHARE_LUMINANCE_LIMIT * exp(log_luminance);
+    float estimate_luminance = dot(max(estimate, vec3(0.0)), SURFEL_SHARE_LUMINANCE);
+    if (estimate_luminance > luminance_limit)
+        estimate *= luminance_limit / estimate_luminance;
+    float blend = u_surfels[id].m_samples > 0.0 && (pc.m_cache & SURFEL_CACHE_FRAME) != 0u ?
+        1.0 - exp2(-max(pc.m_steps, 0.01) / 2.0) : 1.0;
+    u_surfels[id].m_irradiance = mix(u_surfels[id].m_irradiance, estimate, blend);
+    u_surfels[id].m_samples = min(weight, SURFEL_CONFIDENT_SAMPLES);
+}

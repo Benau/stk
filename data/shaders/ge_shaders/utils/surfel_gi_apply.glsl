@@ -1,78 +1,12 @@
-// The irradiance of the pixels from the surfels (GEVulkanSurfelGI, see
-// utils/surfel_gi.glsl), shared by surfel_gi_apply.comp, surfel_gi_gather.comp
-// and surfel_gi_spawn.comp, which all run on the pixels of the viewport of a
-// camera (pc.m_rect).
-//
-// The irradiance of the surface of a pixel is the weighted mean of the surfels
-// which touch it, in the 2x2x2 cells nearest to it (by the distance to their
-// center and the normal), its alpha is how much they cover it (the lighting
-// pass mixes it with the irradiance of the environment by it). A surfel which
-// is used is kept alive.
-//
-// A pixel which they don't cover enough (a kart, or a hole between them) gets
-// the irradiance of the surfels within a cell around it too, the ones which it
-// is in front of, like an irradiance probe made of them (a kart in a room is
-// lit by the surfels of its floor and its walls, not by the sky). They are in
-// the 3x3x3 cells around the cell of the pixel: the 2x2x2 nearest cells only
-// have all the surfels within half a cell, a farther one would be in them on
-// one side of the border of a cell and not on the other, which is a seam on
-// the kart, and half a cell is too short (the ground under a kart is hidden,
-// it has no surfels). The ones which face the same way weigh the most, but all
-// of them weigh some, so a side which no surfel faces still gets the color of
-// the room. It doesn't keep them alive or stop a spawn.
-//
-// Every 8x8 tile of the viewport spawns a surfel at its least covered pixel if
-// the surfels don't cover it enough and its cell is not full (with the
-// surfels spawned in this frame), only on the static scene: the ray from the
-// camera to the pixel must hit the static BLAS there (a kart or anything
-// moving is not static, and the surfels never move).
-//
-// With the frame cache (SURFEL_CACHE_FRAME), the irradiance of a pixel whose
-// surfels converged and cover it doesn't change anymore: it's in the history
-// (u_history_out), and the next frame reuses it if its surface is at the same
-// pixel of the history (the position seen by the camera of the last frame, at
-// the same distance from it and with the same normal), so it doesn't look for
-// its surfels. A tile looks for them in one of SURFEL_HISTORY_PERIOD frames
-// anyway (they take turns), which keeps them alive and follows their radius.
-// A pixel which reuses its irradiance doesn't spawn, it's covered.
-//
-// Set 0 is the one of GEVulkanRTScene, set 1 the camera and the global light
-// of the viewport, set 2 the g-buffer, the output, the surfels and the
-// history, and set 3 the mesh textures (of the alpha tested geometries). The
-// shader which includes it enables GL_EXT_ray_query
+#ifdef SUBGROUP_BALLOT
+#extension GL_KHR_shader_subgroup_ballot : require
+#endif
 
 #define SURFEL_SET 2
 #define MESH_TEXTURES_SET 3
 
 layout(set = 2, binding = 0) uniform sampler2D u_depth;
 layout(set = 2, binding = 1) uniform sampler2D u_normal;
-layout(set = 2, binding = 2, rgba16f) uniform writeonly image2D u_out;
-// The history of the last frame and the one of this frame (the next frame
-// reads it), the irradiance (packSurfelIrradiance) and the surface
-// (packHistorySurface of utils/prev_camera.glsl) of a pixel, 0 if it can't be
-// reused
-layout(set = 2, binding = 12, rg32ui) uniform readonly uimage2D u_history_in;
-layout(set = 2, binding = 13, rg32ui) uniform writeonly uimage2D u_history_out;
-
-// The pixels which surfel_gi_apply.comp couldn't reuse (packSurfelPixel), for
-// surfel_gi_gather.comp, which is dispatched with m_dispatch (it's the number
-// of groups of 64 of them)
-layout(std430, set = 2, binding = 9) buffer SurfelMissList
-{
-    uint m_count;
-    // The indirect dispatch (x, y, z groups)
-    uint m_dispatch[3];
-    uint m_pixels[];
-} u_misses;
-
-// The spawn of every 8x8 tile of the viewport (getSurfelSpawnKey), the least
-// covered pixel of the tile which needs a surfel, 0xFFFFFFFF for none, for
-// surfel_gi_spawn.comp
-layout(std430, set = 2, binding = 10) buffer SurfelTileSpawns
-{
-    uint u_tile_spawns[];
-};
-
 #include "camera.glsl"
 #include "constants_utils.glsl"
 #include "unproject_position.glsl"
@@ -82,28 +16,14 @@ layout(std430, set = 2, binding = 10) buffer SurfelTileSpawns
 #include "rt_utils.glsl"
 #include "rt_scene.glsl"
 #include "surfel_gi.glsl"
-#include "prev_camera.glsl"
-
-// The camera of every viewport in the last frame (GEVulkanPrevCamera), which
-// rendered the history
-layout(std430, set = SURFEL_SET, binding = 8) readonly buffer SurfelPrevCameras
-{
-    PrevCamera u_prev_cameras[];
-};
-
+#include "surfel_gi_volume.glsl"
+#include "surfel_gi_cache.glsl"
 // A pixel less covered than it gets a new surfel
-const float SURFEL_SPAWN_COVERAGE = 0.5;
+const float SURFEL_SPAWN_COVERAGE = 0.75;
 // Chance of a tile to spawn in a step (1/60 s, the chance of a frame is the
 // one of its steps), so the tiles around a hole don't all spawn in the same
 // frame (the new surfels are in the grid in the next one)
 const float SURFEL_SPAWN_CHANCE = 0.25;
-// With the frame cache, the steps of samples which all the surfels of a pixel
-// need before its irradiance is in the history: it changes little after them
-// (a pixel which reuses it looks for its surfels again in
-// SURFEL_HISTORY_PERIOD frames)
-const float SURFEL_CACHE_MIN_SAMPLES = 64.0;
-// With the frame cache, the coverage of the surfels with enough samples around
-// a new surfel which it starts with their samples, see spawnSurfel()
 const float SURFEL_SEED_COVERAGE = 0.25;
 
 // The surface of a pixel in the g-buffer
@@ -111,10 +31,9 @@ struct SurfelPixel
 {
     vec3 m_position;
     vec3 m_normal;
-    // As it's stored in the g-buffer (for the history)
-    vec2 m_encoded_normal;
     // To the closest camera (the level of the grid)
     float m_camera_distance;
+    float m_error;
 };
 
 // The surfels which touch a pixel
@@ -124,12 +43,11 @@ struct SurfelGather
     // and the sum of the weights
     vec3 m_irradiance;
     float m_weight_sum;
+    float m_origin_distance_sum;
     // The sum of their weights without the confidence
     float m_coverage;
     // The fewest steps of samples of them
     float m_min_samples;
-    // The cell of the pixel is full
-    bool m_cell_full;
 };
 
 // ----------------------------------------------------------------------------
@@ -138,17 +56,21 @@ bool loadSurfelPixel(ivec2 pixel, out SurfelPixel p)
 {
     p.m_position = vec3(0.0);
     p.m_normal = vec3(0.0, 1.0, 0.0);
-    p.m_encoded_normal = vec2(0.0);
     p.m_camera_distance = 0.0;
+    p.m_error = 0.0;
     float depth = texelFetch(u_depth, pixel, 0).x;
     if (depth == 0.0)
         return false;
     vec3 xpos = getPosFromUVDepth(vec3(vec2(pixel) + 0.5, depth),
         u_camera.m_viewport, u_camera.m_inverse_projection_matrix);
     p.m_position = (u_camera.m_inverse_view_matrix * vec4(xpos, 1.0)).xyz;
-    p.m_encoded_normal = texelFetch(u_normal, pixel, 0).xy;
-    p.m_normal = DecodeNormal(p.m_encoded_normal);
+    p.m_normal = DecodeNormal(texelFetch(u_normal, pixel, 0).xy);
     p.m_camera_distance = getSurfelCameraDistance(p.m_position);
+    vec3 camera = u_camera.m_inverse_view_matrix[3].xyz;
+    float view_distance = length(p.m_position - camera);
+    float quantum = max(pc.m_depth_step, uintBitsToFloat(floatBitsToUint(depth) + 1u) - depth);
+    p.m_error = view_distance * quantum / max(depth, quantum) +
+        (length(p.m_position) + length(camera) + view_distance) * 4.76837e-7;
     return true;
 }   // loadSurfelPixel
 
@@ -160,13 +82,11 @@ SurfelGather gatherSurfels(SurfelPixel p)
     SurfelGather g;
     g.m_irradiance = vec3(0.0);
     g.m_weight_sum = 0.0;
+    g.m_origin_distance_sum = 0.0;
     g.m_coverage = 0.0;
-    g.m_min_samples = SURFEL_CACHED_MAX_SAMPLES;
+    g.m_min_samples = SURFEL_MAX_SAMPLES;
     uint level = getSurfelLevel(p.m_camera_distance);
     float cell_size = getSurfelCellSize(level);
-    g.m_cell_full = false;
-    // The cell of the pixel is one of the nearest ones, and never skipped
-    ivec3 pixel_cell = ivec3(floor(p.m_position / cell_size));
     ivec3 first = getSurfelNearestCells(p.m_position, cell_size);
     // The loops are bound by the surfels which they go through (few of them
     // touch the pixel), so the cells which are too far to have one are
@@ -178,342 +98,120 @@ SurfelGather gatherSurfels(SurfelPixel p)
         if (getSurfelCellDistance2(p.m_position, cell_position, cell_size) >=
             max_radius * max_radius)
             continue;
-        uint cell = getSurfelCell(cell_position, level);
-        uint count = min(u_cell_count[cell], SURFEL_CELL_CAPACITY);
-        if (all(equal(cell_position, pixel_cell)))
-            g.m_cell_full = count >= SURFEL_CELL_CAPACITY;
-        uint list = cell * (SURFEL_CELL_CAPACITY / 4u);
-        for (uint i = 0u; i < count; i += 4u)
+        uint lane_cell = getSurfelCell(cell_position, level);
+        do
         {
-            // The ids 4 at a time, the loop is bound by the loads which wait
-            // for the one before (the id, then the surfel of the id)
-            uvec4 ids = u_cell_surfels4[list + i / 4u];
-            // And their positions and radii together (the ids past the
-            // count are not used, they can be anything)
-            vec4 spheres[4];
-            for (uint j = 0u; j < 4u; j++)
+#ifdef SUBGROUP_BALLOT
+            uint cell = subgroupBroadcastFirst(lane_cell);
+            if (cell != lane_cell)
+                continue;
+#else
+            uint cell = lane_cell;
+#endif
+            uint count = u_cell_count[cell];
+            uint list = cell * (SURFEL_CELL_CAPACITY / 4u);
+            uint link = ~0u;
+            for (uint i = 0u; i < count; i += 4u)
             {
-                spheres[j] = u_surfels_vec4[
-                    min(ids[j], pc.m_surfel_count - 1u) * 3u];
+                // The ids 4 at a time, the loop is bound by the loads which wait
+                // for the one before (the id, then the surfel of the id)
+                uvec4 ids;
+                if (i < SURFEL_CELL_CAPACITY)
+                    ids = u_cell_surfels4[list + i / 4u];
+                else
+                    for (uint entry = 0u; entry < min(count - i, 4u); ++entry)
+                        ids[entry] = nextCellSurfel(cell, i + entry, link);
+                for (uint j = 0u; j < 4u && i + j < count; j++)
+                {
+                    uint id = ids[j];
+                    // Most of them don't touch the pixel, the rest of a surfel
+                    // is only read if it's close enough
+                    vec4 sphere = u_surfels_vec4[id * 3u];
+                    vec3 offset = p.m_position - sphere.xyz;
+                    float radius = sphere.w;
+                    float offset_distance = length(offset);
+                    if (offset_distance >= radius)
+                        continue;
+                    // The rest together (the normal and the last time seen, the
+                    // irradiance and the samples)
+                    vec4 normal_seen = u_surfels_vec4[id * 3u + 1u];
+                    vec4 irradiance_samples = u_surfels_vec4[id * 3u + 2u];
+                    vec3 normal = normal_seen.xyz;
+                    float plane_distance = dot(offset, normal);
+                    float facing = dot(p.m_normal, normal);
+                    // Not on the same side of a thin wall, or on another plane
+                    if (facing <= 0.0 || abs(plane_distance) > radius * 0.5)
+                        continue;
+                    float samples = irradiance_samples.w;
+                    float radial = offset_distance / radius;
+                    float placement = 1.0 - radial;
+                    g.m_coverage += placement * placement * facing;
+                    float falloff = 1.0 - radial * radial;
+                    float weight = falloff * falloff * facing;
+                    g.m_min_samples = min(g.m_min_samples, lighting[id].anchor.w != 0u ? 0.0 : samples);
+                    // A new surfel has a noisy mean
+                    float confidence =
+                        min(samples / SURFEL_CONFIDENT_SAMPLES, 1.0);
+                    g.m_irradiance += irradiance_samples.xyz *
+                        (weight * confidence);
+                    g.m_weight_sum += weight * confidence;
+                    g.m_origin_distance_sum += length(offset - normal * lighting[id].bias) *
+                        (weight * confidence);
+                    // Most surfels are used by many pixels, the ones of the
+                    // groups after the first which used it in the frame don't
+                    // write it again
+                    if (floatBitsToUint(normal_seen.w) != pc.m_time)
+                        u_surfels[id].m_last_seen = pc.m_time;
+                }
             }
-            for (uint j = 0u; j < 4u && i + j < count; j++)
-            {
-                uint id = ids[j];
-                // Most of them don't touch the pixel, the rest of a surfel
-                // is only read if it's close enough
-                vec3 offset = p.m_position - spheres[j].xyz;
-                float radius = spheres[j].w;
-                float offset_distance = length(offset);
-                if (offset_distance >= radius)
-                    continue;
-                // The rest together (the normal and the last time seen, the
-                // irradiance and the samples)
-                vec4 normal_seen = u_surfels_vec4[id * 3u + 1u];
-                vec4 irradiance_samples = u_surfels_vec4[id * 3u + 2u];
-                vec3 normal = normal_seen.xyz;
-                float plane_distance = dot(offset, normal);
-                float facing = dot(p.m_normal, normal);
-                // Not on the same side of a thin wall, or on another plane
-                if (facing <= 0.0 || abs(plane_distance) > radius * 0.5)
-                    continue;
-                float samples = irradiance_samples.w;
-                float falloff = 1.0 - offset_distance / radius;
-                float weight = falloff * falloff * facing;
-                g.m_coverage += weight;
-                g.m_min_samples = min(g.m_min_samples, samples);
-                // A new surfel has a noisy mean
-                float confidence =
-                    min(samples / SURFEL_CONFIDENT_SAMPLES, 1.0);
-                g.m_irradiance += irradiance_samples.xyz *
-                    (weight * confidence);
-                g.m_weight_sum += weight * confidence;
-                // Most surfels are used by many pixels, the ones of the
-                // groups after the first which used it in the frame don't
-                // write it again
-                if (floatBitsToUint(normal_seen.w) != pc.m_time)
-                    u_surfels[id].m_last_seen = pc.m_time;
-            }
-        }
+            break;
+        } while (true);
     }
     return g;
 }   // gatherSurfels
 
 // ----------------------------------------------------------------------------
-// The irradiance of the surfels within a cell of a pixel which they don't
-// cover (alpha is how much of it there is), see above
-vec4 getNearbyIrradiance(SurfelPixel p)
+uint getSurfelSpawnKey(uint seed, SurfelGather g)
 {
-    uint level = getSurfelLevel(p.m_camera_distance);
-    float cell_size = getSurfelCellSize(level);
-    ivec3 center = ivec3(floor(p.m_position / cell_size));
-    vec3 irradiance = vec3(0.0);
-    float weight_sum = 0.0;
-    for (int c = 0; c < 27; c++)
-    {
-        ivec3 cell_position =
-            center + ivec3(c % 3, (c / 3) % 3, c / 9) - 1;
-        // Too far to have a surfel within a cell of the pixel
-        if (getSurfelCellDistance2(p.m_position, cell_position, cell_size) >=
-            cell_size * cell_size)
-            continue;
-        uint cell = getSurfelCell(cell_position, level);
-        uint count = min(u_cell_count[cell], SURFEL_CELL_CAPACITY);
-        uint list = cell * (SURFEL_CELL_CAPACITY / 4u);
-        for (uint i = 0u; i < count; i += 4u)
-        {
-            // The ids 4 at a time like gatherSurfels()
-            uvec4 ids = u_cell_surfels4[list + i / 4u];
-            vec4 spheres[4];
-            for (uint j = 0u; j < 4u; j++)
-            {
-                spheres[j] = u_surfels_vec4[
-                    min(ids[j], pc.m_surfel_count - 1u) * 3u];
-            }
-            for (uint j = 0u; j < 4u && i + j < count; j++)
-            {
-                uint id = ids[j];
-                // The rest of a surfel is only read if it's close enough
-                vec3 offset = p.m_position - spheres[j].xyz;
-                float offset_distance = length(offset);
-                if (offset_distance >= cell_size)
-                    continue;
-                // The rest together, most of them are used
-                vec3 normal = u_surfels_vec4[id * 3u + 1u].xyz;
-                vec4 irradiance_samples = u_surfels_vec4[id * 3u + 2u];
-                // Behind it is the other side of its wall
-                if (dot(offset, normal) < -0.05 * cell_size)
-                    continue;
-                float facing = 0.5 + 0.5 * dot(p.m_normal, normal);
-                float falloff = 1.0 - offset_distance / cell_size;
-                // A new surfel has a noisy mean
-                float weight = falloff * falloff * facing * facing *
-                    min(irradiance_samples.w / SURFEL_CONFIDENT_SAMPLES, 1.0);
-                irradiance += irradiance_samples.xyz * weight;
-                weight_sum += weight;
-            }
-        }
-    }
-    if (weight_sum == 0.0)
-        return vec4(0.0);
-    return vec4(irradiance / weight_sum, clamp(weight_sum, 0.0, 1.0));
-}   // getNearbyIrradiance
-
-// ----------------------------------------------------------------------------
-// The output of a pixel from its surfels (and the ones around it if they don't
-// cover it), cacheable is set if it can be in the history: the history has no
-// alpha (a pixel which reuses it is covered), and only the irradiance of
-// surfels with enough samples doesn't change much anymore.
-//
-// A pixel which needs the surfels around it is never in the history: it's
-// mostly a kart or something else which moves, and the history is reprojected
-// with the camera only, so when the camera turns around a kart, its pixels
-// would reuse the irradiance of another part of it at the same distance with
-// a similar normal (its ears looked blurry), the nearby irradiance also
-// changes with its position
-vec4 resolveSurfelPixel(SurfelPixel p, SurfelGather g, out bool cacheable)
-{
-    vec4 gi = vec4(0.0);
-    if (g.m_weight_sum > 0.0)
-    {
-        gi = vec4(g.m_irradiance / g.m_weight_sum,
-            clamp(g.m_weight_sum * 2.0, 0.0, 1.0));
-    }
-    cacheable = gi.a >= 1.0 && g.m_min_samples >= SURFEL_CACHE_MIN_SAMPLES;
-    if (gi.a < 1.0)
-    {
-        vec4 nearby = getNearbyIrradiance(p);
-        // The surfels on the surface first
-        if (nearby.a > 0.0)
-            gi = vec4(mix(nearby.rgb, gi.rgb, gi.a), max(gi.a, nearby.a));
-    }
-    return gi;
-}   // resolveSurfelPixel
-
-// ----------------------------------------------------------------------------
-// 9 bits for every channel and a shared exponent of 5 bits (like RGB9E5), so
-// the history is small
-uint packSurfelIrradiance(vec3 rgb)
-{
-    // The largest value of the exponent (16) with 511 in the bits
-    rgb = clamp(rgb, vec3(0.0), vec3(65408.0));
-    float max_channel = max(max(rgb.r, rgb.g), rgb.b);
-    // 2 ^ (exponent - 1) <= max_channel < 2 ^ exponent, in [-15, 16]
-    int exponent = max(int(floor(log2(max(max_channel, 1.0e-10)))), -16) + 1;
-    float scale = exp2(float(exponent - 9));
-    // Rounded up to 512
-    if (floor(max_channel / scale + 0.5) >= 512.0)
-    {
-        exponent++;
-        scale *= 2.0;
-    }
-    uvec3 bits = uvec3(min(floor(rgb / scale + 0.5), vec3(511.0)));
-    return bits.r | (bits.g << 9u) | (bits.b << 18u) |
-        (uint(exponent + 15) << 27u);
-}   // packSurfelIrradiance
-
-// ----------------------------------------------------------------------------
-vec3 unpackSurfelIrradiance(uint packed)
-{
-    return vec3(uvec3(packed, packed >> 9u, packed >> 18u) & 511u) *
-        exp2(float(int(packed >> 27u) - 15 - 9));
-}   // unpackSurfelIrradiance
-
-// ----------------------------------------------------------------------------
-// The irradiance of a position in the history, if the camera of the last frame
-// saw it at a pixel which can be reused (isHistorySurface)
-bool getSurfelHistory(SurfelPixel p, out vec3 irradiance)
-{
-    irradiance = vec3(0.0);
-    PrevCamera camera = u_prev_cameras[pc.m_viewport_index];
-    vec2 uv;
-    if (!getPrevCameraPixel(camera, p.m_position, uv))
-        return false;
-    ivec2 pixel = ivec2(floor(uv));
-    if (any(lessThan(pixel, pc.m_rect.xy)) ||
-        any(greaterThanEqual(pixel, pc.m_rect.zw)))
-        return false;
-    uvec2 history = imageLoad(u_history_in, pixel).xy;
-    if (!isHistorySurface(history.y, distance(p.m_position,
-        camera.m_position.xyz), p.m_normal))
-        return false;
-    irradiance = unpackSurfelIrradiance(history.x);
-    return true;
-}   // getSurfelHistory
-
-// ----------------------------------------------------------------------------
-// The tiles take turns to look for their surfels even if their pixels can be
-// reused (see above)
-bool isSurfelHistoryTurn(ivec2 pixel)
-{
-    uvec2 tile = uvec2(pixel - pc.m_rect.xy) / 8u;
-    return (tile.x + tile.y * 3u + pc.m_frame) % SURFEL_HISTORY_PERIOD != 0u;
-}   // isSurfelHistoryTurn
-
-// ----------------------------------------------------------------------------
-// The output and the history (with the frame cache) of a pixel
-void storeSurfelPixel(ivec2 pixel, SurfelPixel p, vec4 gi, bool cacheable)
-{
-    imageStore(u_out, pixel, gi);
-    if ((pc.m_cache & SURFEL_CACHE_FRAME) == 0u)
-        return;
-    uvec2 history = uvec2(0u);
-    if (cacheable)
-    {
-        history = uvec2(packSurfelIrradiance(gi.rgb),
-            packHistorySurface(distance(p.m_position,
-            u_camera.m_inverse_view_matrix[3].xyz), p.m_encoded_normal));
-    }
-    imageStore(u_history_out, pixel, uvec4(history, 0u, 0u));
-}   // storeSurfelPixel
-
-// ----------------------------------------------------------------------------
-// The order of the pixels of a tile which need a surfel, the least covered one
-// first: the coverage (rounded, a float which is not negative has the same
-// order as its bits) and the pixel in the tile. 0xFFFFFFFF if it doesn't need
-// one
-uint getSurfelSpawnKey(ivec2 pixel, SurfelPixel p, SurfelGather g)
-{
-    if (g.m_cell_full || g.m_coverage >= SURFEL_SPAWN_COVERAGE ||
-        p.m_camera_distance >= SURFEL_MAX_DISTANCE)
+    if (g.m_coverage >= SURFEL_SPAWN_COVERAGE)
         return 0xFFFFFFFFu;
-    uvec2 in_tile = uvec2(pixel - pc.m_rect.xy) & 7u;
-    return (floatBitsToUint(g.m_coverage) & ~63u) | (in_tile.y * 8u) |
-        in_tile.x;
+    float sample_value = max(getSurfelRandom(seed), 1.0 / 16777216.0);
+    float priority = -log2(sample_value) / (SURFEL_SPAWN_COVERAGE - g.m_coverage);
+    return (floatBitsToUint(priority) & ~63u) | gl_LocalInvocationIndex;
 }   // getSurfelSpawnKey
 
 // ----------------------------------------------------------------------------
-// In u_misses
-uint packSurfelPixel(ivec2 pixel)
+bool findAttachment(SurfelPixel surface, out vec3 position, out vec3 normal, out uvec4 anchor)
 {
-    return uint(pixel.x) | (uint(pixel.y) << 16u);
-}   // packSurfelPixel
-
-// ----------------------------------------------------------------------------
-ivec2 unpackSurfelPixel(uint packed)
-{
-    return ivec2(packed & 0xFFFFu, packed >> 16u);
-}   // unpackSurfelPixel
-
-// ----------------------------------------------------------------------------
-// No surfel
-SurfelGather getEmptySurfelGather()
-{
-    SurfelGather g;
-    g.m_irradiance = vec3(0.0);
-    g.m_weight_sum = 0.0;
-    g.m_coverage = 0.0;
-    g.m_min_samples = SURFEL_CACHED_MAX_SAMPLES;
-    g.m_cell_full = false;
-    return g;
-}   // getEmptySurfelGather
-
-// ----------------------------------------------------------------------------
-// The tile of a pixel in u_tile_spawns
-uint getSurfelTile(ivec2 pixel)
-{
-    uvec2 tile = uvec2(pixel - pc.m_rect.xy) / 8u;
-    uint tiles_x = uint(pc.m_rect.z - pc.m_rect.x + 7) / 8u;
-    return tile.y * tiles_x + tile.x;
-}   // getSurfelTile
-
-// ----------------------------------------------------------------------------
-// Whether the surface at the end of the ray from the camera is in the static
-// scene, and the camera is not inside of a mesh of it: then the g-buffer has
-// what is behind the faces around it (their back is culled), and a surfel there
-// would be inside of the mesh too, so all its rays see the back of a triangle
-// and it's black. The ray from the camera must not cross the back of a triangle
-// before the surface (or at it, the mesh can touch the surface). The distance
-// of the hit has some tolerance, so the surfel is at the hit with the normal
-// of the static scene (without the normal map of the g-buffer), not at the
-// pixel: something which moves and stands on the static scene (an item on the
-// ground) is at the distance of the ground behind it at its bottom, a surfel
-// there had its normal and stayed when it turned, lighting other parts of it
-bool isStaticSurface(vec3 camera, vec3 position, out vec3 hit_position,
-                     out vec3 hit_normal)
-{
-    vec3 to_position = position - camera;
-    float position_distance = length(to_position);
-    vec3 direction = to_position / position_distance;
-    float ray_max = position_distance * 1.02 + 0.1;
-    rayQueryEXT ray_query;
-    rayQueryInitializeEXT(ray_query, u_tlas, gl_RayFlagsNoneEXT,
-        RT_MASK_STATIC, camera, 0.0, direction, ray_max);
-    RT_PROCEED(ray_query)
-    if (rayQueryGetIntersectionTypeEXT(ray_query, true) ==
-        gl_RayQueryCommittedIntersectionNoneEXT ||
-        !rayQueryGetIntersectionFrontFaceEXT(ray_query, true))
+    vec3 camera = u_camera.m_inverse_view_matrix[3].xyz;
+    vec3 delta = surface.m_position - camera;
+    float depth = length(delta);
+    vec3 direction = delta / max(depth, 1e-8);
+    float tolerance = max(0.002, 4.0 * surface.m_error);
+    rayQueryEXT query;
+    rayQueryInitializeEXT(query, u_tlas, gl_RayFlagsNoneEXT, RT_MASK_STATIC | RT_MASK_DYNAMIC,
+        camera, 0.0, direction, depth + tolerance);
+    RT_PROCEED(query)
+    if (rayQueryGetIntersectionTypeEXT(query, true) == gl_RayQueryCommittedIntersectionNoneEXT ||
+        !rayQueryGetIntersectionFrontFaceEXT(query, true))
         return false;
-    float hit = rayQueryGetIntersectionTEXT(ray_query, true);
-    if (abs(hit - position_distance) >= position_distance * 0.02 + 0.05)
+    float hit = rayQueryGetIntersectionTEXT(query, true);
+    if (abs(hit - depth) > tolerance)
         return false;
-    hit_position = camera + direction * hit;
-    // The interpolated normal of the hit like shadeHit
-    RTGeometry geometry = u_rt_geometries[
-        uint(rayQueryGetIntersectionInstanceCustomIndexEXT(ray_query, true)) +
-        uint(rayQueryGetIntersectionGeometryIndexEXT(ray_query, true))];
-    uint primitive =
-        uint(rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true));
-    vec2 b = rayQueryGetIntersectionBarycentricsEXT(ray_query, true);
-    hit_normal =
-        getRTVertexNormal(geometry, getRTIndex(geometry, primitive * 3u)) *
-        (1.0 - b.x - b.y) +
-        getRTVertexNormal(geometry, getRTIndex(geometry, primitive * 3u + 1u)) *
-        b.x +
-        getRTVertexNormal(geometry, getRTIndex(geometry, primitive * 3u + 2u)) *
-        b.y;
-    // The inverse transpose of object to world (row vector times matrix)
-    hit_normal = normalize(hit_normal *
-        mat3(rayQueryGetIntersectionWorldToObjectEXT(ray_query, true)));
-
-    rayQueryEXT back_query;
-    rayQueryInitializeEXT(back_query, u_tlas,
-        gl_RayFlagsTerminateOnFirstHitEXT |
-        gl_RayFlagsCullFrontFacingTrianglesEXT, RT_MASK_STATIC, camera, 0.0,
-        direction, ray_max);
-    RT_PROCEED(back_query)
-    return rayQueryGetIntersectionTypeEXT(back_query, true) ==
-        gl_RayQueryCommittedIntersectionNoneEXT;
-}   // isStaticSurface
+    uint geometry = rayQueryGetIntersectionInstanceCustomIndexEXT(query, true) + rayQueryGetIntersectionGeometryIndexEXT(query, true);
+    RTGeometry info = u_rt_geometries[geometry];
+    if ((info.m_flags & RT_GEOMETRY_STATIC) == 0u && (info.m_owner == 0u ||
+        !canAttachDynamicSurfel(info.m_bounds_min.xyz, info.m_bounds_max.xyz)))
+        return false;
+    uint primitive = rayQueryGetIntersectionPrimitiveIndexEXT(query, true);
+    vec2 bary = rayQueryGetIntersectionBarycentricsEXT(query, true);
+    normal = getRTHitNormal(geometry, primitive, bary, mat3(rayQueryGetIntersectionWorldToObjectEXT(query, true)));
+    if (dot(surface.m_normal, normal) < 0.7)
+        return false;
+    position = camera + hit * direction;
+    anchor = uvec4(geometry, primitive, packUnorm2x16(bary), info.m_owner);
+    return true;
+}
 
 // ----------------------------------------------------------------------------
 // The chance of the frame of a tile to spawn at the pixel of its key
@@ -534,8 +232,8 @@ void spawnSurfel(SurfelPixel p, SurfelGather g)
         return;
     vec3 position;
     vec3 normal;
-    if (!isStaticSurface(u_camera.m_inverse_view_matrix[3].xyz,
-        p.m_position, position, normal))
+    uvec4 anchor;
+    if (!findAttachment(p, position, normal, anchor))
         return;
     float camera_distance = getSurfelCameraDistance(position);
     if (!trySpawnSurfelInCell(getSurfelCell(position,
@@ -556,18 +254,22 @@ void spawnSurfel(SurfelPixel p, SurfelGather g)
     // What is already there, so it doesn't start black
     surfel.m_irradiance = g.m_weight_sum > 0.0 ?
         g.m_irradiance / g.m_weight_sum : vec3(0.0);
+    vec4 volume = lookupVolume(position, normal, true);
+    if (volume.a > 0.0)
+        surfel.m_irradiance = mix(surfel.m_irradiance, volume.rgb,
+            volume.a * (1.0 - min(g.m_coverage, 1.0)));
     surfel.m_samples = 0.0;
-    // With the frame cache, a surfel which spawns between surfels with enough
-    // samples starts with their mean (its irradiance above) and as many
-    // samples as them: the pixels around it would not be in the history until
-    // it has enough of its own, and a camera which moves keeps spawning
-    // smaller surfels between the ones of its surfaces (they shrink when it
-    // comes closer). A spawn is less covered than SURFEL_SPAWN_COVERAGE, so
-    // it only needs a few of them around it
     if ((pc.m_cache & SURFEL_CACHE_FRAME) != 0u &&
         g.m_coverage >= SURFEL_SEED_COVERAGE)
     {
-        surfel.m_samples = min(g.m_min_samples, SURFEL_CACHE_MIN_SAMPLES);
+        surfel.m_samples = min(g.m_min_samples, SURFEL_CONFIDENT_SAMPLES);
     }
+    vec3 ray = normalize(position - u_camera.m_inverse_view_matrix[3].xyz);
+    float bias = abs(dot(normal, ray)) * p.m_error + dot(abs(position), abs(normal)) * 2.38419e-7;
+    lighting[id] = SurfaceLighting(vec4(0.0), 0u, 0.0, 0.0,
+        max(0.0001, bias), 0u, 0u, 0u, anchor);
     u_surfels[id] = surfel;
+    uint entry = atomicAdd(new_surfels.count, 1u);
+    new_surfels.ids[entry] = id;
+    atomicMax(new_surfels.dispatch[0], entry / 64u + 1u);
 }   // spawnSurfel
