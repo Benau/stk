@@ -58,10 +58,7 @@ struct GERTVertex
 };
 
 // Per geometry data of the acceleration structure, indexed by the geometry
-// index of a ray hit (std430, 32 bytes), offsets are in units of
-// GERTVertex and uint32_t of the data buffer. Only m_uv_shift, m_hue and
-// m_vertex_color can change after the build (GEVulkanRTScene::update), the
-// rest is baked with the acceleration structure
+// index of a ray hit. Offsets are in units of GERTVertex and uint32_t.
 struct GERTGeometry
 {
     uint32_t m_vertex_offset;
@@ -77,7 +74,15 @@ struct GERTGeometry
     uint32_t m_vertex_color;
     // GERTGeometryFlag
     uint32_t m_flags;
+    uint32_t m_owner;
+    uint32_t m_surfel_gi_vertex_color;
+    uint32_t m_grass_position_word;
+    alignas(16) float m_transform[3][4];
+    uint32_t m_surfel_gi_uv_bounds[4];
+    float m_bounds_min[4];
+    float m_bounds_max[4];
 };
+static_assert(sizeof(GERTGeometry) == 144, "RT geometry shader stride");
 
 // Mask of the instances of the TLAS, the static BLAS and the instances of the
 // dynamic nodes have their own bit, so a ray can see only the static scene
@@ -96,7 +101,8 @@ enum GERTGeometryFlag : uint32_t
     GRTGF_CACHE_VERTEX = 1,
     // The indices are 16 bit ones in the mesh cache (m_index_offset is a
     // 16 bit index from the start of the mesh cache buffer)
-    GRTGF_CACHE_INDEX = 2
+    GRTGF_CACHE_INDEX = 2,
+    GRTGF_STATIC = 4
 };
 
 // All the static nodes (those with GRTT_STATIC in the render info of the
@@ -163,16 +169,20 @@ private:
 
     VmaAllocation m_data_memory;
 
-    // Only materials with a texture matrix need updating after the build.
+    VkDeviceSize m_surfel_gi_material_offset;
+
+    // Where the (mutable) GERTGeometry of a geometry comes from, the order is
+    // the one of the geometries of the BLAS
     struct GeometrySource
     {
         // Grabbed, so it's valid until clear()
         irr::scene::ISceneNode* m_node;
         unsigned m_material_index;
-        size_t m_geometry_index;
     };
 
     std::vector<GeometrySource> m_geometry_sources;
+
+    std::vector<irr::scene::ISceneNode*> m_static_material_nodes;
 
     // GERTGeometry array, one host visible buffer per getCurrentBufferIdx()
     // (frames in flight + 1) so it's written directly without any barrier or
@@ -188,11 +198,25 @@ private:
 
     std::vector<VkDescriptorSet> m_descriptor_sets;
 
-    VkBuffer m_blas_buffer;
-
-    VmaAllocation m_blas_memory;
-
-    VkAccelerationStructureKHR m_blas;
+    struct StaticPart
+    {
+        uint32_t m_first, m_count;
+        VkTransformMatrixKHR m_transform;
+        VkBuffer m_buffer;
+        VmaAllocation m_memory;
+        VkAccelerationStructureKHR m_handle;
+        VkDeviceSize m_bytes;
+    };
+    std::vector<StaticPart> m_static_parts;
+    std::vector<VkAccelerationStructureInstanceKHR> m_static_instances;
+    std::string staticCachePath(const std::vector<GERTVertex>& vertices,
+        const std::vector<uint32_t>& indices, const std::vector<GERTGeometry>& infos,
+        const std::vector<std::pair<uint32_t, uint32_t> >& counts) const;
+    bool loadStaticCache(const std::string& path);
+    void saveStaticCache(const std::string& path);
+    bool partitionStaticMeshes(std::vector<GERTVertex>& vertices,
+        std::vector<uint32_t>& indices, std::vector<GERTGeometry>& infos,
+        std::vector<std::pair<uint32_t, uint32_t> >& counts);
 
     // The top level acceleration structure of a buffer index (frames in
     // flight + 1 of them, same as m_geometry_data), with the host visible
@@ -217,8 +241,8 @@ private:
         VkDeviceAddress m_scratch_address;
         // Instances written to m_instance_buffer
         uint32_t m_instance_count;
-        // The instance buffer / the geometry buffer has only what the build
-        // has (the static BLAS), so the dynamic ray tracing was off
+        uint32_t m_active_geometries = 0;
+        // Only static BLAS instances are in the instance buffer.
         bool m_instance_static;
         // The TLAS has to be built again with the instance buffer
         bool m_dirty;
@@ -362,7 +386,6 @@ private:
     // changes
     struct GrassBLAS
     {
-        uint32_t m_id;
         // The baked fields (offsets in the mesh cache, shading type and flags)
         // of each geometry
         std::vector<GERTGeometry> m_infos;
@@ -389,7 +412,6 @@ private:
         // ------------------------------------------------------------------
         GrassBLAS()
         {
-            m_id = 0;
             m_scratch_size = 0;
             m_allocation = VK_NULL_HANDLE;
             m_blas_buffer = VK_NULL_HANDLE;
@@ -403,8 +425,6 @@ private:
     };
 
     std::map<MeshKey, std::unique_ptr<GrassBLAS> > m_grass_blas;
-
-    uint32_t m_grass_next_id;
 
     // Compute pipeline of grass_rt.comp, it uses the descriptor sets and the
     // pipeline layout of the skin one (see createGrassPipeline)
@@ -532,11 +552,12 @@ private:
     // ------------------------------------------------------------------------
     bool buildAccelerationStructures(
         const std::vector<VkAccelerationStructureGeometryKHR>& geometries,
-        const std::vector<VkAccelerationStructureBuildRangeInfoKHR>& ranges);
+        const std::vector<VkAccelerationStructureBuildRangeInfoKHR>& ranges,
+        const std::string& cache_path);
     // ------------------------------------------------------------------------
     // The instance of the static BLAS (identity, world space triangles, custom
     // index 0 which is the first GERTGeometry of the BLAS)
-    VkAccelerationStructureInstanceKHR getStaticInstance() const;
+    VkAccelerationStructureInstanceKHR getStaticInstance(const StaticPart& part) const;
 public:
     // ------------------------------------------------------------------------
     GEVulkanRTScene(GEVulkanDriver* vk);
@@ -561,6 +582,8 @@ public:
             m_top_levels[0].m_tlas != VK_NULL_HANDLE;
     }
     // ------------------------------------------------------------------------
+    uint32_t getActiveGeometries(unsigned buffer_idx) const
+                       { return m_top_levels[buffer_idx].m_active_geometries; }
     VkAccelerationStructureKHR getTLAS(unsigned buffer_idx) const
                                     { return m_top_levels[buffer_idx].m_tlas; }
     // ------------------------------------------------------------------------
@@ -585,9 +608,7 @@ public:
     //   found under root, and the skinned BLAS), the BLAS of new meshes and
     //   a new skinned BLAS are created (not built, see buildTopLevel)
     // - the joint matrices of the skinned nodes
-    // Only if GERayTracingConfig::m_dynamic_objects is true, otherwise the buffers
-    // are restored (once) to what the build wrote. Nothing is written if not
-    // isReady(). root is not changed
+    // Static materials are refreshed even when dynamic objects are disabled.
     // cameras are the absolute positions of the cameras of the frame
     void update(irr::scene::ISceneNode* root,
                 const GEVulkanStaticSceneManager& statics,
@@ -597,7 +618,8 @@ public:
     // new BLAS and the TLAS of the current buffer index if its instances
     // changed in update, outside any render pass and before the ray tracing
     // pass. The TLAS is visible to the fragment shaders after it
-    void buildTopLevel(VkCommandBuffer cmd);
+    void buildTopLevel(VkCommandBuffer cmd, bool async = false);
+    bool needsTopLevel(unsigned index) const { return isReady() && m_top_levels[index].m_dirty; }
     // ------------------------------------------------------------------------
     uint32_t getGeometryCount() const              { return m_geometry_count; }
     // ------------------------------------------------------------------------

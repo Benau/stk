@@ -125,6 +125,9 @@ private:
 
     irr::scene::SViewFrustum m_view_area;
 
+    irr::core::aabbox3df m_scene_bounds;
+    bool m_has_scene_bounds = false;
+
     irr::core::vector3df m_absolute_position;
 
     irr::core::vector3df m_target;
@@ -187,6 +190,16 @@ public:
     irr::f32 getNearValue() const                            { return m_near; }
     // ------------------------------------------------------------------------
     irr::f32 getFarValue() const                              { return m_far; }
+    const irr::core::aabbox3df* getSceneBounds() const
+                              { return m_has_scene_bounds ? &m_scene_bounds : nullptr; }
+    void addSceneBounds(const irr::core::aabbox3df& bounds)
+    {
+        if (m_has_scene_bounds)
+            m_scene_bounds.addInternalBox(bounds);
+        else
+            m_scene_bounds = bounds;
+        m_has_scene_bounds = true;
+    }
     // ------------------------------------------------------------------------
     void collectUBO(GEVulkanDriver* vk, GEVulkanDrawCall* dc,
                     VkCommandBuffer cmd = VK_NULL_HANDLE);

@@ -42,7 +42,7 @@ GEVulkanCamera::GEVulkanCamera()
                 minUniformBufferOffsetAlignment))
 {
     m_camera_ubo = new GEVulkanDynamicBuffer(
-        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         0/*will be grown later so forceUpdateDataDescriptorSets works*/,
         GEVulkanDriver::getMaxFrameInFlight() + 1,
         GEVulkanDynamicBuffer::supportsHostTransfer() ? 0 :
@@ -62,6 +62,7 @@ void GEVulkanCamera::update(GEVulkanCameraSceneNode* node)
     // Updates the view frustum of the node
     node->render();
     m_view_area = *node->getViewFrustum();
+    m_has_scene_bounds = false;
     m_absolute_position = node->getAbsolutePosition();
     m_target = node->getTarget();
     m_near = node->getNearValue();
