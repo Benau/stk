@@ -1,0 +1,22 @@
+#extension GL_EXT_ray_query : require
+layout(local_size_x = 16) in;
+#include "utils/surfel_gi_transport.glsl"
+
+void main()
+{
+    uint camera = gl_WorkGroupID.y;
+    uint rank = gl_WorkGroupID.x;
+    uint slot = scheduledProbe(camera, rank);
+    if (slot == ~0u)
+        return;
+    ivec3 cell = slotCell(slot);
+    float spacing = clipSpacing(camera, slot / SURFEL_GI_LAYER / volume_info.x);
+    vec3 offset = probes[slot].frame != 0u && probes[slot].cell == cell ? probes[slot].offset : vec3(0.0);
+    uint lane = gl_LocalInvocationIndex;
+    uint target = (camera * SURFEL_GI_BATCH + rank) * SURFEL_GI_RAYS + lane;
+    vec3 origin = surfelGIProbePosition(cell, offset, spacing);
+    float limit = max(1000.0, 4.0 * spacing);
+    vec4 ray = surfelGISegment(origin, probeRay(slot, lane), limit, target, 1.0);
+    ray.w = ray.w == limit ? 5.0 : clamp(ray.w / spacing, -4.0, 4.0);
+    ray_results[target] = ray;
+}

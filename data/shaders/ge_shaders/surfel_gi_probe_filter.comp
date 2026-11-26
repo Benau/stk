@@ -1,0 +1,94 @@
+layout(local_size_x = 64) in;
+#define SURFEL_SET 2
+#include "utils/surfel_gi.glsl"
+#include "utils/surfel_gi_volume.glsl"
+#include "utils/surfel_gi_ray_work.glsl"
+
+shared vec4 rays[SURFEL_GI_RAYS];
+shared vec3 directions[SURFEL_GI_RAYS];
+shared float blend;
+
+void main()
+{
+    uint camera = gl_WorkGroupID.y;
+    uint rank = gl_WorkGroupID.x;
+    uint slot = scheduledProbe(camera, rank);
+    if (slot == ~0u)
+        return;
+    uint lane = gl_LocalInvocationIndex;
+    if (lane < SURFEL_GI_RAYS)
+    {
+        rays[lane] = ray_results[(camera * SURFEL_GI_BATCH + rank) * SURFEL_GI_RAYS + lane];
+        directions[lane] = probeRay(slot, lane);
+    }
+    barrier();
+    if (lane == 0u)
+    {
+        ivec3 cell = slotCell(slot);
+        bool fresh = probes[slot].frame == 0u || probes[slot].cell != cell;
+        vec3 offset = fresh ? vec3(0.0) : probes[slot].offset;
+        vec4 stats = fresh || probes[slot].proximity < 0.0 ? vec4(0.0) : probes[slot].statistics;
+        float value = 0.0;
+        float nearest = 4.0;
+        vec4 sky = vec4(0.0);
+        vec3 direction_sum = vec3(0.0);
+        uint back_count = 0u;
+        uint exit_ray = 0u;
+        for (uint ray = 0u; ray < SURFEL_GI_RAYS; ++ray)
+        {
+            value += dot(rays[ray].rgb, vec3(0.2126, 0.7152, 0.0722));
+            nearest = min(nearest, abs(rays[ray].w));
+            direction_sum += directions[ray];
+            if (rays[ray].w > 4.0)
+                sky += vec4(directions[ray], 1.0);
+            if (rays[ray].w < 0.0)
+            {
+                if (back_count == 0u || rays[ray].w > rays[exit_ray].w)
+                    exit_ray = ray;
+                ++back_count;
+            }
+        }
+        bool inside = back_count > SURFEL_GI_RAYS / 3u;
+        if (inside)
+        {
+            offset += directions[exit_ray] * (0.05 - rays[exit_ray].w);
+            offset *= min(1.0, 0.45 / max(length(offset), 0.001));
+        }
+        blend = adaptiveBlend(value / float(SURFEL_GI_RAYS), 0.04, stats);
+        sky /= float(SURFEL_GI_RAYS);
+        sky.xyz = 2.0 * (sky.xyz - sky.w * direction_sum / float(SURFEL_GI_RAYS));
+        probes[slot].sky_visibility = blend < 1.0 ? mix(probes[slot].sky_visibility, sky, blend) : sky;
+        probes[slot].cell = cell;
+        probes[slot].frame = pc.m_frame;
+        probes[slot].statistics = stats;
+        probes[slot].offset = offset;
+        probes[slot].proximity = inside ? -1.0 : nearest;
+    }
+    barrier();
+    if (lane < SURFEL_GI_LIGHT_WIDTH * SURFEL_GI_LIGHT_WIDTH)
+    {
+        vec3 axis = octDirection(octInterior(lane, SURFEL_GI_LIGHT_WIDTH), SURFEL_GI_LIGHT_INTERIOR);
+        vec4 sum = vec4(0.0);
+        for (uint ray = 0u; ray < SURFEL_GI_RAYS; ++ray)
+            sum += max(dot(axis, directions[ray]), 0.0) * vec4(rays[ray].rgb, 1.0);
+        vec3 light = sum.rgb / max(sum.w, 1e-5);
+        if (blend < 1.0)
+            light = mix(unpackSurfelGIRGB(probes[slot].light[lane]), light, blend);
+        probes[slot].light[lane] = packSurfelGIRGB(light);
+    }
+    for (uint index = lane; index < SURFEL_GI_DEPTH_WIDTH * SURFEL_GI_DEPTH_WIDTH; index += 64u)
+    {
+        vec3 axis = octDirection(octInterior(index, SURFEL_GI_DEPTH_WIDTH), SURFEL_GI_DEPTH_INTERIOR);
+        vec3 sum = vec3(0.0);
+        for (uint ray = 0u; ray < SURFEL_GI_RAYS; ++ray)
+        {
+            float weight = pow(max(dot(axis, directions[ray]), 0.0), 16.0);
+            float depth = min(abs(rays[ray].w), 4.0);
+            sum += weight * vec3(depth, depth * depth, 1.0);
+        }
+        vec2 moments = sum.xy / max(sum.z, 1e-8);
+        if (blend < 1.0)
+            moments = mix(unpackHalf2x16(probes[slot].depth[index]), moments, max(0.15, blend));
+        probes[slot].depth[index] = packHalf2x16(moments);
+    }
+}

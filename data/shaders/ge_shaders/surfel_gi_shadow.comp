@@ -1,0 +1,15 @@
+#extension GL_EXT_ray_query : require
+layout(local_size_x = 64) in;
+#include "utils/surfel_gi_transport.glsl"
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint phase = pc.m_trace_list;
+    if (index >= shadow_dispatch[phase].w)
+        return;
+    uint base = phase == 0u ? 0u : probeRayCount();
+    SurfelGIShadow shadow = shadow_rays[base + index];
+    if (surfelGITraceShadow(shadow.origin, shadow.segment) > 0.0)
+        ray_results[shadow.target].rgb += unpackSurfelGIRGB(shadow.light);
+}
