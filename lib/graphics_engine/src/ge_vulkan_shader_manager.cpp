@@ -98,6 +98,7 @@ void updatePredefines()
     oss << "#define TOTAL_MESH_TEXTURE_LAYER " << g_mesh_texture_layer << "\n";
     oss << "#define MAX_RENDERING_LIGHT " << GEVulkanLightHandler::getMaxRenderingLights() << "\n";
     oss << "#define OMNI_FACES_PER_LIGHT " << OMNI_FACES_PER_LIGHT << "\n";
+    oss << "#define SUN_CASCADES " << GVSCC_COUNT << "\n";
     if (GEVulkanFeatures::supportsBindTexturesAtOnce())
         oss << "#define BIND_TEXTURES_AT_ONCE\n";
     if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
@@ -232,6 +233,7 @@ std::vector<uint32_t> compileShader(shaderc_shader_kind kind,
         shaderc_compile_options_set_target_env(res.options,
             shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_1);
     }
+    shaderc_compile_options_set_generate_debug_info(res.options);
     struct FileIncluder
     {
         std::vector<std::string> m_shader_fullpath;
