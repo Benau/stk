@@ -26,6 +26,7 @@ GEVulkanShadowDrawCall::GEVulkanShadowDrawCall(GEVulkanShadowFBO* sfbo,
 void GEVulkanShadowDrawCall::prepareShadow(unsigned layer)
 {
     reset();
+    setRenderState(true);
     m_culling_tool->initShadow(m_sfbo, layer);
     if (m_data_layout == VK_NULL_HANDLE)
     {
@@ -38,7 +39,7 @@ void GEVulkanShadowDrawCall::prepareShadow(unsigned layer)
 bool GEVulkanShadowDrawCall::skip(irr::scene::ISceneNode* node) const
 {
     // Skip small objects for far shadows
-    if (m_cascade == GVSCC_FAR && node->getBoundingBox().getArea() < 20.0f)
+    if (m_cascade >= GVSCC_FAR && node->getBoundingBox().getArea() < 20.0f)
         return true;
     return false;
 }   // skip

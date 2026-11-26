@@ -255,6 +255,7 @@ protected:
     std::weak_ptr<bool> m_camera_ubo_observer, m_skinning_data_observer;
 
     bool m_update_data_descriptor_sets;
+    VkBuffer m_bound_probe_field = VK_NULL_HANDLE;
 
     bool m_has_skybox;
 
@@ -393,7 +394,7 @@ public:
     void bindAllMaterials(VkCommandBuffer cmd);
     // ------------------------------------------------------------------------
     void updateDataDescriptorSets(GEVulkanDriver* vk,
-                                  GEVulkanCamera* cam);
+                                  GEVulkanCamera* cam, VkBuffer probe_field = VK_NULL_HANDLE);
     // ------------------------------------------------------------------------
     void prepareViewport(GEVulkanDriver* vk,
                          const irr::core::rect<irr::s32>& viewp,

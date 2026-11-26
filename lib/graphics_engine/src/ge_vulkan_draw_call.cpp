@@ -1345,20 +1345,9 @@ void GEVulkanDrawCall::createPipeline(GEVulkanDriver* vk,
     {
         rasterizer.depthBiasEnable = VK_TRUE;
         rasterizer.depthClampEnable = useDepthClamp() ? VK_TRUE : VK_FALSE;
-        if (useDepthClamp())
-        {
-            // Sun shadow bias
-            rasterizer.depthBiasConstantFactor = 0.5;
-            rasterizer.depthBiasSlopeFactor = 1.5;
-            rasterizer.depthBiasClamp = 8.0;
-        }
-        else
-        {
-            // Pointlight shadow bias
-            rasterizer.depthBiasConstantFactor = 1.25f;
-            rasterizer.depthBiasSlopeFactor = 2.0f;
-            rasterizer.depthBiasClamp = 0.0f;
-        }
+        rasterizer.depthBiasConstantFactor = 1.0f;
+        rasterizer.depthBiasSlopeFactor = 2.0f;
+        rasterizer.depthBiasClamp = 16.0f;
     }
 
     VkPipelineMultisampleStateCreateInfo multisampling = {};
@@ -1750,6 +1739,15 @@ VkDescriptorSetLayout GEVulkanDrawCall::createDataLayout(GEVulkanDriver* vk)
         bindings.push_back(material_binding);
     }
 
+    if (GEVulkanFeatures::supportsRayQuery())
+    {
+        VkDescriptorSetLayoutBinding probe_binding = {};
+        probe_binding.binding = 5;
+        probe_binding.descriptorCount = 1;
+        probe_binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        probe_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+        bindings.push_back(probe_binding);
+    }
     VkDescriptorSetLayoutCreateInfo setinfo = {};
     setinfo.flags = 0;
     setinfo.pNext = NULL;
@@ -1793,6 +1791,8 @@ void GEVulkanDrawCall::createVulkanData()
     };
     if (GEVulkanFeatures::supportsBindMeshTexturesAtOnce())
         sizes.back().descriptorCount = (vk->getMaxFrameInFlight() + 1) * 3 * 2;
+    if (GEVulkanFeatures::supportsRayQuery())
+        sizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, (vk->getMaxFrameInFlight() + 1) * 2});
 
     VkDescriptorPoolCreateInfo pool_info = {};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -2327,7 +2327,7 @@ void GEVulkanDrawCall::drawCommands(VkCommandBuffer cmd,
 
 // ----------------------------------------------------------------------------
 void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
-                                                GEVulkanCamera* cam)
+                                                GEVulkanCamera* cam, VkBuffer probe_field)
 {
     if (m_data_descriptor_sets.empty())
         return;
@@ -2345,9 +2345,10 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
         }
     }
 
-    if (!m_update_data_descriptor_sets)
+    if (!m_update_data_descriptor_sets && m_bound_probe_field == probe_field)
         return;
 
+    m_bound_probe_field = probe_field;
     m_update_data_descriptor_sets = false;
     m_camera_ubo_observer = cam->getCameraUBO()->getBufferObserver();
     vk->waitIdle();
@@ -2373,6 +2374,17 @@ void GEVulkanDrawCall::updateDataDescriptorSets(GEVulkanDriver* vk,
         data_set[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         data_set[0].descriptorCount = 1;
         data_set[0].pBufferInfo = &ubo_info;
+        VkDescriptorBufferInfo probe_info = {};
+        if (GEVulkanFeatures::supportsRayQuery())
+        {
+            probe_info.buffer = probe_field ? probe_field : ubo_info.buffer;
+            probe_info.range = probe_field ? VK_WHOLE_SIZE : 80;
+            VkWriteDescriptorSet write = data_set[0];
+            write.dstBinding = 5;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            write.pBufferInfo = &probe_info;
+            data_set.push_back(write);
+        }
 
         VkBuffer sbo_buffer = m_sbo_data->getHostBuffer()[i];
         if (sbo_buffer != VK_NULL_HANDLE)
@@ -2575,8 +2587,7 @@ void GEVulkanDrawCall::renderDeferredConvertColor(GEVulkanDriver* vk,
         m_deferred_layouts[GVDFP_CONVERT_COLOR], 0, 1,
         vk->getRTTTexture()->getDescriptorSet(GVDFP_CONVERT_COLOR), 0, NULL);
     GEVulkanFBOTexture* rtt = vk->getRTTTexture();
-    if (rtt->isSplit() &&
-        static_cast<GEVulkanDeferredFBOSplit*>(rtt)->hasBloom())
+    if (rtt->isSplit())
     {
         // Empty if this draw call has no valid bloom (see
         // deferred_convert_color.frag)

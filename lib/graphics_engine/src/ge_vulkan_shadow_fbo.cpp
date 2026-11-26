@@ -16,6 +16,65 @@
 
 namespace GE
 {
+namespace
+{
+using irr::core::aabbox3df;
+using irr::core::plane3df;
+using irr::core::vector3df;
+using irr::scene::SViewFrustum;
+
+void clipEdges(const vector3df* corners, const plane3df* planes, std::vector<vector3df>& points)
+{
+    for (unsigned axis = 1; axis < 8; axis *= 2)
+    for (unsigned corner = 0; corner < 8; ++corner)
+    {
+        if (corner & axis)
+            continue;
+        const vector3df& start = corners[corner];
+        const vector3df& end = corners[corner | axis];
+        float enter = 0.0f, exit = 1.0f;
+        for (unsigned face = 0; face < 6; ++face)
+        {
+            float from = planes[face].getDistanceTo(start);
+            float to = planes[face].getDistanceTo(end);
+            if (from > 0.0f && to > 0.0f)
+            {
+                enter = 2.0f;
+                break;
+            }
+            if (from > 0.0f)
+                enter = std::max(enter, from / (from - to));
+            else if (to > 0.0f)
+                exit = std::min(exit, from / (from - to));
+        }
+        if (enter <= exit)
+        {
+            points.push_back(start + (end - start) * enter);
+            points.push_back(start + (end - start) * exit);
+        }
+    }
+}
+
+void clipReceivers(std::vector<vector3df>& points, const SViewFrustum& frustum, const aabbox3df& box)
+{
+    plane3df slice[6];
+    std::copy_n(frustum.planes, 6, slice);
+    slice[SViewFrustum::VF_NEAR_PLANE].setPlane(points[0], frustum.planes[SViewFrustum::VF_NEAR_PLANE].Normal);
+    slice[SViewFrustum::VF_FAR_PLANE].setPlane(points[1], frustum.planes[SViewFrustum::VF_FAR_PLANE].Normal);
+    const plane3df sides[] = {
+        {box.MinEdge, {-1, 0, 0}}, {box.MaxEdge, {1, 0, 0}},
+        {box.MinEdge, {0, -1, 0}}, {box.MaxEdge, {0, 1, 0}},
+        {box.MinEdge, {0, 0, -1}}, {box.MaxEdge, {0, 0, 1}}
+    };
+    vector3df corners[8];
+    box.getEdges(corners);
+    std::vector<vector3df> clipped;
+    clipped.reserve(48);
+    clipEdges(points.data(), sides, clipped);
+    clipEdges(corners, slice, clipped);
+    points.swap(clipped);
+}
+}
 // ----------------------------------------------------------------------------
 GEVulkanShadowFBO::GEVulkanShadowFBO(GEVulkanDriver* vk, unsigned shadow_size,
                                      GEVulkanDrawCall* master_dc,
@@ -183,7 +242,7 @@ void GEVulkanShadowFBO::createRTT()
         dependencies[2 * i]                 = {};
         dependencies[2 * i].srcSubpass      = VK_SUBPASS_EXTERNAL;
         dependencies[2 * i].dstSubpass      = i;
-        dependencies[2 * i].srcStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dependencies[2 * i].srcStageMask    = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
         dependencies[2 * i].dstStageMask    = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
         dependencies[2 * i].srcAccessMask   = VK_ACCESS_SHADER_READ_BIT;
         dependencies[2 * i].dstAccessMask   = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
@@ -255,7 +314,10 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
     viewdir = viewdir.normalize();
     lightdir = lightdir.normalize();
 
-    irr::core::vector3df lsleft = lightdir.crossProduct(viewdir).normalize();
+    irr::core::vector3df lsleft = lightdir.crossProduct(viewdir);
+    if (lsleft.getLengthSQ() < 1e-6f)
+        lsleft = lightdir.crossProduct(std::abs(lightdir.Y) < 0.9f ? vector3df(0, 1, 0) : vector3df(1, 0, 0));
+    lsleft.normalize();
     irr::core::vector3df lsup = lsleft.crossProduct(lightdir).normalize();
 
     m_shadow_view_matrix = irr::core::matrix4();
@@ -270,15 +332,24 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
     float cosgamma = viewdir.dotProduct(lightdir);
     float singamma = sqrtf(std::max(0.0f, 1.0f - cosgamma * cosgamma));
 
+    const float split_near[] = {cam->getNearValue(), 9.0f, 40.0f, 200.0f};
+    const float split_far[] = {10.0f, 45.0f, 210.0f, cam->getFarValue()};
+    const aabbox3df* bounds = cam->getSceneBounds();
+
     for (unsigned i = 0; i < GVSCC_COUNT; i++)
     {
         std::vector<irr::core::vector3df> points;
         irr::core::aabbox3df lsbody;
         irr::core::matrix4 lslightproj;
 
-        float snear     = getSplitNear(GEVulkanShadowCameraCascade(i));
-        float sfar      = getSplitFar(GEVulkanShadowCameraCascade(i));
-        float vnear     = i ? getSplitFar(GEVulkanShadowCameraCascade(i - 1)) : 3.0;
+        float snear     = std::max(cam->getNearValue(), split_near[i]);
+        float sfar      = std::min(cam->getFarValue(), split_far[i]);
+        m_shadow_draw_calls[i]->setRenderState(false);
+        m_shadow_projection_matrices[i] = 0.0f;
+        m_shadow_projection_matrices[i][15] = -1.0f;
+        if (!bounds || sfar <= snear)
+            continue;
+        float vnear     = i ? split_far[i - 1] : 3.0f;
         float vfar      = sfar;
         float dznear    = std::max(vnear - cam->getNearValue(), 0.0f);
         float dzfar     = std::max(cam->getFarValue() - vfar, 0.0f);
@@ -295,6 +366,10 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
         points.push_back(frust->getFarLeftUp() * f2 + frust->getNearLeftUp() * (1.0 - f2));
         points.push_back(frust->getFarRightUp() * f1 + frust->getNearRightUp() * (1.0 - f1));
         points.push_back(frust->getFarRightUp() * f2 + frust->getNearRightUp() * (1.0 - f2));
+        clipReceivers(points, *frust, *bounds);
+        if (points.empty())
+            continue;
+        m_shadow_draw_calls[i]->setRenderState(true);
 
         // lsbody as PSR (Potential Shadow Receiver) in camera view space
         for (unsigned j = 0; j < points.size(); j++)
@@ -317,23 +392,9 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
             else lsbody.addInternalPoint(point);
         }
 
-        double bounding_sphere[4] = {};
-        for (unsigned j = 0; j < points.size(); j++)
-        {
-            bounding_sphere[0] += points[j].X / points.size();
-            bounding_sphere[1] += points[j].Y / points.size();
-            bounding_sphere[2] += points[j].Z / points.size();
-        }
-        irr::core::vector3df scenter(bounding_sphere[0], bounding_sphere[1], bounding_sphere[2]);
-
-        for (unsigned j = 0; j < points.size(); j++)
-        {
-            bounding_sphere[3] = std::max(bounding_sphere[3], (double)points[j].getDistanceFromSQ(scenter));
-        }
-        bounding_sphere[3] = std::sqrt(bounding_sphere[3]);
-
-        lslightproj(2, 2) = 1.0 / lsbody.getExtent().Z;
-        lslightproj(3, 2) = -lsbody.MinEdge.Z / lsbody.getExtent().Z;
+        float receiver_depth = std::max(lsbody.getExtent().Z, 0.001f);
+        lslightproj(2, 2) = 1.0f / receiver_depth;
+        lslightproj(3, 2) = -lsbody.MinEdge.Z / receiver_depth;
 
         for (unsigned j = 0; j < points.size(); j++)
         {
@@ -351,7 +412,7 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
         float z0 = znear;
         float z1 = z0 + d * singamma;
 
-        if (singamma > 0.02f && 3.0f * (dznear / (zfar - znear)) < 2.0f)
+        if (d > 0.001f && zfar > znear + 0.001f && singamma > 0.02f && 3.0f * (dznear / (zfar - znear)) < 2.0f)
         {
             float vz0 = std::max(0.0f, std::max(std::max(znear, cam->getNearValue() + dznear), z0));
             float vz1 = std::max(0.0f, std::min(std::min(zfar, cam->getFarValue() - dzfar), z1));
@@ -398,18 +459,18 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
         }
 
         irr::core::matrix4 fittounitcube;
-        fittounitcube(0, 0) = 2.0f / lsbody.getExtent().X;
-        fittounitcube(1, 1) = 2.0f / lsbody.getExtent().Y;
-        fittounitcube(3, 0) = -(lsbody.MinEdge.X + lsbody.MaxEdge.X) / lsbody.getExtent().X;
-        fittounitcube(3, 1) = -(lsbody.MinEdge.Y + lsbody.MaxEdge.Y) / lsbody.getExtent().Y;
+        float width = std::max(lsbody.getExtent().X, 0.001f);
+        float height = std::max(lsbody.getExtent().Y, 0.001f);
+        fittounitcube(0, 0) = 2.0f / width;
+        fittounitcube(1, 1) = 2.0f / height;
+        fittounitcube(3, 0) = -(lsbody.MinEdge.X + lsbody.MaxEdge.X) / width;
+        fittounitcube(3, 1) = -(lsbody.MinEdge.Y + lsbody.MaxEdge.Y) / height;
         lslightproj = fittounitcube * lslightproj;
 
         m_shadow_projection_matrices[i] = lslightproj;
     }
 
     // Build shadow camera UBOs
-    irr::core::matrix4 inv_view;
-    m_shadow_view_matrix.getInverse(inv_view);
     for (unsigned i = 0; i < GVSCC_COUNT; i++)
     {
         m_shadow_camera_ubo_data[i].m_projection_view_matrix =
@@ -420,21 +481,24 @@ void GEVulkanShadowFBO::prepare(GEVulkanCamera* cam,
     }
 
     for (unsigned i = 0; i < GVSCC_COUNT; i++)
-        m_shadow_draw_calls[i]->prepareShadow(i);
+        if (m_shadow_draw_calls[i]->getRenderState())
+            m_shadow_draw_calls[i]->prepareShadow(i);
 }   // prepare
 
 // ----------------------------------------------------------------------------
 void GEVulkanShadowFBO::addNode(irr::scene::ISceneNode* node)
 {
     for (unsigned i = 0; i < GVSCC_COUNT; i++)
-        m_shadow_draw_calls[i]->addNode(node);
+        if (m_shadow_draw_calls[i]->getRenderState())
+            m_shadow_draw_calls[i]->addNode(node);
 }   // addNode
 
 // ----------------------------------------------------------------------------
 void GEVulkanShadowFBO::generate()
 {
     for (unsigned i = 0; i < GVSCC_COUNT; i++)
-        m_shadow_draw_calls[i]->generate(m_vk);
+        if (m_shadow_draw_calls[i]->getRenderState())
+            m_shadow_draw_calls[i]->generate(m_vk);
 }   // generate
 
 // ----------------------------------------------------------------------------
@@ -451,7 +515,7 @@ void GEVulkanShadowFBO::uploadDynamicData(VkCommandBuffer cmd,
 
 // ----------------------------------------------------------------------------
 void GEVulkanShadowFBO::render(VkCommandBuffer cmd,
-                               GEVulkanCamera* cam)
+                               GEVulkanCamera* cam, VkBuffer probe_field)
 {
     const bool vk_13 =
         m_vk->getPhysicalDeviceProperties().apiVersion >= VK_API_VERSION_1_3;
@@ -477,7 +541,12 @@ void GEVulkanShadowFBO::render(VkCommandBuffer cmd,
     scissor.extent.height = vp.height;
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    m_master_dc->updateDataDescriptorSets(m_vk, cam);
+    m_master_dc->updateDataDescriptorSets(m_vk, cam, probe_field);
+    for (auto& draw : m_shadow_draw_calls)
+    {
+        if (draw->getRenderState())
+            draw->updateDataDescriptorSets(m_vk, cam);
+    }
 
     if (!GEVulkanFeatures::supportsDynamicRendering())
     {
@@ -506,7 +575,6 @@ void GEVulkanShadowFBO::render(VkCommandBuffer cmd,
                     m_shadow_draw_calls[i]->bindAllMaterials(cmd);
                 else
                     rebind_base_vertex = true;
-                m_shadow_draw_calls[i]->updateDataDescriptorSets(m_vk, cam);
 
                 // Determine whether this layer must borrow from a bucket owner.
                 int bucket_owner = -1;
@@ -584,9 +652,9 @@ void GEVulkanShadowFBO::render(VkCommandBuffer cmd,
         if (!pre_barriers.empty())
         {
             vkCmdPipelineBarrier(cmd,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 VK_DEPENDENCY_BY_REGION_BIT,
                 0, NULL, 0, NULL,
                 (uint32_t)pre_barriers.size(), pre_barriers.data());
@@ -625,7 +693,6 @@ void GEVulkanShadowFBO::render(VkCommandBuffer cmd,
                 m_shadow_draw_calls[i]->bindAllMaterials(cmd);
             else
                 rebind_base_vertex = true;
-            m_shadow_draw_calls[i]->updateDataDescriptorSets(m_vk, cam);
 
             // Determine whether this layer must borrow from a bucket owner.
             int bucket_owner = -1;
@@ -670,7 +737,7 @@ void GEVulkanShadowFBO::render(VkCommandBuffer cmd,
             post_barrier.subresourceRange.layerCount     = 1;
             vkCmdPipelineBarrier(cmd,
                 VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                 VK_DEPENDENCY_BY_REGION_BIT,
                 0, NULL, 0, NULL, 1, &post_barrier);
         }
