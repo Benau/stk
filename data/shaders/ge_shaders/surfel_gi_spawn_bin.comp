@@ -1,0 +1,16 @@
+layout(local_size_x = 64) in;
+#define SURFEL_SET 2
+#include "utils/surfel_gi.glsl"
+
+void main()
+{
+    uint entry = gl_GlobalInvocationID.x;
+    if (entry >= new_surfels.count)
+        return;
+    uint id = new_surfels.ids[entry];
+    vec4 sphere = u_surfels_vec4[id * 3u];
+    float distance_to_camera = getSurfelCameraDistance(sphere.xyz);
+    binSurfel(id, sphere.xyz, distance_to_camera, sphere.w);
+    uint slot = atomicAdd(u_trace_lists.m_count[SURFEL_TRACE_YOUNG], 1u);
+    u_trace_lists.m_ids[slot] = id;
+}

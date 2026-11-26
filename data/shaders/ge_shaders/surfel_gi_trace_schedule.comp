@@ -1,0 +1,39 @@
+layout(local_size_x = 64) in;
+#define SURFEL_SET 2
+#include "utils/surfel_gi.glsl"
+#include "utils/surfel_gi_volume.glsl"
+#include "utils/surfel_gi_ray_work.glsl"
+
+void scheduleSurfels()
+{
+    uint budget = SURFEL_GI_PRIMARY_BUDGET - pc.m_camera_count * SURFEL_GI_BATCH * SURFEL_GI_RAYS;
+    uvec2 cost = uvec2(getSurfelTraceThreads(0u), getSurfelTraceThreads(1u)) * SURFEL_RAYS_PER_THREAD;
+    uvec2 demand = uvec2(u_trace_lists.m_count[0], u_trace_lists.m_count[1]);
+    uint reserved = min(demand.y * cost.y, budget / 4u);
+    uint young = min(demand.x, (budget - reserved) / cost.x);
+    uvec2 selected = uvec2(young, min(demand.y, (budget - young * cost.x) / cost.y));
+    for (uint list = 0u; list < 2u; ++list)
+    {
+        u_trace_lists.m_selected[list] = selected[list];
+        u_trace_lists.m_dispatch[list][0] = (selected[list] * getSurfelTraceThreads(list) + 63u) / 64u;
+    }
+}
+
+void main()
+{
+    if (all(equal(gl_GlobalInvocationID, uvec3(0u))))
+        scheduleSurfels();
+    uint camera = gl_WorkGroupID.y;
+    uint levels = clipLevels(camera);
+    uint turn = pc.m_frame - 1u;
+    uint level = (turn & 1u) == 0u || levels <= 1u ? 0u : 1u + (turn / 2u) % (levels - 1u);
+    uint ring = (gl_GlobalInvocationID.x + turn * 719u) % SURFEL_GI_LAYER;
+    uint slot = (level * volume_info.x + camera) * SURFEL_GI_LAYER + ring;
+    bool fresh = probes[slot].frame == 0u || probes[slot].cell != slotCell(slot);
+    uint age = pc.m_frame - probes[slot].frame;
+    uint period = probes[slot].proximity > 1.5 ? 36u : 9u;
+    uint band = fresh ? 7u : min(age / period, 6u);
+    uint index = atomicAdd(probe_work[camera].counts[band], 1u);
+    if (index < SURFEL_GI_BATCH)
+        probe_work[camera].slots[band * SURFEL_GI_BATCH + index] = slot;
+}
