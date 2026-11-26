@@ -40,6 +40,7 @@ GEConfig g_config =
     GSRT_DISABLED,
     GDRT_DISABLED,
     false,
+    true,
     {},
     1.0f,
     0,
@@ -55,7 +56,8 @@ GEConfig g_config =
     0.0f,
     360.0f,
     0.0f,
-    3.5f
+    3.5f,
+    ""
 };
 std::string g_shader_folder = "";
 std::chrono::steady_clock::time_point g_mono_start =
@@ -386,8 +388,8 @@ bool isRayTracing()
 
 bool isSolidRayTracing()
 {
-    return g_config.m_pbr && g_config.m_ray_tracing.m_solid_reflection &&
-        isRayTracing();
+    return g_config.m_pbr && !g_config.m_specular_gi &&
+        g_config.m_ray_tracing.m_solid_reflection && isRayTracing();
 }
 
 bool isDisplaceRayTracing()
@@ -408,6 +410,9 @@ GEDisplaceReflectionType getDisplaceReflection()
 
 GESolidReflectionType getSolidReflection()
 {
+    if (g_config.m_specular_gi && g_config.m_solid_reflection == GSRT_DISABLED &&
+        g_config.m_ray_tracing.m_solid_reflection && isRayTracing())
+        return GSRT_SSR_HIZ100;
     return isSolidRayTracing() ? GSRT_DISABLED : g_config.m_solid_reflection;
 }
 

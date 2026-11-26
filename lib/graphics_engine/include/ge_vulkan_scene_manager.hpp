@@ -31,7 +31,10 @@ private:
     GEVulkanTargetGroup* m_current_group;
 
     GEVulkanDrawEntry* m_current_entry;
+    std::vector<irr::scene::ISceneNode*> m_shadow_nodes;
     std::unique_ptr<GEVulkanStaticSceneManager> m_static_scene;
+
+    void registerMeshForLighting(irr::scene::ISceneNode* node);
 
     // ------------------------------------------------------------------------
     GEVulkanDrawEntry* acquireEntry(GEVulkanDriver* vk);

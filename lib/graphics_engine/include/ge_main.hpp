@@ -133,11 +133,6 @@ struct GERayTracingConfig
     // the environment map in the lighting pass where the surfels cover it.
     // Needs the render target to be created again if it changes
     bool m_gi;
-    // The frame cache of the global illumination: the irradiance of a pixel is
-    // reused in the next frames while its surface stays on the screen, and
-    // the surfels which converged trace fewer rays (see GEVulkanSurfelGI). It
-    // can be changed at any time
-    bool m_gi_frame_cache;
     // ------------------------------------------------------------------------
     GERayTracingConfig()
     {
@@ -150,7 +145,6 @@ struct GERayTracingConfig
         m_shadow = false;
         m_shadow_scale = 1.0f;
         m_gi = false;
-        m_gi_frame_cache = true;
     }
 };
 enum GEShadowType : unsigned
@@ -200,7 +194,10 @@ GEDisplaceReflectionType m_displace_reflection;
 // at half resolution, instead of tracing a single mirror ray (FidelityFX SSSR,
 // see GEVulkanSolidReflection). Needs the render target to be created again
 // if it changes
-bool m_stochastic_reflection;
+bool m_specular_gi;
+// Converged surfels trace fewer rays, and specular GI reprojects the
+// reflection history for temporal filtering. Can be changed at any time.
+bool m_frame_cache;
 std::unordered_set<std::string> m_ondemand_load_texture_paths;
 float m_render_scale;
 unsigned m_shadow_size;
@@ -242,6 +239,7 @@ float m_dof_near_transition;
 // scaled with the height of the viewport, so the blur is the same part of the
 // screen at any resolution, render scale and splitscreen). Up to ~16
 float m_dof_max_radius;
+std::string m_rt_cache_directory;
 };
 
 // True if GEConfig::m_anti_aliasing is not GAA_NONE and the device can run it

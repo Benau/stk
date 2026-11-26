@@ -372,7 +372,11 @@ namespace GE
         VkRenderPass getRenderPass() const         { return m_vk->render_pass; }
         void copyBuffer(VkBuffer src_buffer, VkBuffer dst_buffer, VkDeviceSize size);
         VkCommandBuffer getCurrentCommandBuffer()
-                              { return m_vk->command_buffers[m_current_frame]; }
+        {
+            return m_rt_suffix ? m_vk->rt_frames[m_current_frame].lighting :
+                m_vk->command_buffers[m_current_frame];
+        }
+        VkCommandBuffer finishGBuffer(VkCommandBuffer cmd);
         std::vector<VkImage>& getSwapChainImages()
                                              { return m_vk->swap_chain_images; }
         std::vector<VkImageView>& getSwapChainImageViews()
@@ -514,6 +518,15 @@ namespace GE
             std::vector<VkFence> in_flight_fences;
             std::vector<VkCommandPool> command_pools;
             std::vector<VkCommandBuffer> command_buffers;
+            struct RTFrame
+            {
+                VkCommandPool pool = VK_NULL_HANDLE;
+                VkCommandBuffer build = VK_NULL_HANDLE;
+                VkCommandBuffer lighting = VK_NULL_HANDLE;
+                VkSemaphore built = VK_NULL_HANDLE;
+                VkSemaphore consumed = VK_NULL_HANDLE;
+            };
+            std::vector<RTFrame> rt_frames;
             std::array<VkSampler, GVS_COUNT> samplers;
             VkRenderPass render_pass;
             std::vector<VkFramebuffer> swap_chain_framebuffers;
@@ -531,6 +544,12 @@ namespace GE
             }
             ~VK()
             {
+                for (const RTFrame& frame : rt_frames)
+                {
+                    vkDestroySemaphore(device, frame.consumed, NULL);
+                    vkDestroySemaphore(device, frame.built, NULL);
+                    vkDestroyCommandPool(device, frame.pool, NULL);
+                }
                 for (unsigned i = 0; i < command_buffers.size(); i++)
                 {
                     vkFreeCommandBuffers(device, command_pools[i], 1,
@@ -591,6 +610,12 @@ namespace GE
         const std::thread::id m_render_thread;
 
         uint32_t m_graphics_family;
+        uint32_t m_rt_family = VK_QUEUE_FAMILY_IGNORED;
+        VkQueue m_rt_queue = VK_NULL_HANDLE;
+        VkSemaphore m_last_rt_consumed = VK_NULL_HANDLE;
+        std::mutex m_rt_queue_mutex;
+        bool m_async_rt_frame = false;
+        bool m_rt_suffix = false;
         uint32_t m_present_family;
         unsigned m_graphics_queue_count;
         VkPhysicalDeviceProperties m_properties;

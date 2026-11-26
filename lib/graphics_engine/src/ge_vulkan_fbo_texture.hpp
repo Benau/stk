@@ -85,6 +85,7 @@ public:
     void setFinalTarget(GEVulkanFinalTarget* target);
     // ------------------------------------------------------------------------
     virtual bool isDeferredFBO() const                        { return false; }
+    virtual VkBuffer getSurfelGIProbeField() const     { return VK_NULL_HANDLE; }
     // ------------------------------------------------------------------------
     virtual bool useSwapChainOutput() const                   { return false; }
     // ------------------------------------------------------------------------

@@ -1182,6 +1182,29 @@ void GEVulkanDriver::createDevice()
     queue_create_info.pQueuePriorities = queue_priority.data();
     queue_create_infos.push_back(queue_create_info);
 
+    if (GEVulkanFeatures::supportsRayQuery() && !std::getenv("STK_RT_SINGLE_QUEUE"))
+    {
+        uint32_t count = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(m_physical_device, &count, NULL);
+        std::vector<VkQueueFamilyProperties> families(count);
+        vkGetPhysicalDeviceQueueFamilyProperties(m_physical_device, &count, families.data());
+        for (uint32_t index = 0; index < count; ++index)
+        {
+            if (index != m_graphics_family && index != m_present_family &&
+                (families[index].queueFlags & VK_QUEUE_COMPUTE_BIT))
+            {
+                m_rt_family = index;
+                VkDeviceQueueCreateInfo compute = queue_create_info;
+                compute.queueFamilyIndex = index;
+                compute.queueCount = 1;
+                queue_create_infos.push_back(compute);
+                break;
+            }
+        }
+        if (m_rt_family == VK_QUEUE_FAMILY_IGNORED && m_graphics_queue_count > 1)
+            m_rt_family = m_graphics_family;
+    }
+
     if (m_present_family != m_graphics_family)
     {
         queue_create_info.queueFamilyIndex = m_present_family;
@@ -1278,6 +1301,12 @@ void GEVulkanDriver::createDevice()
         throw std::runtime_error("vkCreateDevice failed");
 
     m_graphics_queue.resize(m_graphics_queue_count);
+    if (m_rt_family != VK_QUEUE_FAMILY_IGNORED)
+    {
+        vkGetDeviceQueue(m_vk->device, m_rt_family,
+            m_rt_family == m_graphics_family ? m_graphics_queue_count - 1 : 0, &m_rt_queue);
+        GE::logMessage(GLL_INFO, "Ray tracing uses asynchronous builds on queue family %u", m_rt_family);
+    }
     for (unsigned i = 0; i < m_graphics_queue_count; i++)
     {
         vkGetDeviceQueue(m_vk->device, m_graphics_family, i,
@@ -1700,6 +1729,8 @@ void GEVulkanDriver::createCommandBuffers()
 {
     m_vk->command_pools.resize(getMaxFrameInFlight());
     m_vk->command_buffers.resize(getMaxFrameInFlight());
+    if (m_rt_queue)
+        m_vk->rt_frames.resize(getMaxFrameInFlight());
     for (unsigned i = 0; i < getMaxFrameInFlight(); i++)
     {
         VkCommandPoolCreateInfo pool_info = {};
@@ -1720,6 +1751,21 @@ void GEVulkanDriver::createCommandBuffers()
             &m_vk->command_buffers[i]);
         if (result != VK_SUCCESS)
             throw std::runtime_error("vkAllocateCommandBuffers failed");
+        if (m_rt_queue)
+        {
+            auto& frame = m_vk->rt_frames[i];
+            pool_info.queueFamilyIndex = m_rt_family;
+            VkSemaphoreCreateInfo semaphore = {};
+            semaphore.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+            if (vkAllocateCommandBuffers(m_vk->device, &alloc_info, &frame.lighting) != VK_SUCCESS ||
+                vkCreateCommandPool(m_vk->device, &pool_info, NULL, &frame.pool) != VK_SUCCESS ||
+                vkCreateSemaphore(m_vk->device, &semaphore, NULL, &frame.built) != VK_SUCCESS ||
+                vkCreateSemaphore(m_vk->device, &semaphore, NULL, &frame.consumed) != VK_SUCCESS)
+                throw std::runtime_error("Could not allocate asynchronous ray tracing frame");
+            alloc_info.commandPool = frame.pool;
+            if (vkAllocateCommandBuffers(m_vk->device, &alloc_info, &frame.build) != VK_SUCCESS)
+                throw std::runtime_error("Could not allocate ray tracing build commands");
+        }
     }
 }   // createCommandBuffers
 
@@ -1977,6 +2023,15 @@ bool GEVulkanDriver::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     buffer_info.size = size;
     buffer_info.usage = usage;
     buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    uint32_t families[] = { m_graphics_family, m_rt_family };
+    if (m_rt_queue && m_rt_family != m_graphics_family && (usage &
+        (VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+         VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)))
+    {
+        buffer_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+        buffer_info.queueFamilyIndexCount = 2;
+        buffer_info.pQueueFamilyIndices = families;
+    }
 
     return vmaCreateBuffer(m_vk->allocator,
         &buffer_info, &alloc_create_info, &buffer, &buffer_allocation, NULL) ==
@@ -2166,6 +2221,10 @@ bool GEVulkanDriver::endScene()
         m_screenshot->handleFrame(m_current_frame);
     VkFence fence = m_vk->in_flight_fences[m_current_frame];
     vkResetCommandPool(m_vk->device, m_vk->command_pools[m_current_frame], 0);
+    if (m_rt_queue)
+        vkResetCommandPool(m_vk->device, m_vk->rt_frames[m_current_frame].pool, 0);
+    m_rt_suffix = false;
+    m_async_rt_frame = false;
 
     VkSemaphore semaphore = m_vk->image_available_semaphores[m_current_semaphore];
     // Not forever, m_window_mutex is held and the UI thread of Android may be
@@ -2192,9 +2251,10 @@ bool GEVulkanDriver::endScene()
     // for the full timeout before attempting recovery.
     vkResetFences(m_vk->device, 1, &fence);
 
-    VkSemaphore wait_semaphores[] = {m_vk->image_available_semaphores[m_current_semaphore]};
-    VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-    VkSemaphore signal_semaphores[] = {m_vk->render_finished_semaphores[m_image_index]};
+    VkSemaphore wait_semaphores[] = {semaphore, m_last_rt_consumed};
+    VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT};
+    VkSemaphore signal_semaphores[] = {m_vk->render_finished_semaphores[m_image_index], VK_NULL_HANDLE};
 
     VkSubmitInfo submit_info = {};
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -2206,9 +2266,42 @@ bool GEVulkanDriver::endScene()
     submit_info.signalSemaphoreCount = 1;
     submit_info.pSignalSemaphores = signal_semaphores;
 
-    VkQueue queue = VK_NULL_HANDLE;
-    std::unique_lock<std::mutex> ul = getGraphicsQueue(&queue);
-    result = vkQueueSubmit(queue, 1, &submit_info,
+    VkSubmitInfo batches[2] = { submit_info, submit_info };
+    unsigned batch_count = 1;
+    if (m_rt_queue && (m_last_rt_consumed || (m_rt_scene && m_rt_scene->isReady())))
+    {
+        auto& frame = m_vk->rt_frames[m_current_frame];
+        if (m_async_rt_frame)
+        {
+            VkSubmitInfo build = submit_info;
+            build.waitSemaphoreCount = m_last_rt_consumed ? 1 : 0;
+            build.pWaitSemaphores = &m_last_rt_consumed;
+            build.pWaitDstStageMask = &wait_stages[1];
+            build.pCommandBuffers = &frame.build;
+            build.pSignalSemaphores = &frame.built;
+            std::lock_guard<std::mutex> lock(m_rt_family == m_graphics_family ?
+                *m_graphics_queue_mutexes.back() : m_rt_queue_mutex);
+            if (vkQueueSubmit(m_rt_queue, 1, &build, VK_NULL_HANDLE) != VK_SUCCESS)
+                throw std::runtime_error("Asynchronous ray tracing submit failed");
+            batches[0].signalSemaphoreCount = 0;
+            batches[1].pWaitSemaphores = &frame.built;
+            batches[1].pWaitDstStageMask = &wait_stages[1];
+            batches[1].pCommandBuffers = &frame.lighting;
+            batch_count = 2;
+        }
+        else if (m_last_rt_consumed)
+            batches[0].waitSemaphoreCount = 2;
+        m_last_rt_consumed = VK_NULL_HANDLE;
+        if (m_rt_scene && m_rt_scene->isReady())
+        {
+            signal_semaphores[1] = frame.consumed;
+            batches[batch_count - 1].signalSemaphoreCount = 2;
+            m_last_rt_consumed = frame.consumed;
+        }
+    }
+    VkQueue queue = m_graphics_queue.front();
+    std::unique_lock<std::mutex> ul(*m_graphics_queue_mutexes.front());
+    result = vkQueueSubmit(queue, batch_count, batches,
         m_vk->in_flight_fences[m_current_frame]);
     ul.unlock();
 
@@ -2885,7 +2978,9 @@ void GEVulkanDriver::waitIdle(bool flush_command_loader)
     // Host access to all VkQueue objects created from device must be externally synchronized
     for (std::mutex* m : m_graphics_queue_mutexes)
         m->lock();
+    m_rt_queue_mutex.lock();
     vkDeviceWaitIdle(m_vk->device);
+    m_rt_queue_mutex.unlock();
     for (std::mutex* m : m_graphics_queue_mutexes)
         m->unlock();
 
@@ -2930,6 +3025,12 @@ void GEVulkanDriver::buildCommandBuffers()
     if (default_group)
         render_groups.push_back(default_group);
 
+    for (auto* group : render_groups)
+    {
+        if (group->m_target && group->m_target->isSplit())
+            static_cast<GEVulkanDeferredFBOSplit*>(group->m_target)->prepareSurfelGI(group->m_dcs);
+    }
+
     VkCommandBufferBeginInfo begin_info = {};
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -2963,12 +3064,24 @@ void GEVulkanDriver::buildCommandBuffers()
                     p.second);
             GEVulkanShadowFBO* sfbo = p.first->getShadowFBO();
             if (sfbo)
-                sfbo->render(getCurrentCommandBuffer(), p.second);
+                sfbo->render(getCurrentCommandBuffer(), p.second,
+                    g->m_target ? g->m_target->getSurfelGIProbeField() : VK_NULL_HANDLE);
         }
     }
     // The TLAS of the ray traced reflection (the new BLAS and the dynamic
     // instances), it's outside any render pass
-    if (m_rt_scene)
+    m_async_rt_frame = m_rt_queue && m_rt_scene && m_rt_scene->needsTopLevel(m_current_buffer_idx) &&
+        rtt_group_count == 0 && m_rtt_texture && m_rtt_texture->isSplit();
+    if (m_async_rt_frame)
+    {
+        VkCommandBuffer build = m_vk->rt_frames[m_current_frame].build;
+        if (vkBeginCommandBuffer(build, &begin_info) != VK_SUCCESS)
+            throw std::runtime_error("Could not begin ray tracing commands");
+        m_rt_scene->buildTopLevel(build, true);
+        if (vkEndCommandBuffer(build) != VK_SUCCESS)
+            throw std::runtime_error("Could not end ray tracing commands");
+    }
+    else if (m_rt_scene)
         m_rt_scene->buildTopLevel(getCurrentCommandBuffer());
 
     // Clear values and render pass info of the current m_rtt_texture
@@ -3154,6 +3267,20 @@ void GEVulkanDriver::buildCommandBuffers()
     }
     vkEndCommandBuffer(getCurrentCommandBuffer());
 }   // buildCommandBuffers
+
+VkCommandBuffer GEVulkanDriver::finishGBuffer(VkCommandBuffer cmd)
+{
+    if (!m_async_rt_frame || m_rt_suffix)
+        return cmd;
+    m_rt_suffix = true;
+    VkCommandBufferBeginInfo begin = {};
+    begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (vkEndCommandBuffer(cmd) != VK_SUCCESS ||
+        vkBeginCommandBuffer(getCurrentCommandBuffer(), &begin) != VK_SUCCESS)
+        throw std::runtime_error("Could not split G-buffer and lighting commands");
+    return getCurrentCommandBuffer();
+}
 
 // ----------------------------------------------------------------------------
 void GEVulkanDriver::renderDrawCalls(

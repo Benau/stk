@@ -39,7 +39,7 @@ GEVulkanPipelineConstants::GEVulkanPipelineConstants(GEVulkanDriver* vk,
             c.m_god_rays = split->hasGodRays();
             c.m_surfel_gi = split->hasSurfelGI();
             c.m_solid_reflection_image = split->hasSolidReflection();
-            c.m_stochastic_reflection = split->hasStochasticReflection();
+            c.m_specular_gi = split->hasSpecularGI();
         }
     }
     c.m_solid_reflection = getSolidReflection();

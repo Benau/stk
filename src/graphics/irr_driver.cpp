@@ -416,6 +416,7 @@ void IrrDriver::initDevice()
     std::string abs_shader_dir = file_manager->getFileSystem()
         ->getAbsolutePath(file_manager->getShadersDir().c_str()).c_str();
     GE::setShaderFolder(abs_shader_dir);
+    GE::getGEConfig()->m_rt_cache_directory = file_manager->getCachedTexturesDir();
     GE::setLogCallback([](GE::GELogLevel level, const char* message)
     {
         switch (level)

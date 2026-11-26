@@ -274,10 +274,15 @@ void GEVulkanSceneManager::drawAll(irr::u32 flags)
         camera->update(cam);
         dc->prepare(camera);
         GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
-        if (sfbo)
-            sfbo->prepare(camera, dc->getLightHandler());
         m_static_scene->registerNodes(this, cam->getAbsoluteTransformation());
         OnRegisterSceneNode();
+        if (sfbo)
+        {
+            sfbo->prepare(camera, dc->getLightHandler());
+            for (auto* node : m_shadow_nodes)
+                sfbo->addNode(node);
+            m_shadow_nodes.clear();
+        }
         dc->generate(vk);
         if (sfbo)
             sfbo->generate();
@@ -321,12 +326,20 @@ irr::u32 GEVulkanSceneManager::registerNodeForRendering(
         pass != irr::scene::ESNRP_SOLID))
         return 0;
 
-    dc->addNode(node);
-    GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
-    if (sfbo)
-        sfbo->addNode(node);
+    if (node->getType() == irr::scene::ESNT_ANIMATED_MESH || node->getType() == irr::scene::ESNT_MESH)
+    {
+        registerMeshForLighting(node);
+        dc->addNode(node);
+    }
     return 1;
 }   // registerNodeForRendering
+
+void GEVulkanSceneManager::registerMeshForLighting(irr::scene::ISceneNode* node)
+{
+    m_current_entry->m_camera.addSceneBounds(node->getTransformedBoundingBox());
+    if (m_current_entry->m_draw_call.getShadowFBO())
+        m_shadow_nodes.push_back(node);
+}
 
 // ----------------------------------------------------------------------------
 void GEVulkanSceneManager::detectDeferred(irr::scene::ISceneNode* node)

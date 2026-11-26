@@ -65,10 +65,12 @@ set(GE_SOURCES
     src/ge_vulkan_rt_shadow.cpp
     src/ge_vulkan_solid_reflection.cpp
     src/ge_vulkan_ssao.cpp
-    src/ge_vulkan_stochastic_reflection.cpp
+    src/ge_vulkan_specular_gi.cpp
     src/ge_vulkan_surfel_gi.cpp
     src/ge_vulkan_mesh_cache.cpp
     src/ge_vulkan_rt_scene.cpp
+    src/ge_vulkan_rt_partition.cpp
+    src/ge_vulkan_rt_cache.cpp
     src/ge_vulkan_mesh_scene_node.cpp
     src/ge_vulkan_pipeline_constants.cpp
     src/ge_vulkan_omni_shadow_fbo.cpp

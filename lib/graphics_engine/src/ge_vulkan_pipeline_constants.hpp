@@ -66,7 +66,7 @@ private:
     X(VkBool32, m_god_rays)               \
     X(VkBool32, m_surfel_gi)              \
     X(VkBool32, m_solid_reflection_image) \
-    X(VkBool32, m_stochastic_reflection)
+    X(VkBool32, m_specular_gi)
     struct Data
     {
 #define GE_DECLARE_MEMBER(type, name) type name;
