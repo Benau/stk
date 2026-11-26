@@ -43,6 +43,7 @@ void main()
     const float exponent_scale = -0.5 / (sigma * sigma);
     const ivec2 direction = pc.m_misc.yz;
     float center_z = blockDepth(block);
+    float radius = ssaoContactRadius(block * 2);
     float sum = 0.0;
     float weight_sum = 0.0;
     for (int i = -tap_radius; i <= tap_radius; i++)
@@ -50,7 +51,7 @@ void main()
         ivec2 q = clamp(block + direction * i, half_rect.xy,
             half_rect.zw - 1);
         float w = exp(float(i * i) * exponent_scale) *
-            ssaoDepthWeight(center_z, blockDepth(q));
+            ssaoDepthWeight(center_z, blockDepth(q), radius) * ssaoContactWeight(radius, ssaoContactRadius(q * 2));
         sum += w * texelFetch(u_ao, q, 0).x;
         weight_sum += w;
     }

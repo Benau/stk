@@ -11,10 +11,11 @@ layout(set = 0, binding = 2, r32f) uniform writeonly image2D u_dst;
 void main()
 {
     const int level = pc.m_misc.x;
-    const ivec4 src_rect = ssaoLevelRect(pc.m_rect, level);
+    ivec4 src_rect = ssaoLevelRect(pc.m_rect, level);
+    src_rect.zw = min(src_rect.zw, textureSize(u_src, level));
     const ivec4 dst_rect = ssaoHalfRect(src_rect);
     const ivec2 dst = dst_rect.xy + ivec2(gl_GlobalInvocationID.xy);
-    if (any(greaterThanEqual(dst, dst_rect.zw)))
+    if (any(greaterThanEqual(dst, min(dst_rect.zw, imageSize(u_dst)))))
         return;
 
     float z[4];
@@ -24,5 +25,6 @@ void main()
             src_rect.zw - 1);
         z[i] = texelFetch(u_src, pixel, level).x;
     }
-    imageStore(u_dst, dst, vec4(ssaoDepthFilter(z[0], z[1], z[2], z[3])));
+    float radius = ssaoContactRadius(clamp(dst << (level + 1), pc.m_rect.xy, pc.m_rect.zw - 1));
+    imageStore(u_dst, dst, vec4(ssaoDepthFilter(z[0], z[1], z[2], z[3], radius)));
 }

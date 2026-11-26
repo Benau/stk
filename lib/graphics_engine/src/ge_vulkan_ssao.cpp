@@ -38,16 +38,22 @@ uint32_t groups(int32_t size)
 GEVulkanSSAO::GEVulkanSSAO(GEVulkanDriver* vk,
                            const irr::core::dimension2d<irr::u32>& size,
                            GEVulkanAttachmentTexture* depth,
-                           GEVulkanAttachmentTexture* normal)
+                           GEVulkanAttachmentTexture* normal,
+                           GEVulkanAttachmentTexture* light,
+                           GEVulkanAttachmentTexture* color, VkImageView contact_view)
             : GEVulkanPostProcessing(vk, size), m_depth(NULL), m_ao(NULL),
+              m_ssil_half(), m_ssil(NULL), m_contact_view(contact_view),
               m_layout(VK_NULL_HANDLE), m_pool(VK_NULL_HANDLE),
               m_data_layout(VK_NULL_HANDLE), m_pipeline_layout(VK_NULL_HANDLE),
               m_depth_pipeline(VK_NULL_HANDLE), m_down_pipeline(VK_NULL_HANDLE),
               m_ao_pipeline(VK_NULL_HANDLE), m_blur_pipeline(VK_NULL_HANDLE),
-              m_upsample_pipeline(VK_NULL_HANDLE)
+              m_upsample_pipeline(VK_NULL_HANDLE),
+              m_ssil_pipeline(VK_NULL_HANDLE),
+              m_ssil_blur_pipeline(VK_NULL_HANDLE), m_ssil_upsample_pipeline(VK_NULL_HANDLE)
 {
     m_depth_views.fill(VK_NULL_HANDLE);
     m_ao_half.fill(NULL);
+    m_ssil_half.fill(NULL);
     m_sets.fill(VK_NULL_HANDLE);
     try
     {
@@ -95,13 +101,23 @@ GEVulkanSSAO::GEVulkanSSAO(GEVulkanDriver* vk,
         m_ao = new GEVulkanAttachmentTexture(vk, size, format, usage,
             VK_IMAGE_ASPECT_COLOR_BIT);
 
+        for (GEVulkanAttachmentTexture*& t : m_ssil_half)
+        {
+            t = new GEVulkanAttachmentTexture(vk, half,
+                VK_FORMAT_R16G16B16A16_SFLOAT, usage,
+                VK_IMAGE_ASPECT_COLOR_BIT);
+        }
+
         // The images stay in general layout forever (m_depth was created in
         // it)
-        std::array<GEVulkanAttachmentTexture*, 3> images =
-            {{ m_ao_half[0], m_ao_half[1], m_ao }};
+        m_ssil = new GEVulkanAttachmentTexture(vk, size, VK_FORMAT_R16G16B16A16_SFLOAT,
+            usage, VK_IMAGE_ASPECT_COLOR_BIT);
+        std::array<GEVulkanAttachmentTexture*, 6> images =
+            {{ m_ao_half[0], m_ao_half[1], m_ao, m_ssil_half[0],
+            m_ssil_half[1], m_ssil }};
         initializeGeneralImages(images.data(), images.size());
 
-        createDescriptors(depth, normal);
+        createDescriptors(depth, normal, light, color);
         createPipelines();
     }
     catch (...)
@@ -122,7 +138,8 @@ void GEVulkanSSAO::destroy()
 {
     VkDevice device = m_vk->getDevice();
     for (VkPipeline* pipeline : { &m_depth_pipeline, &m_down_pipeline,
-        &m_ao_pipeline, &m_blur_pipeline, &m_upsample_pipeline })
+        &m_ao_pipeline, &m_blur_pipeline, &m_upsample_pipeline,
+        &m_ssil_pipeline, &m_ssil_blur_pipeline, &m_ssil_upsample_pipeline })
     {
         if (*pipeline != VK_NULL_HANDLE)
             vkDestroyPipeline(device, *pipeline, NULL);
@@ -143,11 +160,16 @@ void GEVulkanSSAO::destroy()
             vkDestroyImageView(device, view, NULL);
     }
     delete m_ao;
+    delete m_ssil;
+    m_ssil = NULL;
     for (GEVulkanAttachmentTexture* t : m_ao_half)
+        delete t;
+    for (GEVulkanAttachmentTexture* t : m_ssil_half)
         delete t;
     delete m_depth;
     m_ao = NULL;
     m_ao_half.fill(NULL);
+    m_ssil_half.fill(NULL);
     m_depth = NULL;
     m_depth_views.fill(VK_NULL_HANDLE);
     m_pipeline_layout = VK_NULL_HANDLE;
@@ -163,16 +185,38 @@ VkImageView GEVulkanSSAO::getImageView() const
 }   // getImageView
 
 // ----------------------------------------------------------------------------
+VkImageView GEVulkanSSAO::getSSILImageView() const
+{
+    return (VkImageView)m_ssil->getTextureHandler();
+}   // getSSILImageView
+
+// ----------------------------------------------------------------------------
+bool GEVulkanSSAO::getViewports(const std::vector<std::pair<GEVulkanDrawCall*,
+    GEVulkanCamera*> >& p, std::vector<Viewport>* out) const
+{
+    out->clear();
+    for (auto& q : p)
+    {
+        Viewport vp;
+        if (getViewport(q.first, q.second, &vp))
+            out->push_back(vp);
+    }
+    return !out->empty();
+}   // getViewports
+
+// ----------------------------------------------------------------------------
 void GEVulkanSSAO::createDescriptors(GEVulkanAttachmentTexture* depth,
-                                     GEVulkanAttachmentTexture* normal)
+                                     GEVulkanAttachmentTexture* normal,
+                                     GEVulkanAttachmentTexture* light,
+                                     GEVulkanAttachmentTexture* color)
 {
     VkDevice device = m_vk->getDevice();
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings = {};
+    std::array<VkDescriptorSetLayoutBinding, 7> bindings = {};
     for (unsigned i = 0; i < bindings.size(); i++)
     {
         bindings[i].binding = i;
         bindings[i].descriptorCount = 1;
-        bindings[i].descriptorType = i < 2 ?
+        bindings[i].descriptorType = (i < 2 || i >= 4) ?
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER :
             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -190,7 +234,7 @@ void GEVulkanSSAO::createDescriptors(GEVulkanAttachmentTexture* depth,
 
     std::array<VkDescriptorPoolSize, 2> pool_sizes = {};
     pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    pool_sizes[0].descriptorCount = DS_COUNT * 2;
+    pool_sizes[0].descriptorCount = DS_COUNT * 5;
     pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     pool_sizes[1].descriptorCount = DS_COUNT * 2;
     VkDescriptorPoolCreateInfo pool_info = {};
@@ -227,6 +271,12 @@ void GEVulkanSSAO::createDescriptors(GEVulkanAttachmentTexture* depth,
     const VkImageView ao_half_1 =
         (VkImageView)m_ao_half[1]->getTextureHandler();
     const VkImageView ao_full = (VkImageView)m_ao->getTextureHandler();
+    const VkImageView ssil_half_0 =
+        (VkImageView)m_ssil_half[0]->getTextureHandler();
+    const VkImageView ssil_half_1 =
+        (VkImageView)m_ssil_half[1]->getTextureHandler();
+    const VkImageView light_view = (VkImageView)light->getTextureHandler();
+    const VkImageView color_view = (VkImageView)color->getTextureHandler();
 
     struct Input
     {
@@ -240,32 +290,49 @@ void GEVulkanSSAO::createDescriptors(GEVulkanAttachmentTexture* depth,
     const Input chain_input = { chain_view, VK_IMAGE_LAYOUT_GENERAL };
     const Input half_0_input = { ao_half_0, VK_IMAGE_LAYOUT_GENERAL };
     const Input half_1_input = { ao_half_1, VK_IMAGE_LAYOUT_GENERAL };
+    const Input ssil_0_input = { ssil_half_0, VK_IMAGE_LAYOUT_GENERAL };
+    const Input ssil_1_input = { ssil_half_1, VK_IMAGE_LAYOUT_GENERAL };
+    const Input light_input =
+        { light_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+    const Input color_input =
+        { color_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 
-    // Binding 1 and 3 are not used by every shader, the same as binding 0 and
-    // 2 then
-    auto write = [this](DescriptorSet set, const Input& a, const Input& b,
-                        VkImageView out_0, VkImageView out_1)
+    // The depth chain, normal and light are reused by different passes. The
+    // unused input slots are deliberately populated to keep validation happy.
+    auto write = [this, &normal_input](DescriptorSet set, const Input& a, const Input& b,
+                        const Input& light, const Input& color,
+                        VkImageView out_0,
+                        VkImageView out_1)
     {
         const Input* inputs[2] = { &a, &b };
-        std::array<VkDescriptorImageInfo, 4> infos = {};
+        std::array<VkDescriptorImageInfo, 7> infos = {};
         for (unsigned i = 0; i < 2; i++)
         {
             infos[i].sampler = m_vk->getSampler(GVS_NEAREST);
             infos[i].imageView = inputs[i]->m_view;
             infos[i].imageLayout = inputs[i]->m_layout;
         }
+        infos[4].sampler = m_vk->getSampler(GVS_NEAREST);
+        infos[4].imageView = light.m_view;
+        infos[4].imageLayout = light.m_layout;
+        infos[5].sampler = m_vk->getSampler(GVS_NEAREST);
+        infos[5].imageView = color.m_view;
+        infos[5].imageLayout = color.m_layout;
+        infos[6].sampler = m_vk->getSampler(GVS_NEAREST);
+        infos[6].imageView = m_contact_view ? m_contact_view : normal_input.m_view;
+        infos[6].imageLayout = m_contact_view ? VK_IMAGE_LAYOUT_GENERAL : normal_input.m_layout;
         infos[2].imageView = out_0;
         infos[2].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         infos[3].imageView = out_1;
         infos[3].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        std::array<VkWriteDescriptorSet, 4> writes = {};
+        std::array<VkWriteDescriptorSet, 7> writes = {};
         for (unsigned i = 0; i < writes.size(); i++)
         {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet = m_sets[set];
             writes[i].dstBinding = i;
             writes[i].descriptorCount = 1;
-            writes[i].descriptorType = i < 2 ?
+            writes[i].descriptorType = (i < 2 || i >= 4) ?
                 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER :
                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
             writes[i].pImageInfo = &infos[i];
@@ -273,16 +340,37 @@ void GEVulkanSSAO::createDescriptors(GEVulkanAttachmentTexture* depth,
         vkUpdateDescriptorSets(m_vk->getDevice(), writes.size(),
             writes.data(), 0, NULL);
     };
-    write(DS_DEPTH, depth_input, depth_input, m_depth_views[0],
+    write(DS_DEPTH, depth_input, depth_input, light_input, normal_input,
+        m_depth_views[0],
         m_depth_views[1]);
-    write(DS_DOWN_1, chain_input, chain_input, m_depth_views[2],
+    write(DS_DOWN_1, chain_input, chain_input, light_input, normal_input,
+        m_depth_views[2],
         m_depth_views[2]);
-    write(DS_DOWN_2, chain_input, chain_input, m_depth_views[3],
+    write(DS_DOWN_2, chain_input, chain_input, light_input, normal_input,
+        m_depth_views[3],
         m_depth_views[3]);
-    write(DS_AO, chain_input, normal_input, ao_half_0, ao_half_0);
-    write(DS_BLUR_H, half_0_input, chain_input, ao_half_1, ao_half_1);
-    write(DS_BLUR_V, half_1_input, chain_input, ao_half_0, ao_half_0);
-    write(DS_UPSAMPLE, half_0_input, chain_input, ao_full, ao_full);
+    write(DS_AO, chain_input, normal_input, light_input, normal_input,
+        ao_half_0,
+        ao_half_0);
+    write(DS_BLUR_H, half_0_input, chain_input, light_input, normal_input,
+        ao_half_1,
+        ao_half_1);
+    write(DS_BLUR_V, half_1_input, chain_input, light_input, normal_input,
+        ao_half_0,
+        ao_half_0);
+    write(DS_UPSAMPLE, half_0_input, chain_input, light_input, normal_input,
+        ao_full,
+        ao_full);
+    write(DS_SSIL, chain_input, normal_input, light_input, color_input,
+        ssil_half_0, ssil_half_0);
+    write(DS_SSIL_BLUR_H, ssil_0_input, chain_input, light_input,
+        normal_input,
+        ssil_half_1, ssil_half_1);
+    write(DS_SSIL_BLUR_V, ssil_1_input, chain_input, light_input,
+        normal_input,
+        ssil_half_0, ssil_half_0);
+    write(DS_SSIL_UPSAMPLE, ssil_0_input, chain_input, normal_input, color_input,
+        getSSILImageView(), getSSILImageView());
 }   // createDescriptors
 
 // ----------------------------------------------------------------------------
@@ -337,6 +425,9 @@ void GEVulkanSSAO::createPipelines()
     createPipeline("ssao.comp", &m_ao_pipeline);
     createPipeline("ssao_blur.comp", &m_blur_pipeline);
     createPipeline("ssao_upsample.comp", &m_upsample_pipeline);
+    createPipeline("ssil.comp", &m_ssil_pipeline);
+    createPipeline("ssil_blur.comp", &m_ssil_blur_pipeline);
+    createPipeline("ssil_upsample.comp", &m_ssil_upsample_pipeline);
 }   // createPipelines
 
 // ----------------------------------------------------------------------------
@@ -375,7 +466,8 @@ bool GEVulkanSSAO::render(VkCommandBuffer cmd,
 
     GEConfig* config = getGEConfig();
     SSAOPushConstants pc = {};
-    pc.m_params[0] = config->m_ssao_radius;
+    pc.m_params[0] = std::max(0.0f, config->m_ssao_radius);
+    pc.m_misc[3] = m_contact_view != VK_NULL_HANDLE;
     pc.m_params[1] = config->m_ssao_sigma;
     pc.m_params[2] = config->m_ssao_k;
 
@@ -471,5 +563,75 @@ bool GEVulkanSSAO::render(VkCommandBuffer cmd,
         NULL);
     return true;
 }   // render
+
+// ----------------------------------------------------------------------------
+bool GEVulkanSSAO::renderIndirect(VkCommandBuffer cmd,
+    const std::vector<std::pair<GEVulkanDrawCall*,
+    GEVulkanCamera*> >& p)
+{
+    std::vector<Viewport> viewports;
+    if (!getViewports(p, &viewports))
+        return false;
+
+    VkMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+        VK_ACCESS_SHADER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, NULL, 0,
+        NULL);
+
+    GEConfig* config = getGEConfig();
+    SSAOPushConstants pc = {};
+    pc.m_params[0] = std::max(0.0f, config->m_ssao_radius);
+    pc.m_misc[3] = m_contact_view != VK_NULL_HANDLE;
+
+    auto dispatch = [&](VkPipeline pipeline, DescriptorSet set,
+                        int32_t direction_x, int32_t direction_y)
+    {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            m_pipeline_layout, 0, 1, &m_sets[set], 0, NULL);
+        for (const Viewport& vp : viewports)
+        {
+            vp.m_draw_call->bindDataDescriptorSet(m_vk, cmd,
+                VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline_layout, 1);
+            for (unsigned i = 0; i < 4; i++)
+                pc.m_rect[i] = vp.m_rect[i];
+            pc.m_params[3] = vp.m_height / REFERENCE_HEIGHT;
+            pc.m_misc[1] = direction_x;
+            pc.m_misc[2] = direction_y;
+            vkCmdPushConstants(cmd, m_pipeline_layout,
+                VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+            const auto area = set == DS_SSIL_UPSAMPLE ? vp.m_rect : halfRect(vp.m_rect);
+            vkCmdDispatch(cmd, groups(area[2] - area[0]),
+                groups(area[3] - area[1]), 1);
+        }
+    };
+
+    dispatch(m_ssil_pipeline, DS_SSIL, 0, 0);
+    computeToComputeBarrier(cmd, 0);
+    dispatch(m_ssil_blur_pipeline, DS_SSIL_BLUR_H, 1, 0);
+    computeToComputeBarrier(cmd, 0);
+    dispatch(m_ssil_blur_pipeline, DS_SSIL_BLUR_V, 0, 1);
+    computeToComputeBarrier(cmd, 0);
+    dispatch(m_ssil_upsample_pipeline, DS_SSIL_UPSAMPLE, 0, 0);
+
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &barrier, 0, NULL, 0,
+        NULL);
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL, 0,
+        NULL);
+    return true;
+}   // renderIndirect
 
 }

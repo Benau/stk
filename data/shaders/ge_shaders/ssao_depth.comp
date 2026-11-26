@@ -27,7 +27,7 @@ float linearDepth(ivec2 pixel)
 
 void main()
 {
-    const ivec4 half_rect = ssaoHalfRect(pc.m_rect);
+    const ivec4 half_rect = ivec4(pc.m_rect.xy >> 1, (pc.m_rect.zw + 1) >> 1);
     const ivec2 block = half_rect.xy + ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(block, half_rect.zw)))
         return;
@@ -43,6 +43,6 @@ void main()
             all(lessThan(pixel, pc.m_rect.zw)))
             imageStore(u_level0, pixel, vec4(z[i]));
     }
-    imageStore(u_level1, block,
-        vec4(ssaoDepthFilter(z[0], z[1], z[2], z[3])));
+    if (all(greaterThanEqual(block * 2, pc.m_rect.xy)) && all(lessThan(block, imageSize(u_level1))))
+        imageStore(u_level1, block, vec4(ssaoDepthFilter(z[0], z[1], z[2], z[3], ssaoContactRadius(block * 2))));
 }

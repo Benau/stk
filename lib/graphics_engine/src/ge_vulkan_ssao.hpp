@@ -53,9 +53,14 @@ private:
     // all the time)
     GEVulkanAttachmentTexture* m_ao;
 
-    // Binding 0 and 1 are combined image samplers and 2 and 3 are storage
-    // images (the unused ones are written with the same image as another one
-    // so a descriptor is never left unwritten)
+    // Half-rate screen-space indirect diffuse light. It is evaluated from the
+    // lit HDR buffer after the lighting pass and consumed by tonemapping.
+    std::array<GEVulkanAttachmentTexture*, 2> m_ssil_half;
+    GEVulkanAttachmentTexture* m_ssil;
+    VkImageView m_contact_view;
+
+    // Bindings 0, 1 and 4 are combined image samplers and 2 and 3 are storage
+    // images. Unused bindings are written with a valid image as well.
     VkDescriptorSetLayout m_layout;
 
     VkDescriptorPool m_pool;
@@ -74,6 +79,12 @@ private:
         DS_BLUR_V,
         // m_ao_half[0] -> m_ao
         DS_UPSAMPLE,
+        // depth chain, normal and lit HDR -> m_ssil_half[0]
+        DS_SSIL,
+        // m_ssil_half[0] -> [1] (horizontal), [1] -> [0] (vertical)
+        DS_SSIL_BLUR_H,
+        DS_SSIL_BLUR_V,
+        DS_SSIL_UPSAMPLE,
         DS_COUNT
     };
     std::array<VkDescriptorSet, DS_COUNT> m_sets;
@@ -95,9 +106,20 @@ private:
     VkPipeline m_blur_pipeline;
 
     VkPipeline m_upsample_pipeline;
+
+    VkPipeline m_ssil_pipeline;
+
+    VkPipeline m_ssil_blur_pipeline;
+    VkPipeline m_ssil_upsample_pipeline;
+
+    // Collects non-empty viewports without reading outside their rectangles.
+    bool getViewports(const std::vector<std::pair<GEVulkanDrawCall*,
+        GEVulkanCamera*> >& p, std::vector<Viewport>* out) const;
     // ------------------------------------------------------------------------
     void createDescriptors(GEVulkanAttachmentTexture* depth,
-                           GEVulkanAttachmentTexture* normal);
+                           GEVulkanAttachmentTexture* normal,
+                           GEVulkanAttachmentTexture* light,
+                           GEVulkanAttachmentTexture* color);
     // ------------------------------------------------------------------------
     void createPipelines();
     // ------------------------------------------------------------------------
@@ -111,7 +133,9 @@ public:
     GEVulkanSSAO(GEVulkanDriver* vk,
                  const irr::core::dimension2d<irr::u32>& size,
                  GEVulkanAttachmentTexture* depth,
-                 GEVulkanAttachmentTexture* normal);
+                 GEVulkanAttachmentTexture* normal,
+                 GEVulkanAttachmentTexture* light,
+                 GEVulkanAttachmentTexture* color, VkImageView contact_view);
     // ------------------------------------------------------------------------
     ~GEVulkanSSAO();
     // ------------------------------------------------------------------------
@@ -121,9 +145,16 @@ public:
     virtual bool render(VkCommandBuffer cmd,
                         const std::vector<std::pair<GEVulkanDrawCall*,
                         GEVulkanCamera*> >& p);
+    // Renders the half-rate screen-space indirect light after the lighting
+    // pass and before bloom/tonemapping.
+    bool renderIndirect(VkCommandBuffer cmd,
+                        const std::vector<std::pair<GEVulkanDrawCall*,
+                        GEVulkanCamera*> >& p);
     // ------------------------------------------------------------------------
     // Sampled by the lighting pass in general layout
     VkImageView getImageView() const;
+    // Sampled by the tonemap pass in general layout.
+    VkImageView getSSILImageView() const;
 };   // GEVulkanSSAO
 
 }
