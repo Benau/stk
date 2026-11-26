@@ -14,7 +14,7 @@
 #include "ge_vulkan_skybox_renderer.hpp"
 #include "ge_vulkan_rt_shadow.hpp"
 #include "ge_vulkan_solid_reflection.hpp"
-#include "ge_vulkan_stochastic_reflection.hpp"
+#include "ge_vulkan_specular_gi.hpp"
 #include "ge_vulkan_surfel_gi.hpp"
 #include "ge_vulkan_ssao.hpp"
 
@@ -134,9 +134,7 @@ VkFramebuffer createFramebuffer(VkDevice device, VkRenderPass render_pass,
 
 // ----------------------------------------------------------------------------
 // Allocates one descriptor set with count combined image samplers (binding 0
-// to count - 1) in the given slot. With trace_output, it also has a storage
-// image (binding count) and a storage buffer (count + 1) for the compute
-// shaders, copies of the bindings 0 and 1 of that set
+// to count - 1) in the given slot
 void createSamplerDescriptor(GEVulkanDriver* vk, unsigned count,
                              VkDescriptorSetLayout* layout,
                              VkDescriptorPool* pool, VkDescriptorSet* set,
@@ -290,20 +288,6 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
     bool supports_compute = GEVulkanFeatures::supportsComputeInMainQueue();
     // Before the descriptor of the g-buffer, which has the result of it (the
     // lighting pass samples it)
-    if (supports_compute && getGEConfig()->m_ssao)
-    {
-        try
-        {
-            m_ssao.reset(new GEVulkanSSAO(vk, getSize(), m_depth_texture,
-                m_attachments[GVDFT_NORMAL]));
-        }
-        catch (const std::exception& e)
-        {
-            GE::logMessage(GE::GLL_ERROR,
-                "Failed to initialize ambient occlusion: %s", e.what());
-            m_ssao.reset();
-        }
-    }
     // Also before the descriptor of the g-buffer (it's sampled by the lighting
     // pass), inactive if it can't be used
     {
@@ -330,14 +314,37 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
     {
         try
         {
+            VkFormat format = vk->findSupportedFormat({ VK_FORMAT_R8G8_UNORM,
+                VK_FORMAT_R8G8B8A8_UNORM }, VK_IMAGE_TILING_OPTIMAL,
+                VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
+            m_attachments[GVDFT_VERTEX_NORMAL] = new GEVulkanAttachmentTexture(vk,
+                getSize(), format, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                VK_IMAGE_ASPECT_COLOR_BIT);
             m_surfel_gi.reset(new GEVulkanSurfelGI(vk, getSize(),
-                m_depth_texture, m_attachments[GVDFT_NORMAL]));
+                m_depth_texture, m_attachments[GVDFT_VERTEX_NORMAL]));
         }
         catch (const std::exception& e)
         {
             GE::logMessage(GE::GLL_ERROR,
                 "Failed to initialize global illumination: %s", e.what());
             m_surfel_gi.reset();
+            if (m_attachments[GVDFT_VERTEX_NORMAL])
+                m_attachments[GVDFT_VERTEX_NORMAL]->drop();
+            m_attachments[GVDFT_VERTEX_NORMAL] = NULL;
+        }
+    }
+    if (supports_compute && getGEConfig()->m_ssao)
+    {
+        try
+        {
+            m_ssao.reset(new GEVulkanSSAO(vk, getSize(), m_depth_texture,
+                m_attachments[GVDFT_NORMAL], m_attachments[GVDFT_HDR],
+                m_attachments[GVDFT_COLOR], m_surfel_gi ? m_surfel_gi->getContactView() : VK_NULL_HANDLE));
+        }
+        catch (const std::exception& e)
+        {
+            GE::logMessage(GE::GLL_ERROR, "Failed to initialize ambient occlusion: %s", e.what());
+            m_ssao.reset();
         }
     }
     // Also before the descriptor of the g-buffer (it's sampled by the lighting
@@ -349,11 +356,11 @@ GEVulkanDeferredFBOSplit::GEVulkanDeferredFBOSplit(GEVulkanDriver* vk,
     {
         try
         {
-            if (getGEConfig()->m_stochastic_reflection)
+            if (getGEConfig()->m_specular_gi)
             {
-                m_solid_reflection.reset(new GEVulkanStochasticReflection(vk,
+                m_solid_reflection.reset(new GEVulkanSpecularGI(vk,
                     getSize(), m_depth_texture, m_attachments[GVDFT_NORMAL],
-                    m_solid_ssr, solid_rt));
+                    m_solid_ssr, solid_rt, hasSurfelGI()));
             }
             else
             {
@@ -484,10 +491,10 @@ void GEVulkanDeferredFBOSplit::initLightingCompositeDescriptor(
 }   // initLightingCompositeDescriptor
 
 // ----------------------------------------------------------------------------
-bool GEVulkanDeferredFBOSplit::hasStochasticReflection() const
+bool GEVulkanDeferredFBOSplit::hasSpecularGI() const
 {
-    return m_solid_reflection && m_solid_reflection->isStochastic();
-}   // hasStochasticReflection
+    return m_solid_reflection && m_solid_reflection->isSpecularGI();
+}   // hasSpecularGI
 
 // ----------------------------------------------------------------------------
 float GEVulkanDeferredFBOSplit::getRTShadowScale() const
@@ -512,7 +519,7 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
     // space trace of it, 7 and 8 are its output and list (see
     // solid_reflection_ssr.comp, its pipeline has no other set for them), and
     // 9 the length of the rays with the stochastic one (see
-    // stochastic_reflection_ssr.comp)
+    // specular_gi_ssr.comp)
     std::array<VkDescriptorImageInfo, 7> image_infos = {};
     image_infos[0].sampler = vk->getSampler(GVS_NEAREST);
     image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -586,7 +593,7 @@ void GEVulkanDeferredFBOSplit::initSplitGBufferDescriptor(GEVulkanDriver* vk)
 void GEVulkanDeferredFBOSplit::initSplitConvertColorDescriptor(
                                                             GEVulkanDriver* vk)
 {
-    std::array<VkDescriptorImageInfo, 4> image_infos = {};
+    std::array<VkDescriptorImageInfo, 5> image_infos = {};
     image_infos[0].sampler = vk->getSampler(GVS_NEAREST);
     image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     image_infos[0].imageView =
@@ -646,6 +653,15 @@ void GEVulkanDeferredFBOSplit::initSplitConvertColorDescriptor(
                 image_infos[3].imageView = view;
         }
     }
+    image_infos[4].sampler = vk->getSampler(GVS_SKYBOX);
+    image_infos[4].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    if (m_ssao)
+    {
+        image_infos[4].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        image_infos[4].imageView = m_ssao->getSSILImageView();
+    }
+    else
+        image_infos[4].imageView = unused;
     createSamplerDescriptor(vk, image_infos.size(),
         &m_descriptor_layout[GVDFP_CONVERT_COLOR],
         &m_descriptor_pool[GVDFP_CONVERT_COLOR],
@@ -694,11 +710,23 @@ void GEVulkanDeferredFBOSplit::createRTT()
                 VK_ATTACHMENT_STORE_OP_STORE, VK_IMAGE_LAYOUT_UNDEFINED,
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL)
         };
-        std::array<VkAttachmentReference, 2> color_references =
-            {{
+        std::vector<VkAttachmentReference> color_references =
+            {
                 { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL },
                 { 1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL }
-            }};
+            };
+        std::vector<VkImageView> views = {
+            (VkImageView)m_attachments[GVDFT_COLOR]->getTextureHandler(),
+            (VkImageView)m_attachments[GVDFT_NORMAL]->getTextureHandler(),
+            (VkImageView)m_depth_texture->getTextureHandler() };
+        if (m_attachments[GVDFT_VERTEX_NORMAL])
+        {
+            auto* normals = m_attachments[GVDFT_VERTEX_NORMAL];
+            desc.push_back(makeAttachment(normals->getInternalFormat(), VK_ATTACHMENT_LOAD_OP_CLEAR,
+                VK_ATTACHMENT_STORE_OP_STORE, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+            color_references.push_back({ 3, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL });
+            views.push_back((VkImageView)normals->getTextureHandler());
+        }
         VkAttachmentReference depth_reference =
             { 2, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
         VkSubpassDescription subpass = {};
@@ -738,12 +766,7 @@ void GEVulkanDeferredFBOSplit::createRTT()
             subpass, deps, "GVDSP_GBUFFER");
 
         m_rtt_frame_buffer[GVDSP_GBUFFER] = createFramebuffer(device,
-            m_rtt_render_pass[GVDSP_GBUFFER],
-            {
-                (VkImageView)m_attachments[GVDFT_COLOR]->getTextureHandler(),
-                (VkImageView)m_attachments[GVDFT_NORMAL]->getTextureHandler(),
-                (VkImageView)m_depth_texture->getTextureHandler()
-            }, getSize(), "GVDSP_GBUFFER");
+            m_rtt_render_pass[GVDSP_GBUFFER], views, getSize(), "GVDSP_GBUFFER");
     }
 
     // GVDSP_LIGHTING: hdr, depth is only read (depth test of point lights and
@@ -884,6 +907,17 @@ void GEVulkanDeferredFBOSplit::createRTT()
 }   // createRTT
 
 // ----------------------------------------------------------------------------
+VkBuffer GEVulkanDeferredFBOSplit::getSurfelGIProbeField() const
+{
+    return m_surfel_gi ? m_surfel_gi->getProbeField() : VK_NULL_HANDLE;
+}
+
+void GEVulkanDeferredFBOSplit::prepareSurfelGI(const std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCamera*> >& views)
+{
+    if (m_surfel_gi)
+        m_surfel_gi->prepareProbeField(views);
+}
+
 void GEVulkanDeferredFBOSplit::beginPass(VkCommandBuffer cmd, unsigned pass,
                                          unsigned framebuffer,
                                          uint32_t clear_count,
@@ -915,9 +949,9 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
 
     // 1. g-buffer
     {
-        std::array<VkClearValue, 3> clears = {};
+        std::array<VkClearValue, 4> clears = {};
         clears[2].depthStencil = {0.0f, 0};
-        beginPass(cmd, GVDSP_GBUFFER, GVDSP_GBUFFER, clears.size(),
+        beginPass(cmd, GVDSP_GBUFFER, GVDSP_GBUFFER, m_attachments[GVDFT_VERTEX_NORMAL] ? 4 : 3,
             clears.data());
         for (auto& q : p)
         {
@@ -925,7 +959,7 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
                 q.first->bindAllMaterials(cmd);
             else
                 rebind_base_vertex = true;
-            q.first->updateDataDescriptorSets(m_vk, q.second);
+            q.first->updateDataDescriptorSets(m_vk, q.second, getSurfelGIProbeField());
             q.first->prepareViewport(m_vk, q.second->getViewPort(), cmd);
             if (q.first->doDepthOnlyRenderingFirst())
             {
@@ -938,6 +972,13 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         vkCmdEndRenderPass(cmd);
     }
     // The depth is complete, the lighting and displace pass trace it
+    VkCommandBuffer lighting = m_vk->finishGBuffer(cmd);
+    if (cmd != lighting)
+    {
+        cmd = lighting;
+        rebind_base_vertex = true;
+        multiple_viewports = true;
+    }
     generateHiZ(cmd, has_displace_fbo, p);
     // Nothing is traced in the first frame, there is no output of the
     // previous one
@@ -952,16 +993,14 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         m_light_scatter->render(cmd, p);
     // And the light shafts of the sun (compute shaders only)
     const bool has_god_rays = m_god_rays && m_god_rays->render(cmd, p);
-    // And the ambient occlusion which the lighting pass samples (compute
-    // shaders only)
-    if (m_ssao)
-        m_ssao->render(cmd, p);
     // And the visibility of the ray traced shadows (the sun)
     if (m_rt_shadow)
         m_rt_shadow->render(cmd, p);
     // And the diffuse global illumination of the surfels
     if (m_surfel_gi)
         m_surfel_gi->render(cmd, p);
+    if (m_ssao)
+        m_ssao->render(cmd, p);
     // And the reflection of the glossy solid materials, the screen space one
     // (if the output of the previous frame is there) or the ray traced one
     if (m_solid_reflection)
@@ -995,6 +1034,11 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         vkCmdEndRenderPass(cmd);
     }
 
+    // 3b. Screen-space indirect diffuse light from the lit HDR buffer. It is
+    // generated outside the render pass and consumed by tonemapping.
+    if (m_ssao)
+        m_ssao->renderIndirect(cmd, p);
+
     // 4. bloom of the finished hdr (compute shaders only)
     const bool has_bloom = m_bloom && m_bloom->render(cmd, p);
 
@@ -1009,10 +1053,16 @@ void GEVulkanDeferredFBOSplit::render(VkCommandBuffer cmd,
         {
             if (multiple_viewports)
                 q.first->prepareViewport(m_vk, q.second->getViewPort(), cmd);
-            GEVulkanBloomRects bloom_rects;
-            q.first->renderDeferredConvertColor(m_vk, cmd,
-                has_bloom && m_bloom->getRects(q.first, &bloom_rects) ?
-                &bloom_rects : NULL);
+            GEVulkanBloomRects bloom_rects = {};
+            if (!has_bloom || !m_bloom->getRects(q.first, &bloom_rects))
+            {
+                const VkViewport vp = q.first->getRenderViewport(m_vk, q.second->getViewPort());
+                bloom_rects.m_viewport[0] = int32_t(vp.x);
+                bloom_rects.m_viewport[1] = int32_t(vp.y);
+                bloom_rects.m_viewport[2] = int32_t(vp.x) + int32_t(vp.width);
+                bloom_rects.m_viewport[3] = int32_t(vp.y) + int32_t(vp.height);
+            }
+            q.first->renderDeferredConvertColor(m_vk, cmd, &bloom_rects);
             if (bind_mesh_textures)
                 q.first->bindAllMaterials(cmd);
             else

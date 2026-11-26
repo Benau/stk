@@ -182,14 +182,16 @@ public:
     // Same for the global illumination which the lighting pass samples (the
     // sixth binding of GVDFP_HDR)
     bool hasSurfelGI() const                    { return m_surfel_gi != NULL; }
+    VkBuffer getSurfelGIProbeField() const override;
+    void prepareSurfelGI(const std::vector<std::pair<GEVulkanDrawCall*, GEVulkanCamera*> >& views);
     // ------------------------------------------------------------------------
     // Same for the reflection of the solid materials (the seventh binding of
     // GVDFP_HDR), the draw calls create the pipelines of its trace
     bool hasSolidReflection() const      { return m_solid_reflection != NULL; }
     // ------------------------------------------------------------------------
-    // The reflection is the stochastic one (GEConfig::m_stochastic_reflection
+    // The reflection uses specular GI (GEConfig::m_specular_gi
     // when the FBO was created), the lighting pass upsamples it
-    bool hasStochasticReflection() const;
+    bool hasSpecularGI() const;
     // ------------------------------------------------------------------------
     GEVulkanSolidReflection* getSolidReflection() const
                                            { return m_solid_reflection.get(); }
