@@ -108,9 +108,9 @@ enum DebugMenuCommand
     DEBUG_GE_PBR,
     DEBUG_GE_IBL,
     DEBUG_GE_GI,
-    DEBUG_GE_GI_FRAME_CACHE,
+    DEBUG_GE_FRAME_CACHE,
     DEBUG_GE_SR,
-    DEBUG_GE_STOCHASTIC_REFLECTION,
+    DEBUG_GE_SPECULAR_GI,
     DEBUG_GE_DR,
     DEBUG_GE_RT,
     DEBUG_SP_RESET,
@@ -438,15 +438,17 @@ bool handleContextMenuAction(s32 cmd_id)
         break;
     }
 #endif
-    case DEBUG_GE_GI_FRAME_CACHE:
+    case DEBUG_GE_FRAME_CACHE:
 #ifndef SERVER_ONLY
     {
-        // The frame cache of the global illumination is read every frame, so
-        // its effect on the speed and the look can be compared in a race
-        GE::GERayTracingConfig& rt = GE::getGEConfig()->m_ray_tracing;
-        rt.m_gi_frame_cache = !rt.m_gi_frame_cache;
-        Log::info("Debug", "GI frame cache %s",
-            rt.m_gi_frame_cache ? "on" : "off");
+        // The frame cache (of the global illumination and specular
+        // GI) is read every frame, so its effect on the speed and the
+        // look can be compared in a race
+        GE::GEConfig* config = GE::getGEConfig();
+        config->m_frame_cache = !config->m_frame_cache;
+        UserConfigParams::m_ge_frame_cache = config->m_frame_cache;
+        Log::info("Debug", "Frame cache %s",
+            config->m_frame_cache ? "on" : "off");
         break;
     }
 #endif
@@ -465,7 +467,7 @@ bool handleContextMenuAction(s32 cmd_id)
         break;
     }
 #endif
-    case DEBUG_GE_STOCHASTIC_REFLECTION:
+    case DEBUG_GE_SPECULAR_GI:
 #ifndef SERVER_ONLY
     {
         GE::GEVulkanDriver* vk = GE::getVKDriver();
@@ -474,9 +476,9 @@ bool handleContextMenuAction(s32 cmd_id)
             // The reflection has other passes and a half size output, the
             // render target is created again
             GE::GEConfig* config = GE::getGEConfig();
-            config->m_stochastic_reflection = !config->m_stochastic_reflection;
-            Log::info("Debug", "Stochastic solid reflection %s",
-                config->m_stochastic_reflection ? "on" : "off");
+            config->m_specular_gi = !config->m_specular_gi;
+            Log::info("Debug", "Specular GI %s",
+                config->m_specular_gi ? "on" : "off");
             vk->updateDriver(true/*scale_changed*/);
         }
         break;
@@ -1432,11 +1434,10 @@ bool onEvent(const SEvent &event)
             sub->addItem(L"Toggle GE PBR", DEBUG_GE_PBR);
             sub->addItem(L"Toggle GE IBL", DEBUG_GE_IBL);
             sub->addItem(L"Toggle GE global illumination", DEBUG_GE_GI);
-            sub->addItem(L"Toggle GE GI frame cache",
-                DEBUG_GE_GI_FRAME_CACHE);
+            sub->addItem(L"Toggle GE frame cache", DEBUG_GE_FRAME_CACHE);
             sub->addItem(L"Toggle GE Solid Reflection", DEBUG_GE_SR);
-            sub->addItem(L"Toggle GE stochastic reflection",
-                DEBUG_GE_STOCHASTIC_REFLECTION);
+            sub->addItem(L"Toggle GE specular GI",
+                DEBUG_GE_SPECULAR_GI);
             sub->addItem(L"Toggle GE Displace Reflection", DEBUG_GE_DR);
             sub->addItem(L"Ray tracing settings...", DEBUG_GE_RT);
 
