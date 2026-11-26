@@ -1,0 +1,120 @@
+layout(local_size_x = 64) in;
+#define SURFEL_SET 2
+#include "utils/surfel_gi.glsl"
+#include "utils/surfel_gi_volume.glsl"
+#include "utils/surfel_gi_cache.glsl"
+#include "utils/surfel_gi_ray_work.glsl"
+
+shared vec4 samples[64 * SURFEL_RAYS_PER_THREAD];
+
+float rayPeak(vec3 radiance)
+{
+    return max(radiance.r, max(radiance.g, radiance.b));
+}
+
+uint probeGuide(vec3 position, vec3 normal)
+{
+    uint camera = closestGICamera(position);
+    for (uint level = 0u; level < clipLevels(camera); ++level)
+    {
+        ivec3 cell = surfelGICellAt(position, clipSpacing(camera, level));
+        ivec3 local = cell - clipOrigin(camera, level);
+        if (any(lessThan(local, ivec3(0))) || any(greaterThanEqual(local, SURFEL_GI_CLIP_SIZE)))
+            continue;
+        uint slot = probeSlot(cell, level, camera);
+        if (probes[slot].frame == 0u || probes[slot].cell != cell || probes[slot].proximity < 0.0)
+            continue;
+        vec3 moment = vec3(0.0);
+        for (uint index = 0u; index < SURFEL_GI_LIGHT_INTERIOR * SURFEL_GI_LIGHT_INTERIOR; ++index)
+        {
+            uint texel = (index / SURFEL_GI_LIGHT_INTERIOR + 1u) * SURFEL_GI_LIGHT_WIDTH + index % SURFEL_GI_LIGHT_INTERIOR + 1u;
+            vec3 direction = octDirection(index, SURFEL_GI_LIGHT_INTERIOR);
+            float energy = dot(unpackSurfelGIRGB(probes[slot].light[texel]), vec3(0.2126, 0.7152, 0.0722));
+            moment += direction * energy * max(dot(normal, direction), 0.0);
+        }
+        if (dot(moment, moment) > 1e-8)
+            return packSnorm4x8(vec4(normalize(moment), 0.0));
+    }
+    return 0u;
+}
+
+void main()
+{
+    uint list = pc.m_trace_list;
+    uint threads = getSurfelTraceThreads(list);
+    uint index = gl_GlobalInvocationID.x;
+    uint entry = index / threads;
+    uint lane = gl_LocalInvocationIndex;
+    if (entry < u_trace_lists.m_selected[list])
+    {
+        uint base = surfelRayBase(list) + index * SURFEL_RAYS_PER_THREAD;
+        for (uint ray = 0u; ray < SURFEL_RAYS_PER_THREAD; ++ray)
+            samples[lane * SURFEL_RAYS_PER_THREAD + ray] = ray_results[base + ray];
+    }
+    barrier();
+    if (index % threads != 0u || entry >= u_trace_lists.m_selected[list])
+        return;
+    uint id = scheduledSurfel(list, entry);
+    uint batch_size = threads * SURFEL_RAYS_PER_THREAD;
+    uint first = lane * SURFEL_RAYS_PER_THREAD;
+    float count = float(batch_size);
+    vec4 sum = vec4(0.0);
+    float energy = 0.0;
+    vec3 brightest = vec3(0.0);
+    float peak = 0.0;
+    float runner_up = 0.0;
+    for (uint ray = 0u; ray < batch_size; ++ray)
+    {
+        vec4 result = samples[first + ray];
+        float value = rayPeak(result.rgb);
+        vec3 other = result.rgb;
+        if (value > peak)
+        {
+            runner_up = peak;
+            peak = value;
+            other = brightest;
+            brightest = result.rgb;
+        }
+        else
+            runner_up = max(runner_up, value);
+        sum += vec4(other, float(result.w < 0.0));
+        energy += dot(other, other);
+    }
+    lighting[id].buried = uint(sum.w == count);
+    uint previous = lighting[id].frame;
+    float tail = previous != 0u ? lighting[id].ray_tail : 0.0;
+    float limit = max(2.0 * runner_up + 0.02, tail);
+    brightest *= min(1.0, limit / max(peak, 1e-8));
+    sum.rgb += brightest;
+    energy += dot(brightest, brightest);
+    lighting[id].ray_tail = mix(tail, peak, 1.0 - exp2(-count / 128.0));
+    vec3 mean = sum.rgb / count;
+    float variance = max(energy / count - dot(mean, mean), 0.0) / max(count - 1.0, 1.0);
+    float scale = min(1.0, 8.0 / max(dot(mean, vec3(0.2126, 0.7152, 0.0722)), 1e-5));
+    mean *= scale;
+    variance *= scale * scale;
+    float elapsed = max(pc.m_steps, 0.01) * float(clamp(pc.m_frame - previous, 1u, 64u));
+    float blend = 1.0;
+    vec3 history = lighting[id].local_irradiance.rgb;
+    vec3 short_irradiance = mean;
+    if (previous != 0u)
+    {
+        vec3 prior = unpackSurfelGIRGB(lighting[id].short_irradiance);
+        float trend = max(0.0, dot(prior - history, mean - history));
+        float rate = max(0.22, 1.0 - exp2(-elapsed / 4.0));
+        short_irradiance = mix(prior, short_irradiance, rate);
+        variance = mix(lighting[id].variance, variance, rate);
+        float noise = 0.015 + sqrt(max(variance, 0.0));
+        float change = smoothstep(0.4, 1.5, sqrt(trend) / noise);
+        blend = max(1.0 / (1.0 + lighting[id].local_irradiance.w * SURFEL_RAYS / count),
+            1.0 - exp2(-elapsed / mix(32.0, 2.0, change)));
+    }
+    float confidence = min((previous == 0u ? 0.0 : lighting[id].local_irradiance.w) +
+        count / float(SURFEL_RAYS), SURFEL_MAX_SAMPLES);
+    lighting[id].local_irradiance = vec4(mix(history, mean, blend), confidence);
+    lighting[id].short_irradiance = packSurfelGIRGB(short_irradiance);
+    lighting[id].variance = variance;
+    if (previous == 0u || pc.m_frame / 8u != previous / 8u)
+        lighting[id].guide = probeGuide(u_surfels[id].m_position, u_surfels[id].m_normal);
+    lighting[id].frame = pc.m_frame;
+}
