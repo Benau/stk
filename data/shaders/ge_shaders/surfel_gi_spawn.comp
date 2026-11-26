@@ -1,30 +1,31 @@
-// Pass of GEVulkanSurfelGI after surfel_gi_gather.comp (see
-// utils/surfel_gi_apply.glsl), one thread per 8x8 tile of the viewport: a new
-// surfel at the least covered pixel of the tile which needs one, with the
-// chance of the frame (the same as surfel_gi_apply.comp without the list)
+// Before tracing, choose at most one surface from each participating tile.
 #extension GL_EXT_ray_query : require
 
-layout(local_size_x = 64) in;
+layout(local_size_x = 4, local_size_y = 4) in;
 
 #include "utils/surfel_gi_apply.glsl"
 
+shared uint candidate;
+
 void main()
 {
-    uint tiles_x = uint(pc.m_rect.z - pc.m_rect.x + 7) / 8u;
-    uint tiles_y = uint(pc.m_rect.w - pc.m_rect.y + 7) / 8u;
-    uint tile = gl_GlobalInvocationID.x;
-    if (tile >= tiles_x * tiles_y)
+    ivec2 first = pc.m_rect.xy + ivec2(gl_WorkGroupID.xy * gl_WorkGroupSize.xy) * 2;
+    if (!isSurfelSpawnTurn(first))
         return;
-    uint key = u_tile_spawns[tile];
-    if (key == 0xFFFFFFFFu)
-        return;
-    ivec2 pixel = pc.m_rect.xy +
-        ivec2(tile % tiles_x, tile / tiles_x) * 8 +
-        ivec2(key & 7u, (key >> 3u) & 7u);
-    if (!isSurfelSpawnTurn(pixel))
-        return;
+    if (gl_LocalInvocationIndex == 0u)
+        candidate = ~0u;
+    barrier();
+    uint seed = gl_WorkGroupID.x * 1973u + gl_WorkGroupID.y * 9277u + pc.m_frame * 26699u;
+    uint phase = uint(getSurfelRandom(seed) * 4.0);
+    ivec2 pixel = first + ivec2(gl_LocalInvocationID.xy) * 2 + ivec2(phase & 1u, (phase >> 1u) & 1u);
     SurfelPixel p;
-    loadSurfelPixel(pixel, p);
-    // The seed of the new surfel, only for the few which spawn
-    spawnSurfel(p, gatherSurfels(p));
+    SurfelGather gathered;
+    if (all(lessThan(pixel, pc.m_rect.zw)) && loadSurfelPixel(pixel, p))
+    {
+        gathered = gatherSurfels(p);
+        atomicMin(candidate, getSurfelSpawnKey(seed ^ gl_LocalInvocationIndex, gathered));
+    }
+    barrier();
+    if (candidate != ~0u && (candidate & 63u) == gl_LocalInvocationIndex)
+        spawnSurfel(p, gathered);
 }
