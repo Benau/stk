@@ -258,8 +258,7 @@ vec3 shadeHit(uint geometry_index, uint primitive, vec2 b, float hit_distance,
 // what a miss is, the environment or the lit color which is already there),
 // hdr is the lit color of the closest hit otherwise, hit_distance its distance
 // from the origin (0 without a hit) and moving is true if it's a node which can
-// move (the static scene is the first instance of GEVulkanRTScene, every
-// other one is a dynamic node or the grass). direction is normalized
+// move (a dynamic node or grass). direction is normalized
 bool traceReflection(vec3 origin, vec3 direction, out vec3 hdr,
                      out float hit_distance, out bool moving)
 {
@@ -277,10 +276,10 @@ bool traceReflection(vec3 origin, vec3 direction, out vec3 hdr,
         return false;
     }
     hit_distance = rayQueryGetIntersectionTEXT(ray_query, true);
-    moving = rayQueryGetIntersectionInstanceIdEXT(ray_query, true) != 0;
     uint geometry_index =
         uint(rayQueryGetIntersectionInstanceCustomIndexEXT(ray_query, true)) +
         uint(rayQueryGetIntersectionGeometryIndexEXT(ray_query, true));
+    moving = (u_rt_geometries[geometry_index].m_flags & RT_GEOMETRY_STATIC) == 0u;
     hdr = shadeHit(geometry_index,
         uint(rayQueryGetIntersectionPrimitiveIndexEXT(ray_query, true)),
         rayQueryGetIntersectionBarycentricsEXT(ray_query, true),

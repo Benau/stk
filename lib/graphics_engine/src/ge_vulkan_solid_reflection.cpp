@@ -22,7 +22,7 @@ namespace
 {
 // ----------------------------------------------------------------------------
 // Push constants of solid_reflection_classify.comp (and
-// stochastic_reflection_classify.comp)
+// specular_gi_classify.comp)
 struct ClassifyPushConstants
 {
     int32_t m_rect[4];
@@ -233,7 +233,8 @@ void GEVulkanSolidReflection::createDescriptor(GEVulkanAttachmentTexture* depth,
 }   // createDescriptor
 
 // ----------------------------------------------------------------------------
-void GEVulkanSolidReflection::createClassifyPipeline(const char* shader)
+void GEVulkanSolidReflection::createClassifyPipeline(const char* shader,
+                                        const VkSpecializationInfo* constants)
 {
     VkPushConstantRange push_constant = {};
     push_constant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -257,6 +258,7 @@ void GEVulkanSolidReflection::createClassifyPipeline(const char* shader)
     pipeline_info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     pipeline_info.stage.module = GEVulkanShaderManager::getShader(shader);
     pipeline_info.stage.pName = "main";
+    pipeline_info.stage.pSpecializationInfo = constants;
     pipeline_info.layout = m_classify_layout;
     if (vkCreateComputePipelines(m_vk->getDevice(), m_vk->getPipelineCache(),
         1, &pipeline_info, NULL, &m_classify_pipeline) != VK_SUCCESS)
@@ -449,9 +451,7 @@ void GEVulkanSolidReflection::dispatchTrace(VkCommandBuffer cmd,
     }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_trace_pipelines[rt ? TP_RT : TP_SSR]);
-    // The count of the groups is after the count of the pixels (the same
-    // offset for the stochastic reflection, the dispatch of its trace)
-    vkCmdDispatchIndirect(cmd, m_list, sizeof(uint32_t));
+    vkCmdDispatchIndirect(cmd, m_list, getTraceDispatchOffset(rt));
 }   // dispatchTrace
 
 // ----------------------------------------------------------------------------

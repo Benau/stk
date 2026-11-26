@@ -42,7 +42,7 @@ class GEVulkanAttachmentTexture;
 // be ready). Rough reflections are a single mirror ray mixed with the
 // specular IBL by the gloss.
 //
-// GEVulkanStochasticReflection is the stochastic reflection, with the same
+// GEVulkanSpecularGI is the specular GI, with the same
 // list and traces.
 class GEVulkanSolidReflection : public GEVulkanPostProcessing
 {
@@ -144,13 +144,18 @@ protected:
     void createList(const irr::core::dimension2d<irr::u32>& size,
                     unsigned header);
     // ------------------------------------------------------------------------
-    void createClassifyPipeline(const char* shader);
+    void createClassifyPipeline(const char* shader,
+                                const VkSpecializationInfo* constants = NULL);
     // ------------------------------------------------------------------------
     // The shader of the trace of the ray traced scene or of the screen space
     // one
     virtual const char* getTraceShader(bool rt) const
     {
         return rt ? "solid_reflection_rt.comp" : "solid_reflection_ssr.comp";
+    }
+    virtual VkDeviceSize getTraceDispatchOffset(bool) const
+    {
+        return sizeof(uint32_t);
     }
     // ------------------------------------------------------------------------
     // Empties the list before the classify of a viewport (first is the first
@@ -206,7 +211,7 @@ public:
     VkImageView getImageView() const;
     // ------------------------------------------------------------------------
     // The set whose binding 0 is the output of the trace (the trace target of
-    // GEVulkanStochasticReflection) and 1 the list, GEVulkanDeferredFBOSplit
+    // GEVulkanSpecularGI) and 1 the list, GEVulkanDeferredFBOSplit
     // copies them to GVDFP_HDR for the screen space trace
     const VkDescriptorSet* getTraceOutputSet() const         { return &m_set; }
     // ------------------------------------------------------------------------
@@ -222,8 +227,8 @@ public:
         };
     }
     // ------------------------------------------------------------------------
-    // The output is the one of GEVulkanStochasticReflection
-    virtual bool isStochastic() const                         { return false; }
+    // The output is the one of GEVulkanSpecularGI
+    virtual bool isSpecularGI() const                         { return false; }
 };   // GEVulkanSolidReflection
 
 }

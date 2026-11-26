@@ -9,7 +9,7 @@ namespace GE
 {
 // The camera of a viewport in the last frame, which the history of a frame
 // cache (GEConfig::m_frame_cache) was rendered with: the irradiance of
-// GEVulkanSurfelGI and the reflection of GEVulkanStochasticReflection. Same as
+// GEVulkanSurfelGI and the reflection of GEVulkanSpecularGI. Same as
 // PrevCamera of utils/prev_camera.glsl (std430), which reprojects a position
 // of this frame to the pixel of the history which saw it.
 struct GEVulkanPrevCamera

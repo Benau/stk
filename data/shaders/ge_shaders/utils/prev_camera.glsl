@@ -7,7 +7,7 @@
 // reuse can check that it's the same surface, not the one of something which
 // was in front of it or behind it, or the other side of a corner. Shared by
 // the irradiance of the global illumination (utils/surfel_gi_apply.glsl) and
-// the stochastic reflection (stochastic_reflection_temporal.comp).
+// the specular GI (specular_gi_temporal.comp).
 //
 // The includer declares the buffer of the cameras, and includes
 // ../utils/decodeNormal.frag before it
