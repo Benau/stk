@@ -40,19 +40,20 @@ layout(push_constant) uniform Constants
 #include "../utils/decodeNormal.frag"
 
 #ifdef SPLIT
+#include "utils/surfel_gi_specular.glsl"
+layout(set = 2, binding = 2) uniform samplerCube u_skybox;
 // ----------------------------------------------------------------------------
-// The stochastic reflection of a pixel (u_stochastic_reflection, see
-// utils/stochastic_reflection.glsl), the radiance premultiplied by its
+// The specular GI of a pixel (u_specular_gi, see
+// utils/specular_gi.glsl), the radiance premultiplied by its
 // coverage. The target is half size and its texel t is the reflection of the
 // pixel 2t, so an even pixel is at a texel and an odd one half way between 2
 // (or 4): the bilinear weights of the texels around the pixel, times an edge
 // stopping weight (the pixel of the texel is in the viewport, glossy, near the
 // plane of this pixel and of a similar normal), so the reflection of another
 // surface (in front or behind, or a pixel which reflects nothing) is never
-// mixed in. found is false if no texel is of this surface (the specular IBL is
-// used then)
-vec4 getStochasticReflection(ivec2 pixel, vec3 xpos, vec3 normal,
-                             vec3 world_normal, out bool found)
+// mixed in. The coverage is zero if no texel matches this surface.
+vec4 getSpecularGI(ivec2 pixel, vec3 xpos, vec3 normal,
+                   vec3 world_normal, float gloss)
 {
     ivec2 base = pixel / 2;
     vec2 f = vec2(pixel - base * 2) * 0.5;
@@ -77,8 +78,9 @@ vec4 getStochasticReflection(ivec2 pixel, vec3 xpos, vec3 normal,
             continue;
         vec4 normal_data = texelFetch(u_normal, texel_pixel, 0);
         float depth = texelFetch(u_depth, texel_pixel, 0).x;
-        if (normal_data.z < SOLID_REFLECTION_MIN_GLOSS || depth == 0.0)
+        if (!usesSpecularGISSR(normal_data.z) || depth == 0.0)
             continue;
+        weight *= 1.0 - smoothstep(0.05, 0.1, abs(normal_data.z - gloss));
         vec3 texel_xpos = getPosFromUVDepth(vec3(vec2(texel_pixel) + 0.5,
             depth), u_camera.m_viewport, u_camera.m_inverse_projection_matrix);
         weight *= max(1.0 - abs(dot(normal, texel_xpos - xpos)) / tolerance,
@@ -90,9 +92,9 @@ vec4 getStochasticReflection(ivec2 pixel, vec3 xpos, vec3 normal,
         sum += texelFetch(u_solid_reflection_texture, texel, 0) * weight;
         weight_sum += weight;
     }
-    found = weight_sum > 1e-4;
-    return found ? sum / weight_sum : vec4(0.0);
-}   // getStochasticReflection
+    return weight_sum > 1e-4 ? sum / weight_sum : vec4(0.0);
+}   // getSpecularGI
+
 #endif
 
 void main()
@@ -105,9 +107,7 @@ void main()
     vec3 world_normal = DecodeNormal(GE_LOAD_GBUFFER(u_normal).xy);
     vec3 xpos = getPosFromUVDepth(vec3(gl_FragCoord.xy, depth),
         u_camera.m_viewport, u_camera.m_inverse_projection_matrix);
-    vec4 world_position = vec4(0.0);
-    if (u_shadow_size != 0)
-        world_position = u_camera.m_inverse_view_matrix * vec4(xpos, 1.0);
+    vec4 world_position = u_camera.m_inverse_view_matrix * vec4(xpos, 1.0);
     vec3 eyedir = -normalize(xpos);
     vec3 normal = (u_camera.m_view_matrix * vec4(world_normal, 0.0)).xyz;
     float ao = 1.0;
@@ -117,27 +117,35 @@ void main()
     bool has_reflection = false;
     vec4 reflection = vec4(0.0);
 #ifdef SPLIT
-    // Only the glossy pixels have it (GEVulkanSolidReflection doesn't write
-    // the others)
-    if (u_solid_reflection_image && u_push_constants.m_solid_reflection != 0u &&
-        pbr.x >= SOLID_REFLECTION_MIN_GLOSS)
-    {
-        if (u_stochastic_reflection)
-        {
-            reflection = getStochasticReflection(ivec2(gl_FragCoord.xy), xpos,
-                normal, world_normal, has_reflection);
-        }
-        else
-        {
-            has_reflection = true;
-            reflection = vec4(texelFetch(u_solid_reflection_texture,
-                ivec2(gl_FragCoord.xy), 0).rgb, 1.0);
-        }
-    }
     if (u_ssao)
         ao = texelFetch(u_ssao_texture, ivec2(gl_FragCoord.xy), 0).x;
     if (u_surfel_gi)
         gi = texelFetch(u_surfel_gi_texture, ivec2(gl_FragCoord.xy), 0);
+    if (u_specular_gi)
+    {
+        bool traced_range = usesSpecularGISSR(pbr.x);
+        if (traced_range && u_push_constants.m_solid_reflection != 0u)
+            reflection = getSpecularGI(ivec2(gl_FragCoord.xy), xpos, normal,
+                world_normal, pbr.x);
+        if (u_surfel_gi && !traced_range)
+            reflection = getSurfelSpecularGI(gi);
+        if (traced_range && reflection.a < 1.0)
+        {
+            vec3 world_eye = mat3(u_camera.m_inverse_view_matrix) * eyedir;
+            vec3 direction = reflect(-world_eye, world_normal);
+            vec3 sky = resolveSpecularGISky(textureLod(u_skybox, direction, 0.0).rgb,
+                world_position.xyz, world_normal, direction);
+            reflection = vec4(reflection.rgb + (1.0 - reflection.a) * sky, 1.0);
+        }
+        has_reflection = reflection.a > 0.0;
+    }
+    else if (u_solid_reflection_image && u_push_constants.m_solid_reflection != 0u &&
+        pbr.x >= SOLID_REFLECTION_MIN_GLOSS)
+    {
+        reflection = vec4(texelFetch(u_solid_reflection_texture,
+            ivec2(gl_FragCoord.xy), 0).rgb, 1.0);
+        has_reflection = true;
+    }
     if ((u_rt_shadow_type & GST_SUN) != 0)
     {
         rt_shadow = sampleRTShadow(xpos, normal, 0);

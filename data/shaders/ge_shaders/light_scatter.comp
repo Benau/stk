@@ -55,13 +55,13 @@ shared uint s_count;
 shared uint s_index[MAX_RENDERING_LIGHT];
 // View space position (xyz) and radius (w)
 shared vec4 s_light[MAX_RENDERING_LIGHT];
-// The shadow matrices which the steps of the tile use: the 3 sun cascades,
+// The shadow matrices which the steps of the tile use: the sun cascades,
 // then OMNI_FACES_PER_LIGHT for every light with a shadow (the first
 // u_point_shadow_limit lights), only the ones of the lights of the tile are
 // copied. The face (or cascade) of a step depends on its position, so every
 // thread would load its own matrix from the light buffer, and the shadow
 // sample has to wait for it in every step: the steps are bound by these loads
-const uint SHADOW_MATRIX_COUNT = 3u +
+const uint SHADOW_MATRIX_COUNT = uint(SUN_CASCADES) +
     u_point_shadow_limit * uint(OMNI_FACES_PER_LIGHT);
 shared mat4 s_shadow_matrix[SHADOW_MATRIX_COUNT];
 
@@ -108,7 +108,7 @@ vec4 getShadowCoord(vec4 clip, float layer, out bool valid)
 vec4 getSunShadowCoord(vec3 world_pos, float view_depth, out bool valid)
 {
     int level = view_depth < 10.0 ? 0 :
-        (view_depth < 45.0 ? 1 : 2);
+        (view_depth < 45.0 ? 1 : (view_depth < 200.0 ? 2 : 3));
     return getShadowCoord(s_shadow_matrix[level] * vec4(world_pos, 1.0),
         float(level), valid);
 }
@@ -128,9 +128,9 @@ vec4 getOmniShadowCoord(int light_id, vec3 world_pos, vec3 light_to_pos,
     int layer = light_id * OMNI_FACES_PER_LIGHT + face;
     // The combined shadow array stores sun-cascade layers before omni layers.
     if (u_shadow_type == GST_COMBINED)
-        layer += 3;
+        layer += SUN_CASCADES;
     return getShadowCoord(
-        s_shadow_matrix[3 + light_id * OMNI_FACES_PER_LIGHT + face] *
+        s_shadow_matrix[SUN_CASCADES + light_id * OMNI_FACES_PER_LIGHT + face] *
         vec4(biased_pos, 1.0), float(layer), valid);
 }
 
@@ -228,7 +228,7 @@ vec3 sunScatter(vec3 ray_dir, float scene_distance, vec2 pixel)
         }
         float shadows[SHADOW_BATCH];
         for (int k = 0; k < SHADOW_BATCH; k++)
-            shadows[k] = texture(u_shadow_map, coords[k]);
+            shadows[k] = valid[k] ? texture(u_shadow_map, coords[k]) : 1.0;
         for (int k = 0; k < SHADOW_BATCH; k++)
         {
             int i = b + k;
@@ -312,7 +312,7 @@ void main()
         u_shadow_size != 0u;
     if (sun_shadow)
     {
-        for (uint i = thread; i < 3u * 4u; i += TILE_THREADS)
+        for (uint i = thread; i < uint(SUN_CASCADES) * 4u; i += TILE_THREADS)
         {
             s_shadow_matrix[i / 4u][i % 4u] =
                 u_global_light.m_shadow_projection_view_matrix[i / 4u][i % 4u];
@@ -327,7 +327,7 @@ void main()
             if (light_idx >= u_point_shadow_limit)
                 continue;
             uint face = (i % columns) / 4u;
-            s_shadow_matrix[3u + light_idx * uint(OMNI_FACES_PER_LIGHT) +
+            s_shadow_matrix[uint(SUN_CASCADES) + light_idx * uint(OMNI_FACES_PER_LIGHT) +
                 face][i % 4u] = u_global_light.m_lights[light_idx]
                 .m_shadow_projection_view_matrix[face][i % 4u];
         }
