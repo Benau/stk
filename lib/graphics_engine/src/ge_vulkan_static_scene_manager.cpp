@@ -249,14 +249,27 @@ void GEVulkanStaticSceneManager::registerNodes(GEVulkanSceneManager* manager,
     GEVulkanShadowFBO* sfbo = dc->getShadowFBO();
     if (sfbo)
         sfbo->prepareStaticBatches(batches ? batches->getSourcePtr() : NULL);
-    for (unsigned i = 0; i < m_entries.size(); i++)
+    if (batches)
     {
-        Node* node = m_entries[i].getNodeForView(camera_transform);
-        if (!node)
-            continue;
-        node->refreshTextureDescriptorID();
-        if (!batches || batches->onCPU(i))
+        for (unsigned i : batches->getSourcePtr()->getCPUEntries())
+        {
+            Node* node = m_entries[i].getNodeForView(camera_transform);
+            if (!node)
+                continue;
+            node->refreshTextureDescriptorID();
             manager->registerNodeForRendering(node, scene::ESNRP_SOLID);
+        }
+    }
+    else
+    {
+        for (unsigned i = 0; i < m_entries.size(); i++)
+        {
+            Node* node = m_entries[i].getNodeForView(camera_transform);
+            if (!node)
+                continue;
+            node->refreshTextureDescriptorID();
+            manager->registerNodeForRendering(node, scene::ESNRP_SOLID);
+        }
     }
 }   // registerNodes
 
