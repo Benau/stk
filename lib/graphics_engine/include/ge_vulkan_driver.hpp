@@ -402,8 +402,19 @@ namespace GE
         void getRotatedViewport(VkViewport* vp, bool handle_rtt);
         const core::matrix4& getPreRotationMatrix()
                                                { return m_pre_rotation_matrix; }
-        virtual void pauseRendering();
-        virtual void unpauseRendering();
+        // Only iOS uses pause / unpause rendering and it won't recreate the
+        // surface to prevent memory leaking
+        virtual void pauseRendering()
+        {
+            setWindowReady(false);
+            m_rendering_paused = true;
+            waitIdle();
+        }
+        virtual void unpauseRendering()
+        {
+            setWindowReady(true);
+            m_rendering_paused = false;
+        }
         void setWindowReady(bool ready);
         void updateSwapInterval(int value)
         {
@@ -625,7 +636,6 @@ namespace GE
         // The swap chain and surface are destroyed, either explicitly by
         // pauseRendering or because the window was destroyed
         bool m_rendering_paused;
-        bool m_pause_requested;
 
         bool m_fog_enabled;
 

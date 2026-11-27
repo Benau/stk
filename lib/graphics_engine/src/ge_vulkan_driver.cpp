@@ -561,7 +561,6 @@ GEVulkanDriver::GEVulkanDriver(const SIrrlichtCreationParameters& params,
     m_god_rays_radius = 20.0f;
     m_window_ready.store(true);
     m_rendering_paused = false;
-    m_pause_requested = false;
 
     createInstance(window);
 
@@ -2170,8 +2169,10 @@ bool GEVulkanDriver::endScene()
     VkSemaphore semaphore = m_vk->image_available_semaphores[m_current_semaphore];
     // Not forever, m_window_mutex is held and the UI thread of Android may be
     // waiting for it, a timeout only skips this frame
+    // Unfortunately android has no support for limited timeout yet
     VkResult result = vkAcquireNextImageKHR(m_vk->device, m_vk->swap_chain,
-        1000000000, semaphore, VK_NULL_HANDLE, &m_image_index);
+        std::numeric_limits<uint64_t>::max(), semaphore, VK_NULL_HANDLE,
+        &m_image_index);
 
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
     {
@@ -2718,22 +2719,6 @@ void GEVulkanDriver::initPreRotationMatrix()
 }   // initPreRotationMatrix
 
 // ----------------------------------------------------------------------------
-void GEVulkanDriver::pauseRendering()
-{
-    std::lock_guard<std::timed_mutex> lock(m_window_mutex);
-    m_pause_requested = true;
-    updateWindowState();
-}   // pauseRendering
-
-// ----------------------------------------------------------------------------
-void GEVulkanDriver::unpauseRendering()
-{
-    std::lock_guard<std::timed_mutex> lock(m_window_mutex);
-    m_pause_requested = false;
-    updateWindowState();
-}   // unpauseRendering
-
-// ----------------------------------------------------------------------------
 /** Pauses or resumes the rendering (destroys or creates the swap chain and
  *  the surface) according to the window and the pause requests, the caller
  *  holds m_window_mutex. When the window is gone, the resuming is retried at
@@ -2743,7 +2728,7 @@ void GEVulkanDriver::unpauseRendering()
  *  \return True if rendering is possible. */
 bool GEVulkanDriver::updateWindowState()
 {
-    const bool pause = m_pause_requested || !m_window_ready.load();
+    const bool pause = !m_window_ready.load();
     if (pause && !m_rendering_paused)
     {
         destroySwapChainRelated(true/*handle_surface*/);
